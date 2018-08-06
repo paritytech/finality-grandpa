@@ -18,7 +18,6 @@
 
 use std::collections::{HashMap, HashSet};
 use std::hash::Hash;
-use std::ops::Add;
 
 /// A prevote for a block and its ancestors.
 pub struct Prevote<H> {
@@ -37,7 +36,7 @@ pub struct Precommit<H> {
 /// Chain context necessary for implementation of the finality gadget.
 pub trait Chain<H> {
 	/// Compute block to target for finality, which is some fraction (rounding up) of the way between
-	/// the base and the best descendent of that head.
+	/// the base and the best s.push(hash.clone()); of that head.
 	fn target(&self, base: H) -> H;
 
 	/// Get the ancestry of a block up to but not including the base hash.
@@ -82,10 +81,10 @@ struct GhostTracker<H: Hash + Eq> {
 }
 
 impl<H: Hash + Eq + Clone> GhostTracker<H> {
-	fn new(base_hash: H, base_number: usize, threshold: usize) {
+	fn new(base_hash: H, base_number: usize, threshold: usize) -> Self {
 		let mut entries = HashMap::new();
 		entries.insert(base_hash.clone(), Entry {
-			base_number,
+			number: base_number,
 			ancestors: Vec::new(),
 			descendents: Vec::new(),
 			cumulative_weight: 0,
@@ -103,94 +102,143 @@ impl<H: Hash + Eq + Clone> GhostTracker<H> {
 		}
 	}
 
+	/// Insert a vote into the tracker.
 	fn insert<C: Chain<H>>(&mut self, vote_target: (H, usize), weight: usize, chain: &C) {
 		let (vote_hash, vote_number) = vote_target;
 
-		match self.find_containing_node(vote_hash.clone(), vote_number) {
-			Some(key) => self.split(to_split, vote_hash.clone(), vote_number),
-			None => self.append(vote_hash.clone(), vote_number)?,
+		match self.find_containing_nodes(vote_hash.clone(), vote_number) {
+			Some(containing) => if containing.is_empty() {
+				self.append(vote_hash.clone(), vote_number, chain);
+			} else {
+				self.introduce_branch(containing, vote_hash.clone(), vote_number);
+			},
+			None => {}, // this entry already exists
 		}
 
 		// NOTE: after this point, there is guaranteed to be a node with
 		// hash `vote_hash`.
+		unimplemented!()
 	}
 
-	// attempts to find the containing node key for the given hash and number.
-	fn find_containing_node(&self, hash: Hash, number: usize) -> Option<Hash> {
-		let mut containing_key = if self.entries.contains_key(&hash) {
-			Some(hash.clone())
-		} else {
-			None
-		};
+	// attempts to find the containing node keys for the given hash and number.
+	//
+	// returns `None` if there is a node by that key already, and a vector
+	// (potentially empty) of nodes with the given block in its ancestor-edge
+	// otherwise.
+	fn find_containing_nodes(&self, hash: H, number: usize) -> Option<Vec<H>> {
+		if self.entries.contains_key(&hash) {
+			return None
+		}
 
-		if containing_key.is_none() {
-			let mut visited = HashSet::new();
+		let mut containing_keys = Vec::new();
+		let mut visited = HashSet::new();
 
-			// iterate vote-heads and their ancestry backwards until we find the one with
-			// this target hash in that chain.
-			'a:
-			for mut head in self.heads.iter() {
-				let mut active_entry;
+		// iterate vote-heads and their ancestry backwards until we find the one with
+		// this target hash in that chain.
+		for mut head in self.heads.iter().cloned() {
+			let mut active_entry;
 
-				'b:
-				loop {
-					active_entry = match self.entries.get(head) {
-						Some(e) => e,
-						None => break 'b,
-					};
+			loop {
+				active_entry = match self.entries.get(&head) {
+					Some(e) => e,
+					None => break,
+				};
 
-					if !visited.insert(head.clone()) { continue 'a }
+				// if node has been checked already, break
+				if !visited.insert(head.clone()) { break }
 
-					match active_entry.in_direct_ancestry(hash, number) {
-						Some(true) => {
-							// set containing node.
-							containing_key = Some(head.clone());
-							break 'a;
-						}
-						Some(false) => continue 'a, // start from a different head.
-						None => match active_entry.ancestor_node() {
-							None => continue 'a, // we reached the base.
-							Some(prev) = { head = prev; continue 'b } // iterate backwards
-						},
+				match active_entry.in_direct_ancestry(&hash, number) {
+					Some(true) => {
+						// set containing node and continue search.
+						containing_keys.push(head.clone());
 					}
+					Some(false) => {}, // nothing in this branch. continue search.
+					None => if let Some(prev) = active_entry.ancestor_node() {
+						head = prev;
+						continue // iterate backwards
+					},
 				}
+
+				break
 			}
 		}
 
-		containing_key
+		Some(containing_keys)
 	}
 
-	// splits a vote-node into two at the given block number. panics if there is no vote-node for
-	// `to_split` or if `to_split` doesn't have a non-node ancestor with `ancestor_number`
-	fn split(&mut self, to_split: Hash, ancestor_hash: Hash, ancestor_number: usize) {
-		if to_split == ancestor_hash { return }
-
-		let new_entry = {
-			let entry = self.entries.get_mut(&to_split)
+	// introduce a branch to given vote-nodes.
+	//
+	// `to_split` is a list of nodes with ancestor-edges containing the given ancestor.
+	//
+	// This function panics if any member of `to_split` is not a vote-node
+	// or does not have ancestor with given hash and number OR if `ancestor_hash`
+	// is already a known entry.
+	fn introduce_branch(&mut self, descendents: Vec<H>, ancestor_hash: H, ancestor_number: usize) {
+		let produced_entry = descendents.into_iter().fold(None, |mut maybe_entry, descendent| {
+			let entry = self.entries.get_mut(&descendent)
 				.expect("this function only invoked with keys of vote-nodes; qed");
 
 			debug_assert!(entry.in_direct_ancestry(&ancestor_hash, ancestor_number).unwrap());
 
-			// example: splitting number 10 at ancestor 4
-			// before: [9 8 7 6 5 4 3 2 1]
-			// after: [9 8 7 6 5 4], [3 2 1]
-			let offset = entry.number.checked_sub(ancestor_number + 1)
-				.expect("this function only invoked with direct ancestors; qed");
+			{
+				let new_entry = maybe_entry.get_or_insert_with(|| {
+					// example: splitting number 10 at ancestor 4
+					// before: [9 8 7 6 5 4 3 2 1]
+					// after: [9 8 7 6 5 4], [3 2 1]
+					let offset = entry.number.checked_sub(ancestor_number + 1)
+						.expect("this function only invoked with direct ancestors; qed");
 
-			Entry {
-				number: ancestor_number,
-				ancestors: entry.ancestors.drain(offset..),
-				descendents: vec![to_split.clone()],
-				cumulative_weight: entry.cumulative_weight,
+					Entry {
+						number: ancestor_number,
+						ancestors: entry.ancestors.drain(offset..).collect(),
+						descendents: vec![],
+						cumulative_weight: 0,
+					}
+				});
+
+				new_entry.descendents.push(descendent);
+				new_entry.cumulative_weight += entry.cumulative_weight;
 			}
-		};
 
-		self.entries.insert(ancestor_hash, new_entry);
+			maybe_entry
+		});
+
+		if let Some(new_entry) = produced_entry {
+			assert!(
+				self.entries.insert(ancestor_hash, new_entry).is_none(),
+				"thus function is only invoked when there is no entry for the ancestor already; qed",
+			)
+		}
 	}
 
 	// append a vote-node onto the chain-tree. This should only be called if
 	// no node in the tree keeps the target anyway.
-	fn append<C: Chain<H>>(&mut self, hash: Hash, number: usize, chain: &C) {
-		let ancestry = match chain.ancestry(self.base.clone(), hash.clone());
+	fn append<C: Chain<H>>(&mut self, hash: H, number: usize, chain: &C) {
+		// TODO: "unknown block" error and propagate it.
+		let mut ancestry = chain.ancestry(self.base.clone(), hash.clone()).unwrap();
+
+		let mut ancestor_index = None;
+		for (i, ancestor) in ancestry.iter().enumerate() {
+			if let Some(entry) = self.entries.get_mut(ancestor) {
+				entry.descendents.push(hash.clone());
+				ancestor_index = Some(i);
+				break;
+			}
+		}
+
+		let ancestor_index = ancestor_index.expect("base is kept; \
+			chain returns ancestry only if the block is a descendent of base; qed");
+
+		let ancestor_hash = ancestry[ancestor_index].clone();
+		ancestry.truncate(ancestor_index);
+		self.entries.insert(hash.clone(), Entry {
+			number,
+			ancestors: ancestry,
+			descendents: Vec::new(),
+			cumulative_weight: 0,
+		});
+
+		self.heads.remove(&ancestor_hash);
+		self.heads.insert(hash);
 	}
 }
