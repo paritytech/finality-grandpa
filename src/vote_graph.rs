@@ -19,6 +19,7 @@
 //! See docs on `VoteGraph` for more information.
 
 use std::collections::{HashMap, HashSet};
+use std::fmt::Debug;
 use std::hash::Hash;
 
 use super::Chain;
@@ -37,10 +38,16 @@ impl<H: Hash + PartialEq + Clone, V> Entry<H, V> {
 	// whether the given hash, number pair is a direct ancestor of this node.
 	// `None` signifies that the graph must be traversed further back.
 	fn in_direct_ancestry(&self, hash: &H, number: usize) -> Option<bool> {
+		self.ancestor_descendent(number).map(|h| h == hash)
+	}
+
+	// Get ancestor node descendent by offset. i.e. passing `1` will return the
+	// child of the ancestor node which is in the same fork as the block for this vote-node.
+	fn ancestor_descendent(&self, number: usize) -> Option<&H> {
 		if number >= self.number { return None }
 		let offset = self.number - number - 1;
 
-		self.ancestors.get(offset).map(|h| h == hash)
+		self.ancestors.get(offset)
 	}
 
 	// get ancestor vote-node.
@@ -49,9 +56,8 @@ impl<H: Hash + PartialEq + Clone, V> Entry<H, V> {
 	}
 }
 
-/// Maintains a DAG of blocks in the chain which have votes attached to them.
-///
-///
+/// Maintains a DAG of blocks in the chain which have votes attached to them,
+/// and vote data which is accumulated along edges.
 pub struct VoteGraph<H: Hash + Eq, V> {
 	entries: HashMap<H, Entry<H, V>>,
 	heads: HashSet<H>,
@@ -59,7 +65,7 @@ pub struct VoteGraph<H: Hash + Eq, V> {
 }
 
 impl<H, V> VoteGraph<H, V> where
-	H: Hash + Eq + Clone,
+	H: Hash + Eq + Clone + Ord,
 	V: ::std::ops::AddAssign + Default + Clone,
 {
 	fn new(base_hash: H, base_number: usize) -> Self {
@@ -106,6 +112,112 @@ impl<H, V> VoteGraph<H, V> where
 				None => break,
 			}
 		}
+	}
+
+	/// Find the best GHOST descendent of the given block.
+	/// Pass a closure used to evaluate the cumulative vote value.
+	///
+	/// The GHOST (hash, number) returned will be the block with highest number for which the
+	/// cumulative votes of descendents and itself causes the closure to evaluate to true.
+	///
+	/// This assumes that the evaluation closure is one which returns true for at most a single
+	/// descendent of a block, in that only one fork of a block can be "heavy"
+	/// enough to trigger the threshold.
+	pub fn find_ghost<'a, F>(&'a self, current_best: Option<(H, usize)>, condition: F) -> Option<(H, usize)>
+		where F: Fn(&V) -> bool
+	{
+		let entries = &self.entries;
+		let get_node = |hash: &_| -> &'a _ {
+			entries.get(hash)
+				.expect("node either base or referenced by other in graph; qed")
+		};
+
+		let mut node_key = current_best
+			.and_then(|(hash, number)| match self.find_containing_nodes(hash.clone(), number) {
+				None => Some(hash),
+				Some(ref x) if !x.is_empty() => Some(x[0].clone()),
+				Some(_) => None,
+			})
+			.and_then(|hash| get_node(&hash).ancestor_node())
+			.unwrap_or_else(|| self.base.clone());
+
+		let mut active_node = get_node(&node_key);
+
+		if !condition(&active_node.cumulative_vote) { return None }
+
+		// breadth-first search starting from this node.
+		loop {
+			let next_descendent = active_node.descendents
+				.iter()
+				.map(|d| (d.clone(), get_node(d)))
+				.filter(|&(_, ref node)| condition(&node.cumulative_vote))
+				.next();
+
+			match next_descendent {
+				Some((key, node)) => {
+					node_key = key;
+					active_node = node;
+				}
+				None => break,
+			}
+		}
+
+		// active_node and node_key now correspond to the head node which has enough cumulative votes.
+		// we have a frontier of vote-nodes which individually don't have enough votes
+		// to pass the threshold but some subset of them join either at `active_node` or at some
+		// descendent block of it, giving that block sufficient votes.
+		Some(self.ghost_find_merge_point(node_key, active_node, condition))
+	}
+
+	// given a key, node pair (which must correspond), assuming this node fulfills the condition,
+	// this function will find the highest point at which its descendents merge, which may be the
+	// node itself.
+	fn ghost_find_merge_point<'a, F>(&'a self, mut node_key: H, mut active_node: &'a Entry<H, V>, condition: F) -> (H, usize)
+		where F: Fn(&V) -> bool
+	{
+		let mut descendent_nodes: Vec<_> = active_node.descendents.iter()
+			.map(|h| self.entries.get(h).expect("descendents always present in node storage; qed"))
+			.collect();
+
+		let base_number = active_node.number;
+		let (mut best_hash, mut best_number) = (node_key, active_node.number);
+		let mut descendent_blocks = Vec::with_capacity(descendent_nodes.len());
+
+		// TODO: for long ranges of blocks this could get inefficient
+		for offset in 1usize.. {
+			let mut new_best = None;
+			for d_node in descendent_nodes.iter() {
+				if let Some(d_block) = d_node.ancestor_descendent(base_number + offset) {
+					match descendent_blocks.binary_search_by_key(&d_block, |&(ref x, _)| x) {
+						Ok(idx) => {
+							descendent_blocks[idx].1 += d_node.cumulative_vote.clone();
+							if condition(&descendent_blocks[idx].1) {
+								new_best = Some(d_block.clone());
+							}
+						}
+						Err(idx) => descendent_blocks.insert(idx, (
+							d_block.clone(),
+							d_node.cumulative_vote.clone()
+						)),
+					}
+				}
+			}
+
+			match new_best {
+				Some(new_best) => {
+					best_hash = new_best;
+					best_number += 1;
+				}
+				None => break,
+			}
+
+			descendent_blocks.clear();
+			descendent_nodes.retain(
+				|n| n.in_direct_ancestry(&best_hash, best_number).unwrap_or(false)
+			);
+		}
+
+		(best_hash, best_number)
 	}
 
 	// attempts to find the containing node keys for the given hash and number.
@@ -358,5 +470,43 @@ mod tests {
 			assert_eq!(f_entry.ancestor_node().unwrap(), "C");
 			assert_eq!(f_entry.cumulative_vote, 100);
 		}
+	}
+
+	#[test]
+	fn ghost_merge_at_node() {
+		let mut chain = DummyChain::new();
+		let mut tracker = VoteGraph::new(GENESIS_HASH, 1);
+
+		chain.push_blocks(GENESIS_HASH, &["A", "B", "C"]);
+		chain.push_blocks("C", &["D1", "E1", "F1"]);
+		chain.push_blocks("C", &["D2", "E2", "F2"]);
+
+		tracker.insert("B", 3, 0usize, &chain);
+		tracker.insert("C", 4, 100, &chain);
+		tracker.insert("E1", 6, 100, &chain);
+		tracker.insert("F2", 7, 100, &chain);
+
+		assert_eq!(tracker.find_ghost(None, |&x| x >= 250), Some(("C", 4)));
+		assert_eq!(tracker.find_ghost(Some(("C", 4)), |&x| x >= 250), Some(("C", 4)));
+		assert_eq!(tracker.find_ghost(Some(("B", 3)), |&x| x >= 250), Some(("C", 4)));
+	}
+
+	#[test]
+	fn ghost_merge_not_at_node_one_side_weighted() {
+		let mut chain = DummyChain::new();
+		let mut tracker = VoteGraph::new(GENESIS_HASH, 1);
+
+		chain.push_blocks(GENESIS_HASH, &["A", "B", "C", "D", "E", "F"]);
+		chain.push_blocks("F", &["G1", "H1", "I1"]);
+		chain.push_blocks("F", &["G2", "H2", "I2"]);
+
+		tracker.insert("B", 3, 0usize, &chain);
+		tracker.insert("G1", 8, 100, &chain);
+		tracker.insert("H2", 9, 150, &chain);
+
+		assert_eq!(tracker.find_ghost(None, |&x| x >= 250), Some(("F", 7)));
+		assert_eq!(tracker.find_ghost(Some(("F", 7)), |&x| x >= 250), Some(("F", 7)));
+		assert_eq!(tracker.find_ghost(Some(("C", 4)), |&x| x >= 250), Some(("F", 7)));
+		assert_eq!(tracker.find_ghost(Some(("B", 3)), |&x| x >= 250), Some(("F", 7)));
 	}
 }

@@ -34,9 +34,15 @@ pub struct Precommit<H> {
 	weight: usize,
 }
 
+pub enum Error {
+	BlockUnknown,
+}
+
 /// Chain context necessary for implementation of the finality gadget.
 pub trait Chain<H> {
 	/// Get the ancestry of a block up to but not including the base hash.
 	/// Should be in reverse order from `block`'s parent.
+	///
+	/// If the block is not a descendent of `base`, returns `None`.
 	fn ancestry(&self, base: H, block: H) -> Option<Vec<H>>;
 }
