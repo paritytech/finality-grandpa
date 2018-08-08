@@ -20,6 +20,8 @@
 
 mod vote_graph;
 
+use std::fmt;
+
 /// A prevote for a block and its ancestors.
 pub struct Prevote<H> {
 	round: u64,
@@ -34,8 +36,25 @@ pub struct Precommit<H> {
 	weight: usize,
 }
 
+#[derive(Clone, PartialEq, Debug)]
 pub enum Error {
-	BlockUnknown,
+	BlockNotInSubtree,
+}
+
+impl fmt::Display for Error {
+	fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+		match *self {
+			Error::BlockNotInSubtree => write!(f, "Block not in subtree of base"),
+		}
+	}
+}
+
+impl ::std::error::Error for Error {
+	fn description(&self) -> &str {
+		match *self {
+			Error::BlockNotInSubtree => "Block not in subtree of base",
+		}
+	}
 }
 
 /// Chain context necessary for implementation of the finality gadget.
@@ -43,6 +62,6 @@ pub trait Chain<H> {
 	/// Get the ancestry of a block up to but not including the base hash.
 	/// Should be in reverse order from `block`'s parent.
 	///
-	/// If the block is not a descendent of `base`, returns `None`.
-	fn ancestry(&self, base: H, block: H) -> Option<Vec<H>>;
+	/// If the block is not a descendent of `base`, returns an error.
+	fn ancestry(&self, base: H, block: H) -> Result<Vec<H>, Error>;
 }

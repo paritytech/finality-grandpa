@@ -22,7 +22,7 @@ use std::collections::{HashMap, HashSet};
 use std::fmt::Debug;
 use std::hash::Hash;
 
-use super::Chain;
+use super::{Chain, Error};
 
 #[derive(Debug)]
 struct Entry<H, V> {
@@ -38,12 +38,12 @@ impl<H: Hash + PartialEq + Clone, V> Entry<H, V> {
 	// whether the given hash, number pair is a direct ancestor of this node.
 	// `None` signifies that the graph must be traversed further back.
 	fn in_direct_ancestry(&self, hash: &H, number: usize) -> Option<bool> {
-		self.ancestor_descendent(number).map(|h| h == hash)
+		self.ancestor_block(number).map(|h| h == hash)
 	}
 
-	// Get ancestor node descendent by offset. i.e. passing `1` will return the
-	// child of the ancestor node which is in the same fork as the block for this vote-node.
-	fn ancestor_descendent(&self, number: usize) -> Option<&H> {
+	// Get ancestor block by number. Returns `None` if there is no block
+	// by that number in the direct ancestry.
+	fn ancestor_block(&self, number: usize) -> Option<&H> {
 		if number >= self.number { return None }
 		let offset = self.number - number - 1;
 
@@ -88,10 +88,10 @@ impl<H, V> VoteGraph<H, V> where
 	}
 
 	/// Insert a vote with given value into the graph at given hash and number.
-	pub fn insert<C: Chain<H>>(&mut self, hash: H, number: usize, vote: V, chain: &C) {
+	pub fn insert<C: Chain<H>>(&mut self, hash: H, number: usize, vote: V, chain: &C) -> Result<(), Error> {
 		match self.find_containing_nodes(hash.clone(), number) {
 			Some(containing) => if containing.is_empty() {
-				self.append(hash.clone(), number, chain);
+				self.append(hash.clone(), number, chain)?;
 			} else {
 				self.introduce_branch(containing, hash.clone(), number);
 			},
@@ -112,6 +112,8 @@ impl<H, V> VoteGraph<H, V> where
 				None => break,
 			}
 		}
+
+		Ok(())
 	}
 
 	/// Find the best GHOST descendent of the given block.
@@ -187,7 +189,7 @@ impl<H, V> VoteGraph<H, V> where
 		for offset in 1usize.. {
 			let mut new_best = None;
 			for d_node in descendent_nodes.iter() {
-				if let Some(d_block) = d_node.ancestor_descendent(base_number + offset) {
+				if let Some(d_block) = d_node.ancestor_block(base_number + offset) {
 					match descendent_blocks.binary_search_by_key(&d_block, |&(ref x, _)| x) {
 						Ok(idx) => {
 							descendent_blocks[idx].1 += d_node.cumulative_vote.clone();
@@ -314,9 +316,8 @@ impl<H, V> VoteGraph<H, V> where
 
 	// append a vote-node onto the chain-tree. This should only be called if
 	// no node in the tree keeps the target anyway.
-	fn append<C: Chain<H>>(&mut self, hash: H, number: usize, chain: &C) {
-		// TODO: "unknown block" error and propagate it.
-		let mut ancestry = chain.ancestry(self.base.clone(), hash.clone()).unwrap();
+	fn append<C: Chain<H>>(&mut self, hash: H, number: usize, chain: &C) -> Result<(), Error> {
+		let mut ancestry = chain.ancestry(self.base.clone(), hash.clone())?;
 
 		let mut ancestor_index = None;
 		for (i, ancestor) in ancestry.iter().enumerate() {
@@ -342,6 +343,8 @@ impl<H, V> VoteGraph<H, V> where
 
 		self.heads.remove(&ancestor_hash);
 		self.heads.insert(hash);
+
+		Ok(())
 	}
 }
 
@@ -383,22 +386,22 @@ mod tests {
 	}
 
 	impl Chain<&'static str> for DummyChain {
-		fn ancestry(&self, base: &'static str, mut block: &'static str) -> Option<Vec<&'static str>> {
+		fn ancestry(&self, base: &'static str, mut block: &'static str) -> Result<Vec<&'static str>, Error> {
 			let mut ancestry = Vec::new();
 
 			loop {
 				match self.inner.get(block) {
-					None => return None,
+					None => return Err(Error::BlockNotInSubtree),
 					Some(record) => { block = record.parent; }
 				}
 
 				ancestry.push(block);
 
-				if block == NULL_HASH { return None }
+				if block == NULL_HASH { return Err(Error::BlockNotInSubtree) }
 				if block == base { break }
 			}
 
-			Some(ancestry)
+			Ok(ancestry)
 		}
 	}
 
@@ -411,9 +414,9 @@ mod tests {
 		chain.push_blocks("C", &["D1", "E1", "F1"]);
 		chain.push_blocks("C", &["D2", "E2", "F2"]);
 
-		tracker.insert("A", 2, 100usize, &chain);
-		tracker.insert("E1", 6, 100, &chain);
-		tracker.insert("F2", 7, 100, &chain);
+		tracker.insert("A", 2, 100usize, &chain).unwrap();
+		tracker.insert("E1", 6, 100, &chain).unwrap();
+		tracker.insert("F2", 7, 100, &chain).unwrap();
 
 		assert!(tracker.heads.contains("E1"));
 		assert!(tracker.heads.contains("F2"));
@@ -443,13 +446,13 @@ mod tests {
 		chain.push_blocks("C", &["D1", "E1", "F1"]);
 		chain.push_blocks("C", &["D2", "E2", "F2"]);
 
-		tracker1.insert("C", 4, 100usize, &chain);
-		tracker1.insert("E1", 6, 100, &chain);
-		tracker1.insert("F2", 7, 100, &chain);
+		tracker1.insert("C", 4, 100usize, &chain).unwrap();
+		tracker1.insert("E1", 6, 100, &chain).unwrap();
+		tracker1.insert("F2", 7, 100, &chain).unwrap();
 
-		tracker2.insert("E1", 6, 100usize, &chain);
-		tracker2.insert("F2", 7, 100, &chain);
-		tracker2.insert("C", 4, 100, &chain);
+		tracker2.insert("E1", 6, 100usize, &chain).unwrap();
+		tracker2.insert("F2", 7, 100, &chain).unwrap();
+		tracker2.insert("C", 4, 100, &chain).unwrap();
 
 		for tracker in &[&tracker2] {
 			assert!(tracker.heads.contains("E1"));
@@ -481,10 +484,10 @@ mod tests {
 		chain.push_blocks("C", &["D1", "E1", "F1"]);
 		chain.push_blocks("C", &["D2", "E2", "F2"]);
 
-		tracker.insert("B", 3, 0usize, &chain);
-		tracker.insert("C", 4, 100, &chain);
-		tracker.insert("E1", 6, 100, &chain);
-		tracker.insert("F2", 7, 100, &chain);
+		tracker.insert("B", 3, 0usize, &chain).unwrap();
+		tracker.insert("C", 4, 100, &chain).unwrap();
+		tracker.insert("E1", 6, 100, &chain).unwrap();
+		tracker.insert("F2", 7, 100, &chain).unwrap();
 
 		assert_eq!(tracker.find_ghost(None, |&x| x >= 250), Some(("C", 4)));
 		assert_eq!(tracker.find_ghost(Some(("C", 4)), |&x| x >= 250), Some(("C", 4)));
@@ -500,9 +503,9 @@ mod tests {
 		chain.push_blocks("F", &["G1", "H1", "I1"]);
 		chain.push_blocks("F", &["G2", "H2", "I2"]);
 
-		tracker.insert("B", 3, 0usize, &chain);
-		tracker.insert("G1", 8, 100, &chain);
-		tracker.insert("H2", 9, 150, &chain);
+		tracker.insert("B", 3, 0usize, &chain).unwrap();
+		tracker.insert("G1", 8, 100, &chain).unwrap();
+		tracker.insert("H2", 9, 150, &chain).unwrap();
 
 		assert_eq!(tracker.find_ghost(None, |&x| x >= 250), Some(("F", 7)));
 		assert_eq!(tracker.find_ghost(Some(("F", 7)), |&x| x >= 250), Some(("F", 7)));
