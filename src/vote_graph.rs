@@ -164,9 +164,9 @@ impl<H, V> VoteGraph<H, V> where
 			}
 		}
 
-		// active_node and node_key now correspond to the head node which has enough cumulative votes.
-		// we have a frontier of vote-nodes which individually don't have enough votes
-		// to pass the threshold but some subset of them join either at `active_node` or at some
+		// active_node and node_key now correspond to the vote-node with enough cumulative votes.
+		// its descendents comprise frontier of vote-nodes which individually don't have enough votes
+		// to pass the threshold but some subset of them join either at `active_node`'s block or at some
 		// descendent block of it, giving that block sufficient votes.
 		Some(self.ghost_find_merge_point(node_key, active_node, condition))
 	}
@@ -174,7 +174,12 @@ impl<H, V> VoteGraph<H, V> where
 	// given a key, node pair (which must correspond), assuming this node fulfills the condition,
 	// this function will find the highest point at which its descendents merge, which may be the
 	// node itself.
-	fn ghost_find_merge_point<'a, F>(&'a self, mut node_key: H, mut active_node: &'a Entry<H, V>, condition: F) -> (H, usize)
+	fn ghost_find_merge_point<'a, F>(
+		&'a self,
+		mut node_key: H,
+		mut active_node: &'a Entry<H, V>,
+		condition: F,
+	) -> (H, usize)
 		where F: Fn(&V) -> bool
 	{
 		let mut descendent_nodes: Vec<_> = active_node.descendents.iter()
