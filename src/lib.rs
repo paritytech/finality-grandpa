@@ -24,14 +24,12 @@ use std::fmt;
 
 /// A prevote for a block and its ancestors.
 pub struct Prevote<H> {
-	round: u64,
 	target: H,
 	weight: usize,
 }
 
 /// A precommit for a block and its ancestors.
 pub struct Precommit<H> {
-	round: u64,
 	target: H,
 	weight: usize,
 }
@@ -64,4 +62,16 @@ pub trait Chain<H> {
 	///
 	/// If the block is not a descendent of `base`, returns an error.
 	fn ancestry(&self, base: H, block: H) -> Result<Vec<H>, Error>;
+}
+
+/// An equivocation (double-vote) in a given round.
+pub struct Equivocation<Id, V, S> {
+	/// The round number equivocated in.
+	pub round_number: u64,
+	/// The identity of the equivocator.
+	pub identity: Id,
+	/// The first vote in the equivocation.
+	pub	first: (V, S),
+	/// The second vote in the equivocation.
+	pub second: (V, S),
 }
