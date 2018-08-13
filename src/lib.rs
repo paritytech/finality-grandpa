@@ -16,7 +16,7 @@
 
 //! Finality gadget for blockchains.
 //!
-//! https://hackmd.io/svMTltnGQsSR1GCjRKOPbw
+//! https://hackmd.io/iA4XazxWRJ21LqMxwPSEZg?view
 
 mod vote_graph;
 
