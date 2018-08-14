@@ -68,7 +68,8 @@ impl<H, V> VoteGraph<H, V> where
 	H: Hash + Eq + Clone + Ord,
 	V: ::std::ops::AddAssign + Default + Clone,
 {
-	fn new(base_hash: H, base_number: usize) -> Self {
+	/// Create a new `VoteGraph` with base node as given.
+	pub fn new(base_hash: H, base_number: usize) -> Self {
 		let mut entries = HashMap::new();
 		entries.insert(base_hash.clone(), Entry {
 			number: base_number,

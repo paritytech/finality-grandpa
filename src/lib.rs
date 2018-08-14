@@ -18,17 +18,20 @@
 //!
 //! https://hackmd.io/iA4XazxWRJ21LqMxwPSEZg?view
 
+mod round;
 mod vote_graph;
 
 use std::fmt;
 
 /// A prevote for a block and its ancestors.
+#[derive(Clone, PartialEq, Eq)]
 pub struct Prevote<H> {
 	target: H,
 	weight: usize,
 }
 
 /// A precommit for a block and its ancestors.
+#[derive(Clone, PartialEq, Eq)]
 pub struct Precommit<H> {
 	target: H,
 	weight: usize,
