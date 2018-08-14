@@ -102,6 +102,7 @@ pub struct Round<Id: Hash + Eq, H: Hash + Eq, Signature> {
 	round_number: usize,
 	faulty_weight: usize,
 	total_weight: usize,
+	prevote_ghost: Option<(H, usize)>,
 }
 
 impl<Id: Hash + Clone + Eq, H: Hash + Clone + Eq + Ord, Signature: Eq + Clone> Round<Id, H, Signature> {
@@ -116,6 +117,14 @@ impl<Id: Hash + Clone + Eq, H: Hash + Clone + Eq + Ord, Signature: Eq + Clone> R
 			graph: VoteGraph::new(base_hash, base_number),
 			prevote: VoteTracker::new(),
 			precommit: VoteTracker::new(),
+			prevote_ghost: None,
 		}
+	}
+
+	/// Fetch the "round-estimate": the best block which might have been finalized
+	/// in this round.
+	pub fn estimate(&self) -> (H, usize) {
+		let remaining_commit_votes = self.total_weight - self.precommit.current_weight;
+		unimplemented!()
 	}
 }

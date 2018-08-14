@@ -21,6 +21,7 @@
 use std::collections::{HashMap, HashSet};
 use std::fmt::Debug;
 use std::hash::Hash;
+use std::ops::AddAssign;
 
 use super::{Chain, Error};
 
@@ -54,6 +55,14 @@ impl<H: Hash + PartialEq + Clone, V> Entry<H, V> {
 	fn ancestor_node(&self) -> Option<H> {
 		self.ancestors.last().map(|x| x.clone())
 	}
+
+	// the number of the ancestor block.
+	fn ancestor_number(&self) -> Option<usize> {
+		match self.ancestors.len() {
+			0 => None,
+			len => Some(self.number - len),
+		}
+	}
 }
 
 /// Maintains a DAG of blocks in the chain which have votes attached to them,
@@ -66,7 +75,7 @@ pub struct VoteGraph<H: Hash + Eq, V> {
 
 impl<H, V> VoteGraph<H, V> where
 	H: Hash + Eq + Clone + Ord,
-	V: ::std::ops::AddAssign + Default + Clone,
+	V: AddAssign + Default + Clone,
 {
 	/// Create a new `VoteGraph` with base node as given.
 	pub fn new(base_hash: H, base_number: usize) -> Self {
@@ -117,6 +126,136 @@ impl<H, V> VoteGraph<H, V> where
 		Ok(())
 	}
 
+	/// Find the highest block which is either an ancestor of or equal to the given, which fulfills a
+	/// condition.
+	pub fn find_ancestor<'a, F>(&'a self, mut hash: H, mut number: usize, condition: F) -> Option<(H, usize)>
+		where F: Fn(&V) -> bool
+	{
+		let entries = &self.entries;
+		let get_node = |hash: &_| -> &'a _ {
+			entries.get(hash)
+				.expect("node either base or referenced by other in graph; qed")
+		};
+
+		enum Walk<H> {
+			// continue to ancestor node with given hash.
+			Continue(Option<H>),
+			// stay on same node-set but our new block hash is recorded.
+			Stay(H),
+		}
+
+		// frontier: the set of those vote-nodes which converge to a vote node
+		// containing our block.
+		enum FrontierKind<'a, H: 'a, V: 'a> {
+			Single(&'a Entry<H, V>),
+			// with many, the `usize` is an index into the section where
+			// the nodes contain our block in their direct ancestry.
+			Many(Vec<&'a Entry<H, V>>, usize, V),
+		}
+
+		impl<'a, H: 'a + Hash + PartialEq + Clone, V: 'a + AddAssign + Clone> FrontierKind<'a, H, V> {
+			fn cumulative_vote(&self) -> &V {
+				match *self {
+					FrontierKind::Single(ref e) => &e.cumulative_vote,
+					FrontierKind::Many(_, _, ref v) => v,
+				}
+			}
+
+			// updates the cumulative vote, based on the given number and
+			// the assumption that we're walking backwards in steps of 1.
+			// returns an ancestor hash if we have exhausted these edges.
+			fn step_backwards(&mut self, to: usize) -> Walk<H> {
+				match *self {
+					FrontierKind::Single(ref entry) => Walk::Continue(entry.ancestor_node()),
+					FrontierKind::Many(ref mut entries, ref mut idx, ref mut v) => {
+						// we can skip to next node if all entries contained our last visited block.
+						let n_entries = entries.len();
+						let can_skip = n_entries == *idx;
+						let block_is_ancestor = entries[0].ancestor_number().map_or(true, |x| x == to);
+						if can_skip || block_is_ancestor {
+							return Walk::Continue(entries[0].ancestor_node());
+						}
+
+						let canonical = entries[0].ancestor_block(to)
+							.expect("walking back by steps of 1; passed ancestor check already; qed")
+							.clone();
+
+						for i in *idx..n_entries {
+							if entries[i].in_direct_ancestry(&canonical, to)
+								.expect("all nodes in frontier have same ancestor; qed")
+							{
+								entries.swap(i, *idx);
+								(*v) += entries[i].cumulative_vote.clone();
+								*idx += 1;
+							}
+						}
+
+						if n_entries == *idx {
+							Walk::Continue(entries[0].ancestor_node())
+						} else {
+							Walk::Stay(canonical)
+						}
+					}
+				}
+			}
+		}
+
+		// `frontier` is a vector of nodes which converge to the same ancestor as our block.
+		// `idx` is an index into the vector where the section of nodes not containing the
+		// block are. can be one past the end if all frontier-nodes contain the block in ancestry.
+		let mut frontier = match self.find_containing_nodes(hash.clone(), number) {
+			None => FrontierKind::Single(get_node(&hash)),
+			Some(containing) => {
+				if containing.is_empty() { return None }
+				let ancestor_hash = get_node(&containing[0]).ancestor_node()
+					.expect("block is not base because we found non-direct containing nodes. \
+						all non-base nodes have an ancestor node; qed");
+
+				let ancestor = get_node(&ancestor_hash);
+				let mut descendents: Vec<_> = ancestor.descendents.iter().map(get_node).collect();
+
+				// sort the descendents, putting those which contain our block
+				// at the front and others in the back.
+				descendents.sort_by_key(|x| x.in_direct_ancestry(&hash, number)
+					.map_or(1u8, |in_direct| if in_direct { 0 } else { 1 }));
+
+				if descendents.len() == 1 {
+					FrontierKind::Single(descendents[0])
+				} else {
+					let n_containing = containing.len();
+					let cumulative_vote = descendents.iter()
+						.take(n_containing)
+						.map(|x| x.cumulative_vote.clone())
+						.fold(Default::default(), |mut a, c| { a += c; a });
+
+					FrontierKind::Many(descendents, n_containing, cumulative_vote)
+				}
+			}
+		};
+
+		loop {
+			if condition(frontier.cumulative_vote()) {
+				return Some((hash.clone(), number))
+			}
+
+			number = number - 1;
+			match frontier.step_backwards(number) {
+				Walk::Continue(None) => break, // reached the base, no luck.
+				Walk::Continue(Some(ancestor_node)) => {
+					let node = get_node(&ancestor_node);
+					number = node.number;
+					hash = ancestor_node;
+					frontier = FrontierKind::Single(node);
+				}
+				Walk::Stay(ancestor_block_hash) => {
+					hash = ancestor_block_hash;
+				}
+			}
+		}
+
+		None
+	}
+
 	/// Find the best GHOST descendent of the given block.
 	/// Pass a closure used to evaluate the cumulative vote value.
 	///
@@ -138,10 +277,9 @@ impl<H, V> VoteGraph<H, V> where
 		let mut node_key = current_best
 			.and_then(|(hash, number)| match self.find_containing_nodes(hash.clone(), number) {
 				None => Some(hash),
-				Some(ref x) if !x.is_empty() => Some(x[0].clone()),
+				Some(ref x) if !x.is_empty() => get_node(&x[0]).ancestor_node(),
 				Some(_) => None,
 			})
-			.and_then(|hash| get_node(&hash).ancestor_node())
 			.unwrap_or_else(|| self.base.clone());
 
 		let mut active_node = get_node(&node_key);
