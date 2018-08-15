@@ -473,6 +473,10 @@ mod tests {
 				parent = descendent;
 			}
 		}
+
+		fn number(&self, hash: &'static str) -> usize {
+			self.inner.get(hash).unwrap().number
+		}
 	}
 
 	impl Chain<&'static str> for DummyChain {
@@ -616,6 +620,78 @@ mod tests {
 		tracker.insert("F1", 7, 5usize, &chain).unwrap();
 		tracker.insert("G2", 8, 5usize, &chain).unwrap();
 
-		assert_eq!(tracker.find_ancestor("G2", 8, |&x| x > 5).unwrap(), ("C", 4));
+		let test_cases = &[
+			"D1",
+			"D2",
+			"E1",
+			"E2",
+			"F1",
+			"F2",
+			"G2",
+		];
+
+		for block in test_cases {
+			let number = chain.number(block);
+			assert_eq!(tracker.find_ancestor(block, number, |&x| x > 5).unwrap(), ("C", 4));
+		}
+	}
+
+	#[test]
+	fn walk_back_from_fork_block_node_below() {
+		let mut chain = DummyChain::new();
+		let mut tracker = VoteGraph::new(GENESIS_HASH, 1);
+
+		chain.push_blocks(GENESIS_HASH, &["A", "B", "C", "D"]);
+		chain.push_blocks("D", &["E1", "F1", "G1", "H1", "I1"]);
+		chain.push_blocks("D", &["E2", "F2", "G2", "H2", "I2"]);
+
+		tracker.insert("B", 3, 10usize, &chain).unwrap();
+		tracker.insert("F1", 7, 5usize, &chain).unwrap();
+		tracker.insert("G2", 8, 5usize, &chain).unwrap();
+
+		assert_eq!(tracker.find_ancestor("G2", 8, |&x| x > 5).unwrap(), ("D", 5));
+		let test_cases = &[
+			"E1",
+			"E2",
+			"F1",
+			"F2",
+			"G2",
+		];
+
+		for block in test_cases {
+			let number = chain.number(block);
+			assert_eq!(tracker.find_ancestor(block, number, |&x| x > 5).unwrap(), ("D", 5));
+		}
+	}
+
+	#[test]
+	fn walk_back_at_node() {
+		let mut chain = DummyChain::new();
+		let mut tracker = VoteGraph::new(GENESIS_HASH, 1);
+
+		chain.push_blocks(GENESIS_HASH, &["A", "B", "C"]);
+		chain.push_blocks("C", &["D1", "E1", "F1", "G1", "H1", "I1"]);
+		chain.push_blocks("C", &["D2", "E2", "F2"]);
+
+		tracker.insert("C", 4, 10usize, &chain).unwrap();
+		tracker.insert("F1", 7, 5usize, &chain).unwrap();
+		tracker.insert("F2", 7, 5usize, &chain).unwrap();
+		tracker.insert("I1", 10, 1usize, &chain).unwrap();
+
+		let test_cases = &[
+			"C",
+			"D1",
+			"D2",
+			"E1",
+			"E2",
+			"F1",
+			"F2",
+			"I1",
+		];
+
+		for block in test_cases {
+			let number = chain.number(block);
+			assert_eq!(tracker.find_ancestor(block, number, |&x| x >= 20).unwrap(), ("C", 4));
+		}
 	}
 }
