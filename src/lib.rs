@@ -26,15 +26,15 @@ use std::fmt;
 /// A prevote for a block and its ancestors.
 #[derive(Clone, PartialEq, Eq)]
 pub struct Prevote<H> {
-	target: H,
-	weight: usize,
+	target_hash: H,
+	target_number: u32,
 }
 
 /// A precommit for a block and its ancestors.
 #[derive(Clone, PartialEq, Eq)]
 pub struct Precommit<H> {
-	target: H,
-	weight: usize,
+	target_hash: H,
+	target_number: u32,
 }
 
 #[derive(Clone, PartialEq, Debug)]

@@ -22,7 +22,7 @@ use std::collections::hash_map::{HashMap, Entry};
 use std::hash::Hash;
 use std::ops::AddAssign;
 
-use super::{Equivocation, Prevote, Precommit};
+use super::{Equivocation, Prevote, Precommit, Chain};
 
 #[derive(Hash, Eq, PartialEq)]
 struct Address;
@@ -82,16 +82,19 @@ impl<Id: Hash + Eq + Clone, Vote: Clone + Eq, Signature: Clone> VoteTracker<Id, 
 }
 
 /// Parameters for starting a round.
-pub struct RoundParams<H> {
+pub struct RoundParams<Id: Hash + Eq, H> {
 	/// The round number for votes.
-	pub round_number: usize,
-	/// The amount of byzantine-faulty voting weight that exists (assumed) in the
-	/// system.
-	pub faulty_weight: usize,
-	/// The amount of total voting weight in the system
-	pub total_weight: usize,
+	pub round_number: u64,
+	/// Actors and weights in the round.
+	pub voters: HashMap<Id, usize>,
 	/// The base block to build on.
 	pub base: (H, usize),
+}
+
+pub enum Error<Id, H, S> {
+	PrevoteEquivocation(Equivocation<Id, Prevote<H>, S>),
+	PrecommitEquivocation(Equivocation<Id, Precommit<H>, S>),
+	Chain(::Error),
 }
 
 /// Stores data for a round.
@@ -99,32 +102,172 @@ pub struct Round<Id: Hash + Eq, H: Hash + Eq, Signature> {
 	graph: VoteGraph<H, VoteCount>,
 	prevote: VoteTracker<Id, Prevote<H>, Signature>,
 	precommit: VoteTracker<Id, Precommit<H>, Signature>,
-	round_number: usize,
+	round_number: u64,
+	voters: HashMap<Id, usize>,
 	faulty_weight: usize,
 	total_weight: usize,
 	prevote_ghost: Option<(H, usize)>,
+	estimate: Option<(H, usize)>,
+	completable: bool,
 }
 
 impl<Id: Hash + Clone + Eq, H: Hash + Clone + Eq + Ord, Signature: Eq + Clone> Round<Id, H, Signature> {
 	/// Create a new round accumulator for given round number and with given weight.
 	/// Not guaranteed to work correctly unless total_weight more than 3x larger than faulty_weight
-	pub fn new(round_params: RoundParams<H>) -> Self {
+	pub fn new(round_params: RoundParams<Id, H>) -> Self {
 		let (base_hash, base_number) = round_params.base;
+		let total_weight: usize = round_params.voters.values().cloned().sum();
+		let faulty_weight = total_weight.saturating_sub(1) / 3;
+
 		Round {
 			round_number: round_params.round_number,
-			faulty_weight: round_params.faulty_weight,
-			total_weight: round_params.total_weight,
+			faulty_weight: faulty_weight,
+			total_weight: total_weight,
+			voters: round_params.voters,
 			graph: VoteGraph::new(base_hash, base_number),
 			prevote: VoteTracker::new(),
 			precommit: VoteTracker::new(),
 			prevote_ghost: None,
+			estimate: None,
+			completable: false,
 		}
+	}
+
+	/// Import a prevote. Has no effect on internal state if an equivocation.
+	pub fn import_prevote<C: Chain<H>>(
+		&mut self,
+		chain: &C,
+		vote: Prevote<H>,
+		signer: Id,
+		signature: Signature,
+	) -> Result<(), Error<Id, H, Signature>> {
+		let weight = match self.voters.get(&signer) {
+			Some(weight) => *weight,
+			None => return Ok(()),
+		};
+
+		self.prevote.add_vote(signer, vote.clone(), signature, weight)
+			.map_err(|mut e| { e.round_number = self.round_number; e })
+			.map_err(Error::PrevoteEquivocation)?;
+
+		let vc = VoteCount {
+			prevote: weight,
+			precommit: 0,
+		};
+
+		self.graph.insert(vote.target_hash, vote.target_number as usize, vc, chain)
+			.map_err(Error::Chain)?;
+
+		// update prevote-GHOST
+		let threshold = self.threshold();
+		if self.prevote.current_weight >= threshold {
+			self.prevote_ghost = self.graph.find_ghost(self.prevote_ghost.take(), |v| v.prevote >= threshold);
+		}
+
+		self.update_estimate();
+		Ok(())
+	}
+
+	/// Import a prevote. Has no effect on internal state if an equivocation.
+	pub fn import_precommit<C: Chain<H>>(
+		&mut self,
+		chain: &C,
+		vote: Precommit<H>,
+		signer: Id,
+		signature: Signature,
+	) -> Result<(), Error<Id, H, Signature>> {
+		let weight = match self.voters.get(&signer) {
+			Some(weight) => *weight,
+			None => return Ok(()),
+		};
+
+		self.precommit.add_vote(signer, vote.clone(), signature, weight)
+			.map_err(|mut e| { e.round_number = self.round_number; e })
+			.map_err(Error::PrecommitEquivocation)?;
+
+		let vc = VoteCount {
+			prevote: 0,
+			precommit: weight,
+		};
+
+		self.graph.insert(vote.target_hash, vote.target_number as usize, vc, chain)
+			.map_err(Error::Chain)?;
+
+		self.update_estimate();
+		Ok(())
+	}
+
+	// update the round-estimate and whether the round is completable.
+	fn update_estimate(&mut self) {
+		let threshold = self.threshold();
+		if self.prevote.current_weight < threshold { return }
+
+		let remaining_commit_votes = self.total_weight - self.precommit.current_weight;
+		let (g_hash, g_num) = match self.prevote_ghost.clone() {
+			None => return,
+			Some(x) => x,
+		};
+
+		self.estimate = self.graph.find_ancestor(
+			g_hash.clone(),
+			g_num,
+			|vote| vote.precommit + remaining_commit_votes >= threshold,
+		);
+
+		self.completable = self.estimate.clone().map_or(false, |(b_hash, b_num)| {
+			b_hash != g_hash || {
+				// round-estimate is the same as the prevote-ghost.
+				// this round is still completable if no further blocks
+				// could have commit-supermajority.
+				let remaining_commit_votes = self.total_weight - self.precommit.current_weight;
+				let threshold = self.threshold();
+
+				self.graph.find_ghost(Some((b_hash, b_num)), |count| {
+					count.prevote >= threshold && count.precommit + remaining_commit_votes >=threshold
+				}).map_or(true, |x| x.0 == g_hash)
+			}
+		})
 	}
 
 	/// Fetch the "round-estimate": the best block which might have been finalized
 	/// in this round.
-	pub fn estimate(&self) -> (H, usize) {
-		let remaining_commit_votes = self.total_weight - self.precommit.current_weight;
-		unimplemented!()
+	///
+	/// Returns `None` when new new blocks could have been finalized in this round,
+	/// according to our estimate.
+	pub fn estimate(&self) -> Option<&(H, usize)> {
+		self.estimate.as_ref()
+	}
+
+	/// Returns `true` when the round is completable.
+	///
+	/// This is the case when the round-estimate is an ancestor of the prevote-ghost head,
+	/// or when they are the same block _and_ none of its children could possibly have
+	/// enough precommits.
+	pub fn completable(&self) -> bool {
+		self.completable
+	}
+
+	// Threshold number of weight for supermajority.
+	pub fn threshold(&self) -> usize {
+		threshold(self.total_weight, self.faulty_weight)
+	}
+}
+
+fn threshold(total_weight: usize, faulty_weight: usize) -> usize {
+	let mut double_supermajority = total_weight + faulty_weight + 1;
+	double_supermajority += double_supermajority & 1;
+	double_supermajority / 2
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+
+	#[test]
+	fn threshold_is_right() {
+		assert_eq!(threshold(10, 3), 7);
+		assert_eq!(threshold(100, 33), 67);
+		assert_eq!(threshold(101, 33), 68);
+		assert_eq!(threshold(102, 33), 68);
 	}
 }
