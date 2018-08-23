@@ -77,6 +77,8 @@ impl<Id: Hash + Eq + Clone, Vote: Clone + Eq, Signature: Clone> VoteTracker<Id, 
 			}
 		}
 
+		self.current_weight += weight;
+
 		Ok(())
 	}
 }
@@ -91,6 +93,7 @@ pub struct RoundParams<Id: Hash + Eq, H> {
 	pub base: (H, usize),
 }
 
+#[derive(Debug)]
 pub enum Error<Id, H, S> {
 	PrevoteEquivocation(Equivocation<Id, Prevote<H>, S>),
 	PrecommitEquivocation(Equivocation<Id, Precommit<H>, S>),
@@ -222,9 +225,9 @@ impl<Id: Hash + Clone + Eq, H: Hash + Clone + Eq + Ord, Signature: Eq + Clone> R
 				let remaining_commit_votes = self.total_weight - self.precommit.current_weight;
 				let threshold = self.threshold();
 
-				self.graph.find_ghost(Some((b_hash, b_num)), |count| {
-					count.prevote >= threshold && count.precommit + remaining_commit_votes >=threshold
-				}).map_or(true, |x| x.0 == g_hash)
+				self.graph.find_ghost(Some((b_hash, b_num)), |count|
+					count.precommit + remaining_commit_votes >= threshold
+				).map_or(true, |x| x.0 == g_hash)
 			}
 		})
 	}
@@ -262,6 +265,18 @@ fn threshold(total_weight: usize, faulty_weight: usize) -> usize {
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use testing::{GENESIS_HASH, DummyChain};
+
+	fn voters() -> HashMap<&'static str, usize> {
+		[
+			("Alice", 5),
+			("Bob", 7),
+			("Eve", 3),
+		].iter().cloned().collect()
+	}
+
+	#[derive(PartialEq, Eq, Hash, Clone, Debug)]
+	struct Signature(&'static str);
 
 	#[test]
 	fn threshold_is_right() {
@@ -269,5 +284,37 @@ mod tests {
 		assert_eq!(threshold(100, 33), 67);
 		assert_eq!(threshold(101, 33), 68);
 		assert_eq!(threshold(102, 33), 68);
+	}
+
+	#[test]
+	fn estimate_is_valid() {
+		let mut chain = DummyChain::new();
+		chain.push_blocks(GENESIS_HASH, &["A", "B", "C", "D", "E", "F"]);
+		chain.push_blocks("E", &["EA", "EB", "EC", "ED"]);
+		chain.push_blocks("F", &["FA", "FB", "FC"]);
+
+		let mut round = Round::new(RoundParams {
+			round_number: 1,
+			voters: voters(),
+			base: ("C", 4),
+		});
+
+		round.import_prevote(
+			&chain,
+			Prevote::new("FC", 10),
+			"Alice",
+			Signature("Alice"),
+		).unwrap();
+
+		round.import_prevote(
+			&chain,
+			Prevote::new("ED", 10),
+			"Bob",
+			Signature("Bob"),
+		).unwrap();
+
+		assert_eq!(round.prevote_ghost, Some(("E", 6)));
+		assert_eq!(round.estimate(), Some(&("E", 6)));
+		assert!(!round.completable());
 	}
 }

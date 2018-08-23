@@ -441,63 +441,7 @@ impl<H, V> VoteGraph<H, V> where
 #[cfg(test)]
 mod tests {
 	use super::*;
-
-	const GENESIS_HASH: &str = "genesis";
-	const NULL_HASH: &str = "NULL";
-
-	struct BlockRecord {
-		number: usize,
-		parent: &'static str,
-	}
-
-	struct DummyChain {
-		inner: HashMap<&'static str, BlockRecord>,
-	}
-
-	impl DummyChain {
-		fn new() -> Self {
-			let mut inner = HashMap::new();
-			inner.insert(GENESIS_HASH, BlockRecord { number: 1, parent: NULL_HASH });
-
-			DummyChain { inner }
-		}
-
-		fn push_blocks(&mut self, mut parent: &'static str, blocks: &[&'static str]) {
-			let base_number = self.inner.get(parent).unwrap().number + 1;
-			for (i, descendent) in blocks.iter().enumerate() {
-				self.inner.insert(descendent, BlockRecord {
-					number: base_number + i,
-					parent,
-				});
-
-				parent = descendent;
-			}
-		}
-
-		fn number(&self, hash: &'static str) -> usize {
-			self.inner.get(hash).unwrap().number
-		}
-	}
-
-	impl Chain<&'static str> for DummyChain {
-		fn ancestry(&self, base: &'static str, mut block: &'static str) -> Result<Vec<&'static str>, Error> {
-			let mut ancestry = Vec::new();
-
-			loop {
-				match self.inner.get(block) {
-					None => return Err(Error::BlockNotInSubtree),
-					Some(record) => { block = record.parent; }
-				}
-
-				ancestry.push(block);
-
-				if block == NULL_HASH { return Err(Error::BlockNotInSubtree) }
-				if block == base { break }
-			}
-
-			Ok(ancestry)
-		}
-	}
+	use testing::{GENESIS_HASH, DummyChain};
 
 	#[test]
 	fn graph_fork_not_at_node() {

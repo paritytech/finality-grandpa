@@ -21,20 +21,35 @@
 mod round;
 mod vote_graph;
 
+#[cfg(test)]
+mod testing;
+
 use std::fmt;
 
 /// A prevote for a block and its ancestors.
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Prevote<H> {
 	target_hash: H,
 	target_number: u32,
 }
 
+impl<H> Prevote<H> {
+	pub fn new(target_hash: H, target_number: u32) -> Self {
+		Prevote { target_hash, target_number }
+	}
+}
+
 /// A precommit for a block and its ancestors.
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Precommit<H> {
 	target_hash: H,
 	target_number: u32,
+}
+
+impl<H> Precommit<H> {
+	pub fn new(target_hash: H, target_number: u32) -> Self {
+		Precommit { target_hash, target_number }
+	}
 }
 
 #[derive(Clone, PartialEq, Debug)]
@@ -68,6 +83,7 @@ pub trait Chain<H> {
 }
 
 /// An equivocation (double-vote) in a given round.
+#[derive(Debug, Clone, PartialEq)]
 pub struct Equivocation<Id, V, S> {
 	/// The round number equivocated in.
 	pub round_number: u64,
