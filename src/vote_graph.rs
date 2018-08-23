@@ -69,6 +69,11 @@ impl<H: Clone> Subchain<H> {
 		self.hashes.iter().rev().cloned().enumerate().map(move |(i, x)| (x, best - i))
 	}
 
+	fn block_at(&self, number: usize) -> Option<&H> {
+		let rev_off = self.best_number.checked_sub(number)?;
+		self.hashes.len().checked_sub(rev_off + 1).map(|i| &self.hashes[i])
+	}
+
 	fn best(&self) -> Option<(H, usize)> {
 		self.hashes.last().map(|x| (x.clone(), self.best_number))
 	}
@@ -186,7 +191,7 @@ impl<H, V> VoteGraph<H, V> where
 
 		// find the GHOST merge-point after the active_node.
 		// constrain it to be within the canonical chain.
-		let good_subchain = self.ghost_find_merge_point(node_key, active_node, condition);
+		let good_subchain = self.ghost_find_merge_point(node_key, active_node, None, condition);
 
 		// TODO: binding is required for some reason.
 		let x = good_subchain.blocks_reverse().find(|&(ref good_hash, good_number)|
@@ -214,13 +219,19 @@ impl<H, V> VoteGraph<H, V> where
 				.expect("node either base or referenced by other in graph; qed")
 		};
 
-		let mut node_key = current_best
+		let (mut node_key, mut force_constrain) = current_best
+			.clone()
 			.and_then(|(hash, number)| match self.find_containing_nodes(hash.clone(), number) {
-				None => Some(hash),
-				Some(ref x) if !x.is_empty() => get_node(&x[0]).ancestor_node(),
+				None => Some((hash, false)),
+				Some(ref x) if !x.is_empty() => {
+					let ancestor = get_node(&x[0]).ancestor_node()
+						.expect("node containing non-node in history always has ancestor; qed");
+
+					Some((ancestor, true))
+				}
 				Some(_) => None,
 			})
-			.unwrap_or_else(|| self.base.clone());
+			.unwrap_or_else(|| (self.base.clone(), false));
 
 		let mut active_node = get_node(&node_key);
 
@@ -231,11 +242,22 @@ impl<H, V> VoteGraph<H, V> where
 			let next_descendent = active_node.descendents
 				.iter()
 				.map(|d| (d.clone(), get_node(d)))
+				.filter(|&(ref d_key, ref node)| {
+					// take only descendents with our block in the ancestry.
+					if let (true, Some(&(ref h, n))) = (force_constrain, current_best.as_ref()) {
+						node.in_direct_ancestry(h, n).unwrap_or(false)
+					} else {
+						true
+					}
+				})
 				.filter(|&(_, ref node)| condition(&node.cumulative_vote))
 				.next();
 
 			match next_descendent {
 				Some((key, node)) => {
+					// once we've made at least one hop, we don't need to constrain
+					// ancestry anymore.
+					force_constrain = false;
 					node_key = key;
 					active_node = node;
 				}
@@ -247,7 +269,12 @@ impl<H, V> VoteGraph<H, V> where
 		// its descendents comprise frontier of vote-nodes which individually don't have enough votes
 		// to pass the threshold but some subset of them join either at `active_node`'s block or at some
 		// descendent block of it, giving that block sufficient votes.
-		self.ghost_find_merge_point(node_key, active_node, condition).best()
+		self.ghost_find_merge_point(
+			node_key,
+			active_node,
+			if force_constrain { current_best } else { None },
+			condition,
+		).best()
 	}
 
 	// given a key, node pair (which must correspond), assuming this node fulfills the condition,
@@ -257,12 +284,18 @@ impl<H, V> VoteGraph<H, V> where
 		&'a self,
 		node_key: H,
 		active_node: &'a Entry<H, V>,
+		force_constrain: Option<(H, usize)>,
 		condition: F,
 	) -> Subchain<H>
 		where F: Fn(&V) -> bool
 	{
 		let mut descendent_nodes: Vec<_> = active_node.descendents.iter()
 			.map(|h| self.entries.get(h).expect("descendents always present in node storage; qed"))
+			.filter(|n| if let Some((ref h, num)) = force_constrain {
+				n.in_direct_ancestry(h, num).unwrap_or(false)
+			} else {
+				true
+			})
 			.collect();
 
 		let base_number = active_node.number;

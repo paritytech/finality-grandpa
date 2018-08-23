@@ -225,9 +225,16 @@ impl<Id: Hash + Clone + Eq, H: Hash + Clone + Eq + Ord, Signature: Eq + Clone> R
 				let remaining_commit_votes = self.total_weight - self.precommit.current_weight;
 				let threshold = self.threshold();
 
-				self.graph.find_ghost(Some((b_hash, b_num)), |count|
-					count.precommit + remaining_commit_votes >= threshold
-				).map_or(true, |x| x.0 == g_hash)
+				// when the remaining votes are at least the threshold,
+				// we can always have commit-supermajority.
+				//
+				// once it's below that level, we only need to consider already
+				// blocks referenced in the graph, because no new leaf nodes
+				// could ever have enough commits.
+				remaining_commit_votes < threshold &&
+					self.graph.find_ghost(Some((b_hash, b_num)), |count|
+						count.precommit + remaining_commit_votes >= threshold
+					).map_or(true, |x| x == (g_hash, g_num))
 			}
 		})
 	}
