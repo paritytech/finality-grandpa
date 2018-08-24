@@ -16,24 +16,40 @@
 
 //! Finality gadget for blockchains.
 //!
-//! https://hackmd.io/svMTltnGQsSR1GCjRKOPbw
+//! https://hackmd.io/iA4XazxWRJ21LqMxwPSEZg?view
 
+mod round;
 mod vote_graph;
+
+#[cfg(test)]
+mod testing;
 
 use std::fmt;
 
 /// A prevote for a block and its ancestors.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Prevote<H> {
-	round: u64,
-	target: H,
-	weight: usize,
+	target_hash: H,
+	target_number: u32,
+}
+
+impl<H> Prevote<H> {
+	pub fn new(target_hash: H, target_number: u32) -> Self {
+		Prevote { target_hash, target_number }
+	}
 }
 
 /// A precommit for a block and its ancestors.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Precommit<H> {
-	round: u64,
-	target: H,
-	weight: usize,
+	target_hash: H,
+	target_number: u32,
+}
+
+impl<H> Precommit<H> {
+	pub fn new(target_hash: H, target_number: u32) -> Self {
+		Precommit { target_hash, target_number }
+	}
 }
 
 #[derive(Clone, PartialEq, Debug)]
@@ -64,4 +80,17 @@ pub trait Chain<H> {
 	///
 	/// If the block is not a descendent of `base`, returns an error.
 	fn ancestry(&self, base: H, block: H) -> Result<Vec<H>, Error>;
+}
+
+/// An equivocation (double-vote) in a given round.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Equivocation<Id, V, S> {
+	/// The round number equivocated in.
+	pub round_number: u64,
+	/// The identity of the equivocator.
+	pub identity: Id,
+	/// The first vote in the equivocation.
+	pub	first: (V, S),
+	/// The second vote in the equivocation.
+	pub second: (V, S),
 }
