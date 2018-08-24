@@ -354,4 +354,42 @@ mod tests {
 		assert_eq!(round.estimate(), Some(&("E", 6)));
 	}
 
+	#[test]
+	fn finalization() {
+		let mut chain = DummyChain::new();
+		chain.push_blocks(GENESIS_HASH, &["A", "B", "C", "D", "E", "F"]);
+		chain.push_blocks("E", &["EA", "EB", "EC", "ED"]);
+		chain.push_blocks("F", &["FA", "FB", "FC"]);
+
+		let mut round = Round::new(RoundParams {
+			round_number: 1,
+			voters: voters(),
+			base: ("C", 4),
+		});
+
+		round.import_precommit(
+			&chain,
+			Precommit::new("FC", 10),
+			"Alice",
+			Signature("Alice"),
+		).unwrap();
+
+		round.import_precommit(
+			&chain,
+			Precommit::new("ED", 10),
+			"Bob",
+			Signature("Bob"),
+		).unwrap();
+
+		assert_eq!(round.finalized, Some(("E", 6)));
+
+		round.import_precommit(
+			&chain,
+			Precommit::new("EA", 7),
+			"Eve",
+			Signature("Eve"),
+		).unwrap();
+
+		assert_eq!(round.finalized, Some(("EA", 7)));
+	}
 }
