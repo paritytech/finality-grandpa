@@ -61,15 +61,15 @@ impl<Id: Hash + Eq + Clone, Vote: Clone + Eq, Signature: Clone> VoteTracker<Id, 
 	fn add_vote(&mut self, id: Id, vote: Vote, signature: Signature, weight: usize)
 		-> Result<(), Equivocation<Id, Vote, Signature>>
 	{
-		match self.votes.entry(id.clone()) {
+		match self.votes.entry(id) {
 			Entry::Vacant(mut vacant) => {
 				vacant.insert((vote, signature));
 			}
-			Entry::Occupied(mut occupied) => {
+			Entry::Occupied(occupied) => {
 				if occupied.get().0 != vote {
 					return Err(Equivocation {
 						round_number: 0,
-						identity: id,
+						identity: occupied.key().clone(),
 						first: occupied.get().clone(),
 						second: (vote, signature),
 					})
@@ -102,19 +102,24 @@ pub enum Error<Id, H, S> {
 
 /// Stores data for a round.
 pub struct Round<Id: Hash + Eq, H: Hash + Eq, Signature> {
-	graph: VoteGraph<H, VoteCount>,
-	prevote: VoteTracker<Id, Prevote<H>, Signature>,
-	precommit: VoteTracker<Id, Precommit<H>, Signature>,
+	graph: VoteGraph<H, VoteCount>, // DAG of blocks which have been voted on.
+	prevote: VoteTracker<Id, Prevote<H>, Signature>, // tracks prevotes that have been counted
+	precommit: VoteTracker<Id, Precommit<H>, Signature>, // tracks precommits
 	round_number: u64,
 	voters: HashMap<Id, usize>,
 	faulty_weight: usize,
 	total_weight: usize,
-	prevote_ghost: Option<(H, usize)>,
-	estimate: Option<(H, usize)>,
-	completable: bool,
+	prevote_ghost: Option<(H, usize)>, // current memoized prevote-GHOST block
+	finalized: Option<(H, usize)>, // best finalized block in this round.
+	estimate: Option<(H, usize)>, // current memoized round-estimate
+	completable: bool, // whether the round is completable
 }
 
-impl<Id: Hash + Clone + Eq, H: Hash + Clone + Eq + Ord, Signature: Eq + Clone> Round<Id, H, Signature> {
+impl<Id, H, Signature> Round<Id, H, Signature> where
+	Id: Hash + Clone + Eq,
+	H: Hash + Clone + Eq + Ord + ::std::fmt::Debug,
+	Signature: Eq + Clone,
+{
 	/// Create a new round accumulator for given round number and with given weight.
 	/// Not guaranteed to work correctly unless total_weight more than 3x larger than faulty_weight
 	pub fn new(round_params: RoundParams<Id, H>) -> Self {
@@ -131,12 +136,14 @@ impl<Id: Hash + Clone + Eq, H: Hash + Clone + Eq + Ord, Signature: Eq + Clone> R
 			prevote: VoteTracker::new(),
 			precommit: VoteTracker::new(),
 			prevote_ghost: None,
+			finalized: None,
 			estimate: None,
 			completable: false,
 		}
 	}
 
-	/// Import a prevote. Has no effect on internal state if an equivocation.
+	/// Import a prevote. Has no effect on internal state if an equivocation or if the
+	/// signer is not a known voter.
 	pub fn import_prevote<C: Chain<H>>(
 		&mut self,
 		chain: &C,
@@ -171,7 +178,8 @@ impl<Id: Hash + Clone + Eq, H: Hash + Clone + Eq + Ord, Signature: Eq + Clone> R
 		Ok(())
 	}
 
-	/// Import a prevote. Has no effect on internal state if an equivocation.
+	/// Import a prevote. Has no effect on internal state if an equivocation or if
+	/// the signer is not a known voter.
 	pub fn import_precommit<C: Chain<H>>(
 		&mut self,
 		chain: &C,
@@ -195,6 +203,12 @@ impl<Id: Hash + Clone + Eq, H: Hash + Clone + Eq + Ord, Signature: Eq + Clone> R
 
 		self.graph.insert(vote.target_hash, vote.target_number as usize, vc, chain)
 			.map_err(Error::Chain)?;
+
+		// anything finalized?
+		let threshold = self.threshold();
+		if self.precommit.current_weight >= threshold {
+			self.finalized = self.graph.find_ghost(self.finalized.take(), |v| v.precommit >= threshold);
+		}
 
 		self.update_estimate();
 		Ok(())
@@ -246,6 +260,11 @@ impl<Id: Hash + Clone + Eq, H: Hash + Clone + Eq + Ord, Signature: Eq + Clone> R
 	/// according to our estimate.
 	pub fn estimate(&self) -> Option<&(H, usize)> {
 		self.estimate.as_ref()
+	}
+
+	/// Fetch the most recently finalized block.
+	pub fn finalized(&self) -> Option<&(H, usize)> {
+		self.finalized.as_ref()
 	}
 
 	/// Returns `true` when the round is completable.
@@ -323,5 +342,16 @@ mod tests {
 		assert_eq!(round.prevote_ghost, Some(("E", 6)));
 		assert_eq!(round.estimate(), Some(&("E", 6)));
 		assert!(!round.completable());
+
+		round.import_prevote(
+			&chain,
+			Prevote::new("F", 7),
+			"Eve",
+			Signature("Eve"),
+		).unwrap();
+
+		assert_eq!(round.prevote_ghost, Some(("E", 6)));
+		assert_eq!(round.estimate(), Some(&("E", 6)));
 	}
+
 }

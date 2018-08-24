@@ -88,8 +88,8 @@ pub struct VoteGraph<H: Hash + Eq, V> {
 }
 
 impl<H, V> VoteGraph<H, V> where
-	H: Hash + Eq + Clone + Ord,
-	V: AddAssign + Default + Clone,
+	H: Hash + Eq + Clone + Ord + Debug,
+	V: AddAssign + Default + Clone + Debug,
 {
 	/// Create a new `VoteGraph` with base node as given.
 	pub fn new(base_hash: H, base_number: usize) -> Self {
@@ -242,7 +242,7 @@ impl<H, V> VoteGraph<H, V> where
 			let next_descendent = active_node.descendents
 				.iter()
 				.map(|d| (d.clone(), get_node(d)))
-				.filter(|&(ref d_key, ref node)| {
+				.filter(|&(_, ref node)| {
 					// take only descendents with our block in the ancestry.
 					if let (true, Some(&(ref h, n))) = (force_constrain, current_best.as_ref()) {
 						node.in_direct_ancestry(h, n).unwrap_or(false)
@@ -413,13 +413,18 @@ impl<H, V> VoteGraph<H, V> where
 			{
 				let offset = entry.number.checked_sub(ancestor_number)
 					.expect("this function only invoked with direct ancestors; qed");
+				let prev_ancestor  = entry.ancestor_node();
 				let new_ancestors = entry.ancestors.drain(offset..);
 
-				let new_entry = maybe_entry.get_or_insert_with(move || Entry {
-					number: ancestor_number,
-					ancestors: new_ancestors.collect(),
-					descendents: vec![],
-					cumulative_vote: V::default(),
+				let &mut (ref mut new_entry, _) = maybe_entry.get_or_insert_with(move || {
+					let new_entry = Entry {
+						number: ancestor_number,
+						ancestors: new_ancestors.collect(),
+						descendents: vec![],
+						cumulative_vote: V::default(),
+					};
+
+					(new_entry, prev_ancestor)
 				});
 
 				new_entry.descendents.push(descendent);
@@ -429,7 +434,15 @@ impl<H, V> VoteGraph<H, V> where
 			maybe_entry
 		});
 
-		if let Some(new_entry) = produced_entry {
+		if let Some((new_entry, prev_ancestor)) = produced_entry {
+			if let Some(prev_ancestor) = prev_ancestor {
+				let mut prev_ancestor_node = self.entries.get_mut(&prev_ancestor)
+					.expect("Prior ancestor is referenced from a node; qed");
+
+				prev_ancestor_node.descendents.retain(|h| !new_entry.descendents.contains(&h));
+				prev_ancestor_node.descendents.push(ancestor_hash.clone());
+			}
+
 			assert!(
 				self.entries.insert(ancestor_hash, new_entry).is_none(),
 				"thus function is only invoked when there is no entry for the ancestor already; qed",
@@ -582,6 +595,36 @@ mod tests {
 		assert_eq!(tracker.find_ghost(Some(("F", 7)), |&x| x >= 250), Some(("F", 7)));
 		assert_eq!(tracker.find_ghost(Some(("C", 4)), |&x| x >= 250), Some(("F", 7)));
 		assert_eq!(tracker.find_ghost(Some(("B", 3)), |&x| x >= 250), Some(("F", 7)));
+	}
+
+	#[test]
+	fn ghost_introduce_branch() {
+		let mut chain = DummyChain::new();
+		let mut tracker = VoteGraph::new(GENESIS_HASH, 1);
+
+		chain.push_blocks(GENESIS_HASH, &["A", "B", "C", "D", "E", "F"]);
+		chain.push_blocks("E", &["EA", "EB", "EC", "ED"]);
+		chain.push_blocks("F", &["FA", "FB", "FC"]);
+
+		tracker.insert("FC", 10, 5usize, &chain).unwrap();
+		tracker.insert("ED", 10, 7, &chain).unwrap();
+
+		assert_eq!(tracker.find_ghost(None, |&x| x >= 10), Some(("E", 6)));
+
+		assert_eq!(tracker.entries.get(GENESIS_HASH).unwrap().descendents, vec!["FC", "ED"]);
+
+		// introduce a branch in the middle.
+		tracker.insert("E", 6, 3, &chain).unwrap();
+
+		assert_eq!(tracker.entries.get(GENESIS_HASH).unwrap().descendents, vec!["E"]);
+		let descendents = &tracker.entries.get("E").unwrap().descendents;
+		assert_eq!(descendents.len(), 2);
+		assert!(descendents.contains(&"ED"));
+		assert!(descendents.contains(&"FC"));
+
+		assert_eq!(tracker.find_ghost(None, |&x| x >= 10), Some(("E", 6)));
+		assert_eq!(tracker.find_ghost(Some(("C", 4)), |&x| x >= 10), Some(("E", 6)));
+		assert_eq!(tracker.find_ghost(Some(("E", 6)), |&x| x >= 10), Some(("E", 6)));
 	}
 
 	#[test]
