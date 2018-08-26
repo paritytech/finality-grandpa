@@ -18,6 +18,9 @@
 //!
 //! https://hackmd.io/iA4XazxWRJ21LqMxwPSEZg?view
 
+extern crate parking_lot;
+
+mod bitfield;
 mod round;
 mod vote_graph;
 
@@ -25,7 +28,6 @@ mod vote_graph;
 mod testing;
 
 use std::fmt;
-
 /// A prevote for a block and its ancestors.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Prevote<H> {

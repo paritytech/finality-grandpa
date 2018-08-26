@@ -5,3 +5,4 @@ description = "PBFT-based finality gadget for blockchains"
 authors = ["Parity Technologies <admin@parity.io>"]
 
 [dependencies]
+parking_lot = "0.4"
