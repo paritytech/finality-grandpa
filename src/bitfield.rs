@@ -97,6 +97,24 @@ impl<Id: Eq> Bitfield<Id> {
 			}
 		}
 	}
+
+	/// Find overlap weight (prevote, precommit) between this bitfield and another.
+	pub fn overlap(&self, other: &Self) -> Result<(usize, usize), Error> {
+		match (self, other) {
+			(&Bitfield::Live(ref a), &Bitfield::Live(ref b)) => {
+				if a.shared.idx != b.shared.idx {
+					// we can't merge two bitfields from different contexts.
+					Err(Error::ContextMismatch(a.shared.idx, b.shared.idx))
+				} else {
+					Ok(total_weight(
+						a.bits.iter().zip(&b.bits).map(|(a, b)| a & b),
+						a.shared.validators.read().as_slice(),
+					))
+				}
+			}
+			_ => Ok((0, 0))
+		}
+	}
 }
 
 /// Live bitfield instance.
@@ -146,12 +164,21 @@ impl<Id: Eq> LiveBitfield<Id> {
 		// log it?
 		if let Some(word) = self.bits.get_mut(word_off) {
 			// set bit starting from left.
-			*word |= (1 << (63 - bit_off))
+			*word |= 1 << (63 - bit_off)
 		}
 	}
 
 	// find total weight of this bitfield (prevote, precommit).
 	fn total_weight(&self) -> (usize, usize) {
+		total_weight(self.bits.iter().cloned(), self.shared.validators.read().as_slice())
+	}
+}
+
+// find total weight of the given iterable of bits. assumes that there are enough
+// validators in the given context to correspond to all bits.
+fn total_weight<Iter, Id>(iterable: Iter, validators: &[ValidatorEntry<Id>]) -> (usize, usize)
+	where Iter: IntoIterator<Item=u64>
+{
 		struct State {
 			word_idx: usize,
 			prevote: usize,
@@ -164,8 +191,7 @@ impl<Id: Eq> LiveBitfield<Id> {
 			precommit: 0,
 		};
 
-		let validators = self.shared.validators.read();
-		let state = self.bits.iter().cloned().fold(state, |mut state, mut word| {
+		let state = iterable.into_iter().fold(state, |mut state, mut word| {
 			for i in 0..32 {
 				if word == 0 { break }
 
@@ -188,7 +214,6 @@ impl<Id: Eq> LiveBitfield<Id> {
 
 		(state.prevote, state.precommit)
 	}
-}
 
 /// Shared data among all live bitfield instances.
 pub struct Shared<Id> {
@@ -324,9 +349,31 @@ mod tests {
 		}
 
 		let mut live_bitfield = LiveBitfield::new(shared);
-		live_bitfield.equivocated_prevote(0, 1);
-		live_bitfield.equivocated_precommit(31, 32);
+		live_bitfield.equivocated_prevote(0, 1).unwrap();
+		live_bitfield.equivocated_precommit(31, 32).unwrap();
 
 		assert_eq!(live_bitfield.total_weight(), (1, 32));
+	}
+
+	#[test]
+	fn weight_overlap() {
+		let mut shared = Shared::new(10);
+		let mut live_a = LiveBitfield::new(shared.clone());
+		let mut live_b = LiveBitfield::new(shared.clone());
+
+		live_a.equivocated_prevote(1, 5).unwrap();
+		live_a.equivocated_precommit(2, 7).unwrap();
+		live_a.equivocated_prevote(3, 9).unwrap();
+
+		live_b.equivocated_prevote(1, 5).unwrap();
+		live_b.equivocated_precommit(2, 7).unwrap();
+		live_b.equivocated_precommit(3, 9).unwrap();
+
+		assert_eq!(live_a.total_weight(), (14, 7));
+		assert_eq!(live_b.total_weight(), (5, 16));
+
+		let (a, b) = (Bitfield::Live(live_a), Bitfield::Live(live_b));
+
+		assert_eq!(a.overlap(&b).unwrap(), (5, 7));
 	}
 }
