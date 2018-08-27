@@ -29,7 +29,6 @@
 //! merged, and queried for total weight in commits and precommits.
 
 use std::fmt;
-use std::ops::{BitOr, BitAnd};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use parking_lot::RwLock;
@@ -62,12 +61,27 @@ impl ::std::error::Error for Error {}
 /// Bitfield for equivocating validators.
 ///
 /// See module docs for more details.
-#[derive(Clone)]
+#[derive(Debug)]
 pub enum Bitfield<Id> {
 	/// Blank bitfield,
 	Blank,
 	/// Live bitfield,
 	Live(LiveBitfield<Id>),
+}
+
+impl<Id> Default for Bitfield<Id> {
+	fn default() -> Self {
+		Bitfield::Blank
+	}
+}
+
+impl<Id> Clone for Bitfield<Id> {
+	fn clone(&self) -> Self {
+		match *self {
+			Bitfield::Blank => Bitfield::Blank,
+			Bitfield::Live(ref l) => Bitfield::Live(l.clone()),
+		}
+	}
 }
 
 impl<Id: Eq> Bitfield<Id> {
@@ -118,6 +132,7 @@ impl<Id: Eq> Bitfield<Id> {
 }
 
 /// Live bitfield instance.
+#[derive(Debug)]
 pub struct LiveBitfield<Id> {
 	bits: Vec<u64>,
 	shared: Shared<Id>,
@@ -216,6 +231,7 @@ fn total_weight<Iter, Id>(iterable: Iter, validators: &[ValidatorEntry<Id>]) -> 
 	}
 
 /// Shared data among all live bitfield instances.
+#[derive(Debug)]
 pub struct Shared<Id> {
 	idx: usize,
 	n_validators: usize,
@@ -285,6 +301,7 @@ impl<Id: Eq> Shared<Id> {
 	}
 }
 
+#[derive(Debug)]
 struct ValidatorEntry<Id> {
 	id: Id,
 	weight: usize,
@@ -309,7 +326,7 @@ mod tests {
 
 	#[test]
 	fn merge_live() {
-		let mut shared = Shared::new(10);
+		let shared = Shared::new(10);
 		let mut live_a = LiveBitfield::new(shared.clone());
 		let mut live_b = LiveBitfield::new(shared.clone());
 

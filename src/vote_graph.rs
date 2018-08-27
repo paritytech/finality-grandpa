@@ -174,8 +174,6 @@ impl<H, V> VoteGraph<H, V> where
 			Some(_) => return None,
 		};
 
-		let initial_node_key = node_key.clone();
-
 		// search backwards until we find the first vote-node that
 		// meets the condition.
 		let mut active_node = get_node(&node_key);
