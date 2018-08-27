@@ -532,4 +532,55 @@ mod tests {
 
 		assert_eq!(round.finalized, Some(("EA", 7)));
 	}
+
+	#[test]
+	fn equivocate_does_not_double_count() {
+		let mut chain = DummyChain::new();
+		chain.push_blocks(GENESIS_HASH, &["A", "B", "C", "D", "E", "F"]);
+		chain.push_blocks("E", &["EA", "EB", "EC", "ED"]);
+		chain.push_blocks("F", &["FA", "FB", "FC"]);
+
+		let mut round = Round::new(RoundParams {
+			round_number: 1,
+			voters: voters(),
+			base: ("C", 4),
+		});
+
+		assert!(round.import_prevote(
+			&chain,
+			Prevote::new("FC", 10),
+			"Eve",
+			Signature("Eve-1"),
+		).unwrap().is_none());
+
+
+		assert!(round.prevote_ghost.is_none());
+
+		assert!(round.import_prevote(
+			&chain,
+			Prevote::new("ED", 10),
+			"Eve",
+			Signature("Eve-2"),
+		).unwrap().is_some());
+
+		assert!(round.import_prevote(
+			&chain,
+			Prevote::new("F", 7),
+			"Eve",
+			Signature("Eve-2"),
+		).unwrap().is_some());
+
+		// three eves together would be enough.
+
+		assert!(round.prevote_ghost.is_none());
+
+		assert!(round.import_prevote(
+			&chain,
+			Prevote::new("FA", 8),
+			"Bob",
+			Signature("Bob-1"),
+		).unwrap().is_none());
+
+		assert_eq!(round.prevote_ghost, Some(("FA", 8)));
+	}
 }
