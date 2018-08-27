@@ -20,9 +20,9 @@
 
 extern crate parking_lot;
 
-mod bitfield;
-mod round;
-mod vote_graph;
+pub mod bitfield;
+pub mod round;
+pub mod vote_graph;
 
 #[cfg(test)]
 mod testing;

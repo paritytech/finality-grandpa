@@ -69,11 +69,6 @@ impl<H: Clone> Subchain<H> {
 		self.hashes.iter().rev().cloned().enumerate().map(move |(i, x)| (x, best - i))
 	}
 
-	fn block_at(&self, number: usize) -> Option<&H> {
-		let rev_off = self.best_number.checked_sub(number)?;
-		self.hashes.len().checked_sub(rev_off + 1).map(|i| &self.hashes[i])
-	}
-
 	fn best(&self) -> Option<(H, usize)> {
 		self.hashes.last().map(|x| (x.clone(), self.best_number))
 	}

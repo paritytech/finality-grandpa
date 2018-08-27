@@ -146,7 +146,7 @@ impl<Id: Hash + Eq + Clone, Vote: Clone + Eq, Signature: Clone> VoteTracker<Id, 
 		-> &VoteMultiplicity<Vote, Signature>
 	{
 		match self.votes.entry(id) {
-			Entry::Vacant(mut vacant) => {
+			Entry::Vacant(vacant) => {
 				self.current_weight += weight;
 				&*vacant.insert(VoteMultiplicity::Single(vote, signature))
 			}

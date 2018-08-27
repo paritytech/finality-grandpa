@@ -288,17 +288,6 @@ impl<Id: Eq> Shared<Id> {
 		validators.push(ValidatorEntry { id: equivocator, weight });
 		Ok(validators.len() - 1)
 	}
-
-	// get total weight of given validator indices, ignoring any
-	// invalid indices.
-	fn total_weight<I>(&self, indices: I) -> usize where I: IntoIterator<Item=usize> {
-		let validators = self.validators.read();
-
-		indices.into_iter()
-			.filter_map(|i| validators.get(i))
-			.map(|entry| entry.weight)
-			.sum()
-	}
 }
 
 #[derive(Debug)]
@@ -374,7 +363,7 @@ mod tests {
 
 	#[test]
 	fn weight_overlap() {
-		let mut shared = Shared::new(10);
+		let shared = Shared::new(10);
 		let mut live_a = LiveBitfield::new(shared.clone());
 		let mut live_b = LiveBitfield::new(shared.clone());
 
