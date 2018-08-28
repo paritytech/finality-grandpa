@@ -18,14 +18,18 @@
 //!
 //! https://hackmd.io/iA4XazxWRJ21LqMxwPSEZg?view
 
-mod round;
-mod vote_graph;
+extern crate parking_lot;
+#[macro_use]
+extern crate log;
+
+pub mod bitfield;
+pub mod round;
+pub mod vote_graph;
 
 #[cfg(test)]
 mod testing;
 
 use std::fmt;
-
 /// A prevote for a block and its ancestors.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Prevote<H> {
