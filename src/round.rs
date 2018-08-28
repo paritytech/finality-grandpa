@@ -365,14 +365,6 @@ impl<Id, H, Signature> Round<Id, H, Signature> where
 			Some(x) => x,
 		};
 
-		// when the remaining votes are at least the threshold, we can always
-		// have commit supermajority on any block and thus the round will not
-		// be completable.
-		//
-		// once it's below that level, we only need to consider already
-		// blocks referenced in the graph, because no new leaf nodes
-		// could ever have enough commits.
-		//
 		// figuring out whether a block can still be committed for is
 		// not straightforward because we have to account for all possible future
 		// equivocations and thus cannot discount weight from validators who
@@ -391,9 +383,17 @@ impl<Id, H, Signature> Round<Id, H, Signature> where
 			weight.precommit + remaining_commit_votes + additional_equivocation_weight >= threshold
 		};
 
+		// until we have threshold precommits, any new block could get supermajority
+		// precommits because there are at least f + 1 precommits remaining and then
+		// f equivocations.
+		//
+		// once it's at least that level, we only need to consider already
+		// blocks referenced in the graph, because no new leaf nodes
+		// could ever have enough precommits.
+		//
 		// the round-estimate is the highest block in the chain with head
 		// `prevote_ghost` that could have supermajority-commits.
-		if remaining_commit_votes < threshold {
+		if self.precommit.current_weight >= threshold {
 			self.estimate = self.graph.find_ancestor(
 				g_hash.clone(),
 				g_num,
