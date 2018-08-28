@@ -19,6 +19,8 @@
 //! https://hackmd.io/iA4XazxWRJ21LqMxwPSEZg?view
 
 extern crate parking_lot;
+#[macro_use]
+extern crate log;
 
 pub mod bitfield;
 pub mod round;

@@ -175,11 +175,13 @@ impl<Id: Eq> LiveBitfield<Id> {
 		let word_off = bit_idx / 64;
 		let bit_off = bit_idx % 64;
 
-		// TODO: if this isn't `Some`, something has gone really wrong.
-		// log it?
+		// If this isn't `Some`, something has gone really wrong.
 		if let Some(word) = self.bits.get_mut(word_off) {
 			// set bit starting from left.
 			*word |= 1 << (63 - bit_off)
+		} else {
+			warn!(target: "afg", "Could not set bit {}. Bitfield was meant to have 2 bits for each of {} validators.",
+				bit_idx, self.shared.n_validators);
 		}
 	}
 
