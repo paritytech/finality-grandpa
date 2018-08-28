@@ -387,8 +387,8 @@ impl<Id, H, Signature> Round<Id, H, Signature> where
 		// precommits because there are at least f + 1 precommits remaining and then
 		// f equivocations.
 		//
-		// once it's at least that level, we only need to consider already
-		// blocks referenced in the graph, because no new leaf nodes
+		// once it's at least that level, we only need to consider blocks
+		// already referenced in the graph, because no new leaf nodes
 		// could ever have enough precommits.
 		//
 		// the round-estimate is the highest block in the chain with head
