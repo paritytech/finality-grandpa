@@ -365,44 +365,52 @@ impl<Id, H, Signature> Round<Id, H, Signature> where
 			Some(x) => x,
 		};
 
-		self.estimate = self.graph.find_ancestor(
-			g_hash.clone(),
-			g_num,
-			|vote| vote.precommit + remaining_commit_votes >= threshold,
-		);
+		// when the remaining votes are at least the threshold, we can always
+		// have commit supermajority on any block and thus the round will not
+		// be completable.
+		//
+		// once it's below that level, we only need to consider already
+		// blocks referenced in the graph, because no new leaf nodes
+		// could ever have enough commits.
+		//
+		// figuring out whether a block can still be committed for is
+		// not straightforward because we have to account for all possible future
+		// equivocations and thus cannot discount weight from validators who
+		// have already voted.
+		let tolerated_equivocations = self.total_weight - threshold;
+		let possible_to_precommit = |weight: &VoteWeight<_>| {
+			// find how many more equivocations we could still get on this
+			// block.
+			let (_, precommit_equivocations) = weight.bitfield.total_weight();
+			let additional_equivocation_weight = tolerated_equivocations
+				.saturating_sub(precommit_equivocations);
+
+			// all the votes already applied on this block,
+			// and assuming all remaining actors commit to this block,
+			// and assuming all possible equivocations end up on this block.
+			weight.precommit + remaining_commit_votes + additional_equivocation_weight >= threshold
+		};
+
+		// the round-estimate is the highest block in the chain with head
+		// `prevote_ghost` that could have supermajority-commits.
+		if remaining_commit_votes < threshold {
+			self.estimate = self.graph.find_ancestor(
+				g_hash.clone(),
+				g_num,
+				possible_to_precommit,
+			);
+		} else {
+			self.estimate = Some((g_hash, g_num));
+			return;
+		}
 
 		self.completable = self.estimate.clone().map_or(false, |(b_hash, b_num)| {
 			b_hash != g_hash || {
 				// round-estimate is the same as the prevote-ghost.
 				// this round is still completable if no further blocks
 				// could have commit-supermajority.
-				let threshold = self.threshold();
-				let tolerated_equivocations = self.total_weight - self.threshold();
-
-				// when the remaining votes are at least the threshold,
-				// we can always have commit-supermajority.
-				//
-				// once it's below that level, we only need to consider already
-				// blocks referenced in the graph, because no new leaf nodes
-				// could ever have enough commits.
-				//
-				// figuring out whether a block can still be committed for is
-				// not straightforward because we have to account for all possible future
-				// equivocations and thus cannot discount weight from validators who
-				// have already voted.
-				remaining_commit_votes < threshold &&
-					self.graph.find_ghost(Some((b_hash, b_num)), |weight| {
-						// find how many more equivocations we could still get on this
-						// block.
-						let (_, precommit_equivocations) = weight.bitfield.total_weight();
-						let additional_equivocation_weight = tolerated_equivocations
-							.saturating_sub(precommit_equivocations);
-
-						// all the votes already applied on this block,
-						// and assuming all remaining actors commit to this block,
-						// and assuming all possible equivocations end up on this block.
-						weight.precommit + remaining_commit_votes + additional_equivocation_weight >= threshold
-					}).map_or(true, |x| x == (g_hash, g_num))
+				self.graph.find_ghost(Some((b_hash, b_num)), possible_to_precommit)
+					.map_or(true, |x| x == (g_hash, g_num))
 			}
 		})
 	}

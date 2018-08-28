@@ -203,6 +203,8 @@ impl<H, V> VoteGraph<H, V> where
 	/// This assumes that the evaluation closure is one which returns true for at most a single
 	/// descendent of a block, in that only one fork of a block can be "heavy"
 	/// enough to trigger the threshold.
+	///
+	/// Returns `None` when the given `current_best` does not fulfill the condition.
 	pub fn find_ghost<'a, F>(&'a self, current_best: Option<(H, usize)>, condition: F) -> Option<(H, usize)>
 		where F: Fn(&V) -> bool
 	{
