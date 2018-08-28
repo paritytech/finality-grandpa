@@ -380,7 +380,11 @@ impl<Id, H, Signature> Round<Id, H, Signature> where
 			// all the votes already applied on this block,
 			// and assuming all remaining actors commit to this block,
 			// and assuming all possible equivocations end up on this block.
-			weight.precommit + remaining_commit_votes + additional_equivocation_weight >= threshold
+			let full_possible_weight = weight.precommit
+				.saturating_add(remaining_commit_votes)
+				.saturating_add(additional_equivocation_weight);
+
+			full_possible_weight >= threshold
 		};
 
 		// until we have threshold precommits, any new block could get supermajority
