@@ -286,7 +286,7 @@ impl<Id, H, Signature> Round<Id, H, Signature> where
 			self.prevote_ghost = self.graph.find_ghost(self.prevote_ghost.take(), |v| v.prevote >= threshold);
 		}
 
-		self.update_estimate();
+		self.update_trackers();
 		Ok(equivocation)
 	}
 
@@ -344,18 +344,12 @@ impl<Id, H, Signature> Round<Id, H, Signature> where
 			})
 		};
 
-		// anything finalized?
-		let threshold = self.threshold();
-		if self.precommit.current_weight >= threshold {
-			self.finalized = self.graph.find_ghost(self.finalized.take(), |v| v.precommit >= threshold);
-		}
-
-		self.update_estimate();
+		self.update_trackers();
 		Ok(equivocation)
 	}
 
 	// update the round-estimate and whether the round is completable.
-	fn update_estimate(&mut self) {
+	fn update_trackers(&mut self) {
 		let threshold = self.threshold();
 		if self.prevote.current_weight < threshold { return }
 
@@ -363,6 +357,17 @@ impl<Id, H, Signature> Round<Id, H, Signature> where
 		let (g_hash, g_num) = match self.prevote_ghost.clone() {
 			None => return,
 			Some(x) => x,
+		};
+
+		// anything new finalized? finalized blocks are those which have both
+		// 2/3+ prevote and prevote weight.
+		let threshold = self.threshold();
+		if self.precommit.current_weight >= threshold {
+			self.finalized = self.graph.find_ancestor(
+				g_hash.clone(),
+				g_num,
+				|v| v.precommit >= threshold
+			);
 		};
 
 		// figuring out whether a block can still be committed for is
@@ -547,7 +552,33 @@ mod tests {
 			Signature("Bob"),
 		).unwrap();
 
-		assert_eq!(round.finalized, Some(("E", 6)));
+		assert_eq!(round.finalized, None);
+
+		// import some prevotes.
+		{
+			round.import_prevote(
+				&chain,
+				Prevote::new("FC", 10),
+				"Alice",
+				Signature("Alice"),
+			).unwrap();
+
+			round.import_prevote(
+				&chain,
+				Prevote::new("ED", 10),
+				"Bob",
+				Signature("Bob"),
+			).unwrap();
+
+			round.import_prevote(
+				&chain,
+				Prevote::new("EA", 7),
+				"Eve",
+				Signature("Eve"),
+			).unwrap();
+
+			assert_eq!(round.finalized, Some(("E", 6)));
+		}
 
 		round.import_precommit(
 			&chain,
