@@ -19,6 +19,9 @@
 //! https://hackmd.io/iA4XazxWRJ21LqMxwPSEZg?view
 
 extern crate parking_lot;
+
+#[macro_use]
+extern crate futures;
 #[macro_use]
 extern crate log;
 
@@ -97,4 +100,20 @@ pub struct Equivocation<Id, V, S> {
 	pub	first: (V, S),
 	/// The second vote in the equivocation.
 	pub second: (V, S),
+}
+
+/// A protocol message or vote.
+pub enum Message<H> {
+	/// A prevote message.
+	Prevote(Prevote<H>),
+	/// A precommit message.
+	Precommit(Precommit<H>),
+	// TODO: liveness-propose and commit messages.
+}
+
+/// A signed message.
+pub struct SignedMessage<H, S, Id> {
+	pub message: Message<H>,
+	pub signature: S,
+	pub id: Id,
 }
