@@ -28,6 +28,7 @@ extern crate log;
 pub mod bitfield;
 pub mod round;
 pub mod vote_graph;
+pub mod voter;
 
 #[cfg(test)]
 mod testing;

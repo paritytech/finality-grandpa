@@ -172,17 +172,8 @@ impl<Id: Hash + Eq + Clone, Vote: Clone + Eq, Signature: Clone> VoteTracker<Id, 
 	}
 }
 
-/// The result of something being imported.
-/// Contains an optional equivocation proof and potential updates to blocks.
-pub struct Imported<Id, V, H, Signature> {
-	/// Equivocation by a validator.
-	pub equivocation: Option<Equivocation<Id, V, Signature>>,
-	/// Block trackers that were updated.
-	pub trackers: Trackers<H>,
-}
-
-/// Updated trackers.
-pub struct Trackers<H> {
+/// State of the round.
+pub struct State<H> {
 	/// The prevote-GHOST block.
 	pub prevote_ghost: Option<(H, usize)>,
 	/// The finalized block.
@@ -257,10 +248,10 @@ impl<Id, H, Signature> Round<Id, H, Signature> where
 		vote: Prevote<H>,
 		signer: Id,
 		signature: Signature,
-	) -> Result<Imported<Id, Prevote<H>, H, Signature>, ::Error> {
+	) -> Result<Option<Equivocation<Id, Prevote<H>, Signature>>, ::Error> {
 		let weight = match self.voters.get(&signer) {
 			Some(weight) => *weight,
-			None => return Ok(Imported { equivocation: None, trackers: self.current_trackers() }),
+			None => return Ok(None),
 		};
 
 		let equivocation = {
@@ -307,8 +298,8 @@ impl<Id, H, Signature> Round<Id, H, Signature> where
 			self.prevote_ghost = self.graph.find_ghost(self.prevote_ghost.take(), |v| v.prevote >= threshold);
 		}
 
-		self.update_trackers();
-		Ok(Imported { equivocation, trackers: self.current_trackers() })
+		self.update();
+		Ok(equivocation)
 	}
 
 	/// Import a precommit. Returns an equivocation proof if the vote is an
@@ -321,10 +312,10 @@ impl<Id, H, Signature> Round<Id, H, Signature> where
 		vote: Precommit<H>,
 		signer: Id,
 		signature: Signature,
-	) -> Result<Imported<Id, Precommit<H>, H, Signature>, ::Error> {
+	) -> Result<Option<Equivocation<Id, Precommit<H>, Signature>>, ::Error> {
 		let weight = match self.voters.get(&signer) {
 			Some(weight) => *weight,
-			None => return Ok(Imported { equivocation: None, trackers: self.current_trackers() }),
+			None => return Ok(None),
 		};
 
 		let equivocation = {
@@ -365,12 +356,13 @@ impl<Id, H, Signature> Round<Id, H, Signature> where
 			})
 		};
 
-		self.update_trackers();
-		Ok(Imported { equivocation, trackers: self.current_trackers() })
+		self.update();
+		Ok(equivocation)
 	}
 
-	fn current_trackers(&self) -> Trackers<H> {
-		Trackers {
+	// Get current
+	pub fn state(&self) -> State<H> {
+		State {
 			prevote_ghost: self.prevote_ghost.clone(),
 			finalized: self.finalized.clone(),
 			estimate: self.finalized.clone(),
@@ -379,7 +371,7 @@ impl<Id, H, Signature> Round<Id, H, Signature> where
 	}
 
 	// update the round-estimate and whether the round is completable.
-	fn update_trackers(&mut self) {
+	fn update(&mut self) {
 		let threshold = self.threshold();
 		if self.prevote.current_weight < threshold { return }
 
