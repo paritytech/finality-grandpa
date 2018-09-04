@@ -126,7 +126,7 @@ pub struct VotingRound<H, E: Environment<H>> where H: Hash + Clone + Eq + Ord + 
 impl<H, E: Environment<H>> VotingRound<H, E> where H: Hash + Clone + Eq + Ord + ::std::fmt::Debug {
 	fn poll(&mut self, env: &E) -> Poll<(), E::Error> {
 		let mut state = self.votes.state();
-		while let Some(incoming) = try_ready!(self.incoming.poll()) {
+		while let Async::Ready(Some(incoming)) = self.incoming.poll()? {
 			let SignedMessage { message, signature, id } = incoming;
 
 			match message {
