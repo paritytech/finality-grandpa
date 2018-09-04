@@ -172,6 +172,27 @@ impl<Id: Hash + Eq + Clone, Vote: Clone + Eq, Signature: Clone> VoteTracker<Id, 
 	}
 }
 
+/// The result of something being imported.
+/// Contains an optional equivocation proof and potential updates to blocks.
+pub struct Imported<Id, V, H, Signature> {
+	/// Equivocation by a validator.
+	pub equivocation: Option<Equivocation<Id, V, Signature>>,
+	/// Block trackers that were updated.
+	pub trackers: Trackers<H>,
+}
+
+/// Updated trackers.
+pub struct Trackers<H> {
+	/// The prevote-GHOST block.
+	pub prevote_ghost: Option<(H, usize)>,
+	/// The finalized block.
+	pub finalized: Option<(H, usize)>,
+	/// The new round-estimate.
+	pub estimate: Option<(H, usize)>,
+	/// Whether the round is completable.
+	pub completable: bool,
+}
+
 /// Parameters for starting a round.
 pub struct RoundParams<Id: Hash + Eq, H> {
 	/// The round number for votes.
@@ -236,10 +257,10 @@ impl<Id, H, Signature> Round<Id, H, Signature> where
 		vote: Prevote<H>,
 		signer: Id,
 		signature: Signature,
-	) -> Result<Option<Equivocation<Id, Prevote<H>, Signature>>, ::Error> {
+	) -> Result<Imported<Id, Prevote<H>, H, Signature>, ::Error> {
 		let weight = match self.voters.get(&signer) {
 			Some(weight) => *weight,
-			None => return Ok(None),
+			None => return Ok(Imported { equivocation: None, trackers: self.current_trackers() }),
 		};
 
 		let equivocation = {
@@ -287,7 +308,7 @@ impl<Id, H, Signature> Round<Id, H, Signature> where
 		}
 
 		self.update_trackers();
-		Ok(equivocation)
+		Ok(Imported { equivocation, trackers: self.current_trackers() })
 	}
 
 	/// Import a precommit. Returns an equivocation proof if the vote is an
@@ -300,10 +321,10 @@ impl<Id, H, Signature> Round<Id, H, Signature> where
 		vote: Precommit<H>,
 		signer: Id,
 		signature: Signature,
-	) -> Result<Option<Equivocation<Id, Precommit<H>, Signature>>, ::Error> {
+	) -> Result<Imported<Id, Precommit<H>, H, Signature>, ::Error> {
 		let weight = match self.voters.get(&signer) {
 			Some(weight) => *weight,
-			None => return Ok(None),
+			None => return Ok(Imported { equivocation: None, trackers: self.current_trackers() }),
 		};
 
 		let equivocation = {
@@ -345,7 +366,16 @@ impl<Id, H, Signature> Round<Id, H, Signature> where
 		};
 
 		self.update_trackers();
-		Ok(equivocation)
+		Ok(Imported { equivocation, trackers: self.current_trackers() })
+	}
+
+	fn current_trackers(&self) -> Trackers<H> {
+		Trackers {
+			prevote_ghost: self.prevote_ghost.clone(),
+			finalized: self.finalized.clone(),
+			estimate: self.finalized.clone(),
+			completable: self.completable,
+		}
 	}
 
 	// update the round-estimate and whether the round is completable.
@@ -608,7 +638,7 @@ mod tests {
 			Prevote::new("FC", 10),
 			"Eve",
 			Signature("Eve-1"),
-		).unwrap().is_none());
+		).unwrap().equivocation.is_none());
 
 
 		assert!(round.prevote_ghost.is_none());
@@ -618,14 +648,14 @@ mod tests {
 			Prevote::new("ED", 10),
 			"Eve",
 			Signature("Eve-2"),
-		).unwrap().is_some());
+		).unwrap().equivocation.is_some());
 
 		assert!(round.import_prevote(
 			&chain,
 			Prevote::new("F", 7),
 			"Eve",
 			Signature("Eve-2"),
-		).unwrap().is_some());
+		).unwrap().equivocation.is_some());
 
 		// three eves together would be enough.
 
@@ -636,7 +666,7 @@ mod tests {
 			Prevote::new("FA", 8),
 			"Bob",
 			Signature("Bob-1"),
-		).unwrap().is_none());
+		).unwrap().equivocation.is_none());
 
 		assert_eq!(round.prevote_ghost, Some(("FA", 8)));
 	}
