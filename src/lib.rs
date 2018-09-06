@@ -62,13 +62,13 @@ impl<H> Precommit<H> {
 
 #[derive(Clone, PartialEq, Debug)]
 pub enum Error {
-	BlockNotInSubtree,
+	NotDescendent,
 }
 
 impl fmt::Display for Error {
 	fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
 		match *self {
-			Error::BlockNotInSubtree => write!(f, "Block not in subtree of base"),
+			Error::NotDescendent => write!(f, "Block not descendent of base"),
 		}
 	}
 }
@@ -76,7 +76,7 @@ impl fmt::Display for Error {
 impl ::std::error::Error for Error {
 	fn description(&self) -> &str {
 		match *self {
-			Error::BlockNotInSubtree => "Block not in subtree of base",
+			Error::NotDescendent => "Block not descendent of base",
 		}
 	}
 }
@@ -88,6 +88,10 @@ pub trait Chain<H> {
 	///
 	/// If the block is not a descendent of `base`, returns an error.
 	fn ancestry(&self, base: H, block: H) -> Result<Vec<H>, Error>;
+
+	/// Return the hash of the best block whose chain contains the given block hash.
+	/// If `base` is unknown, return `None`.
+	fn best_chain_containing(&self, base: H) -> Option<(H, usize)>;
 }
 
 /// An equivocation (double-vote) in a given round.
