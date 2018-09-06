@@ -171,8 +171,9 @@ impl<H, E: Environment<H>> VotingRound<H, E> where H: Hash + Clone + Eq + Ord + 
 				};
 
 				if should_prevote {
-					let prevote = self.construct_prevote(env)?;
-					self.outgoing.push(Message::Prevote(prevote));
+					if let Some(prevote) = self.construct_prevote(env)? {
+						self.outgoing.push(Message::Prevote(prevote));
+					}
 					self.state = Some(State::Prevoted(precommit_timer));
 				} else {
 					self.state = Some(State::Start(prevote_timer, precommit_timer));
@@ -208,7 +209,7 @@ impl<H, E: Environment<H>> VotingRound<H, E> where H: Hash + Clone + Eq + Ord + 
 	}
 
 	// construct a prevote message based on local state.
-	fn construct_prevote(&self, env: &E) -> Result<Prevote<H>, E::Error> {
+	fn construct_prevote(&self, env: &E) -> Result<Option<Prevote<H>>, E::Error> {
 		let last_round_estimate = self.last_round_state.estimate.clone()
 			.expect("Rounds only started when prior round completable; qed");
 
@@ -252,19 +253,23 @@ impl<H, E: Environment<H>> VotingRound<H, E> where H: Hash + Clone + Eq + Ord + 
 			}
 		};
 
-		let t = match env.best_chain_containing(find_descendent_of) {
+		let best_chain = env.best_chain_containing(find_descendent_of);
+		debug_assert!(best_chain.is_some(), "Previously known block has disappeared from chain");
+
+		let t = match best_chain {
 			Some(target) => target,
 			None => {
-				// TODO: throw error here. `find_descendent` should deal with only
-				// known blocks.
-				unimplemented!()
+				// If this block is considered unknown, something has gone wrong.
+				// log and handle, but skip casting a vote.
+				warn!(target: "afg", "Could not cast prevote: previously known block has disappeared");
+				return Ok(None)
 			}
 		};
 
-		Ok(Prevote {
+		Ok(Some(Prevote {
 			target_hash: t.0,
 			target_number: t.1 as u32,
-		})
+		}))
 	}
 
 	// construct a precommit message based on local state.
