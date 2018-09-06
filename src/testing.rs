@@ -29,6 +29,7 @@ struct BlockRecord {
 
 pub struct DummyChain {
 	inner: HashMap<&'static str, BlockRecord>,
+	leaves: Vec<&'static str>,
 }
 
 impl DummyChain {
@@ -36,11 +37,20 @@ impl DummyChain {
 		let mut inner = HashMap::new();
 		inner.insert(GENESIS_HASH, BlockRecord { number: 1, parent: NULL_HASH });
 
-		DummyChain { inner }
+		DummyChain { inner, leaves: vec![GENESIS_HASH] }
 	}
 
 	pub fn push_blocks(&mut self, mut parent: &'static str, blocks: &[&'static str]) {
+		use std::cmp::Ord;
+
+		if blocks.is_empty() { return }
+
 		let base_number = self.inner.get(parent).unwrap().number + 1;
+
+		if let Some(pos) = self.leaves.iter().position(|x| x == &parent) {
+			self.leaves.remove(pos);
+		}
+
 		for (i, descendent) in blocks.iter().enumerate() {
 			self.inner.insert(descendent, BlockRecord {
 				number: base_number + i,
@@ -49,6 +59,15 @@ impl DummyChain {
 
 			parent = descendent;
 		}
+
+		let new_leaf = blocks.last().unwrap();
+		let new_leaf_number = self.inner.get(new_leaf).unwrap().number;
+
+		let insertion_index = self.leaves.binary_search_by(
+			|x| self.inner.get(x).unwrap().number.cmp(&new_leaf_number).reverse(),
+		).unwrap_or_else(|i| i);
+
+		self.leaves.insert(insertion_index, new_leaf);
 	}
 
 	pub fn number(&self, hash: &'static str) -> usize {
@@ -62,16 +81,32 @@ impl Chain<&'static str> for DummyChain {
 
 		loop {
 			match self.inner.get(block) {
-				None => return Err(Error::BlockNotInSubtree),
+				None => return Err(Error::NotDescendent),
 				Some(record) => { block = record.parent; }
 			}
 
 			ancestry.push(block);
 
-			if block == NULL_HASH { return Err(Error::BlockNotInSubtree) }
+			if block == NULL_HASH { return Err(Error::NotDescendent) }
 			if block == base { break }
 		}
 
 		Ok(ancestry)
+	}
+
+	fn best_chain_containing(&self, base: &'static str) -> Option<(&'static str, usize)> {
+		let base_number = self.inner.get(base)?.number;
+
+		for leaf in &self.leaves {
+			// leaves are in descending order.
+			let leaf_number = self.inner.get(leaf).unwrap().number;
+			if leaf_number < base_number { break }
+
+			if let Ok(_) = self.ancestry(base, leaf) {
+				return Some((leaf, leaf_number));
+			}
+		}
+
+		None
 	}
 }

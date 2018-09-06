@@ -635,7 +635,7 @@ mod tests {
 			Prevote::new("FC", 10),
 			"Eve",
 			Signature("Eve-1"),
-		).unwrap().equivocation.is_none());
+		).unwrap().is_none());
 
 
 		assert!(round.prevote_ghost.is_none());
@@ -645,14 +645,14 @@ mod tests {
 			Prevote::new("ED", 10),
 			"Eve",
 			Signature("Eve-2"),
-		).unwrap().equivocation.is_some());
+		).unwrap().is_some());
 
 		assert!(round.import_prevote(
 			&chain,
 			Prevote::new("F", 7),
 			"Eve",
 			Signature("Eve-2"),
-		).unwrap().equivocation.is_some());
+		).unwrap().is_some());
 
 		// three eves together would be enough.
 
@@ -663,7 +663,7 @@ mod tests {
 			Prevote::new("FA", 8),
 			"Bob",
 			Signature("Bob-1"),
-		).unwrap().equivocation.is_none());
+		).unwrap().is_none());
 
 		assert_eq!(round.prevote_ghost, Some(("FA", 8)));
 	}
