@@ -194,7 +194,7 @@ impl<H, E: Environment<H>> VotingRound<H, E> where H: Hash + Clone + Eq + Ord + 
 				};
 
 				if should_precommit {
-					let precommit = self.construct_precommit(env)?;
+					let precommit = self.construct_precommit(env);
 					self.outgoing.push(Message::Precommit(precommit));
 					self.state = Some(State::Precommitted);
 				} else {
@@ -268,8 +268,15 @@ impl<H, E: Environment<H>> VotingRound<H, E> where H: Hash + Clone + Eq + Ord + 
 	}
 
 	// construct a precommit message based on local state.
-	fn construct_precommit(&self, env: &E) -> Result<Precommit<H>, E::Error> {
+	fn construct_precommit(&self, env: &E) -> Precommit<H> {
+		let t = match self.votes.state().prevote_ghost {
+			Some(target) => target,
+			None => self.votes.base(),
+		};
 
-		unimplemented!()
+		Precommit {
+			target_hash: t.0,
+			target_number: t.1 as u32,
+		}
 	}
 }

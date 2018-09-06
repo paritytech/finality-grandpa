@@ -473,6 +473,11 @@ impl<Id, H, Signature> Round<Id, H, Signature> where
 	pub fn threshold(&self) -> usize {
 		threshold(self.total_weight, self.faulty_weight)
 	}
+
+	/// Return the round base.
+	pub fn base(&self) -> (H, usize) {
+		self.graph.base()
+	}
 }
 
 fn threshold(total_weight: usize, faulty_weight: usize) -> usize {
