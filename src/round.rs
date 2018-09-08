@@ -239,6 +239,11 @@ impl<Id, H, Signature> Round<Id, H, Signature> where
 		}
 	}
 
+	/// Return the round number.
+	pub fn number(&self) -> usize {
+		self.round_number
+	}
+
 	/// Import a prevote. Returns an equivocation proof if the vote is an equivocation.
 	///
 	/// Should not import the same prevote more than once.
