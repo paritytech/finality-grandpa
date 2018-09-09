@@ -23,6 +23,7 @@
 
 use futures::prelude::*;
 use futures::stream::futures_unordered::FuturesUnordered;
+use futures::sync::mpsc::{self, Sender, Receiver};
 use std::collections::{HashMap, VecDeque};
 use std::hash::Hash;
 use std::sync::Arc;
@@ -53,7 +54,7 @@ pub trait Environment<H>: Chain<H> {
 	///
 	/// Furthermore, this means that actual logic of creating and verifying
 	/// signatures is separated from the vote-casting logic.
-	fn round_data(&self, round: usize) -> RoundData<
+	fn round_data(&self, round: u64) -> RoundData<
 		Self::Timer,
 		Self::Id,
 		Self::In,
@@ -61,9 +62,9 @@ pub trait Environment<H>: Chain<H> {
 	>;
 
 	// Note that an equivocation in prevotes has occurred.
-	fn prevote_equivocation(&self, round: usize, equivocation: Equivocation<Self::Id, Prevote<H>, Self::Signature>);
+	fn prevote_equivocation(&self, round: u64, equivocation: Equivocation<Self::Id, Prevote<H>, Self::Signature>);
 	// Note that an equivocation in precommits has occurred.
-	fn precommit_equivocation(&self, round: usize, equivocation: Equivocation<Self::Id, Precommit<H>, Self::Signature>);
+	fn precommit_equivocation(&self, round: u64, equivocation: Equivocation<Self::Id, Precommit<H>, Self::Signature>);
 }
 
 /// Data necessary to participate in a round.
@@ -153,13 +154,13 @@ impl<H, E: Environment<H>> VotingRound<H, E> where H: Hash + Clone + Eq + Ord + 
 
 			match message {
 				Message::Prevote(prevote) => {
-					if let Some(e) = self.votes.import_prevote(env, prevote, id, signature)? {
-						self.env.prevote_equivocation(self.votes.round_number(), e);
+					if let Some(e) = self.votes.import_prevote(&*self.env, prevote, id, signature)? {
+						self.env.prevote_equivocation(self.votes.number(), e);
 					}
 				}
 				Message::Precommit(precommit) => {
-					if let Some(e) = self.votes.import_precommit(env, precommit, id, signature)? {
-						self.env.precommit_equivocation(self.votes.round_number(), e);
+					if let Some(e) = self.votes.import_precommit(&*self.env, precommit, id, signature)? {
+						self.env.precommit_equivocation(self.votes.number(), e);
 					}
 				}
 			};
@@ -267,7 +268,6 @@ impl<H, E: Environment<H>> VotingRound<H, E> where H: Hash + Clone + Eq + Ord + 
 							}
 						}
 						Err(::Error::NotDescendent) => last_round_estimate.0,
-						Err(e) => return Err(e.into()),
 					}
 				}
 			}
@@ -310,19 +310,24 @@ impl<H, E: Environment<H>> VotingRound<H, E> where H: Hash + Clone + Eq + Ord + 
 // be discarded from the working set.
 //
 // that point is when the round-estimate is finalized.
-struct BackgroundRound<H, E: Environment<H>> {
+struct BackgroundRound<H, E: Environment<H>>
+	where H: Hash + Clone + Eq + Ord + ::std::fmt::Debug
+{
 	inner: VotingRound<H, E>,
 	task: Option<::futures::task::Task>,
 	finalized_number: u32,
 }
 
-impl<H, E: Environment<H>> BackgroundRound<H, E> {
+impl<H, E: Environment<H>> BackgroundRound<H, E>
+	where H: Hash + Clone + Eq + Ord + ::std::fmt::Debug
+{
 	fn is_done(&self) -> bool {
-		self.inner.votes.state().estimate.map_or(false, |x| x.1 <= self.finalized_number)
+		self.inner.votes.state().estimate
+			.map_or(false, |x| (x.1 as u32) <= self.finalized_number)
 	}
 
 	fn update_finalized(&mut self, new_finalized: u32) {
-		self.finalized_number = ::std::cmp::max(self.finalized_nubmer, new_finalized);
+		self.finalized_number = ::std::cmp::max(self.finalized_number, new_finalized);
 
 		// wake up the future to be polled if done.
 		if self.is_done() {
@@ -333,16 +338,18 @@ impl<H, E: Environment<H>> BackgroundRound<H, E> {
 	}
 }
 
-impl<H, E: Environment<H>> Future for BackgroundRound<H, E> {
-	type Item = usize; // round number
+impl<H, E: Environment<H>> Future for BackgroundRound<H, E>
+	where H: Hash + Clone + Eq + Ord + ::std::fmt::Debug
+{
+	type Item = u64; // round number
 	type Error = E::Error;
 
-	fn poll(&mut self) -> Poll<usize, E::Error> {
+	fn poll(&mut self) -> Poll<u64, E::Error> {
 		self.task = Some(::futures::task::current());
 		self.inner.poll()?;
 
 		if self.is_done() {
-			Ok(Async::Ready(self.inner.votes.round_number()))
+			Ok(Async::Ready(self.inner.votes.number()))
 		} else {
 			Ok(Async::NotReady)
 		}
@@ -350,23 +357,47 @@ impl<H, E: Environment<H>> Future for BackgroundRound<H, E> {
 }
 
 /// A future that maintains and multiplexes between different rounds.
-pub struct ActiveRounds<H, E: Environment<H>> {
+pub struct ActiveRounds<H, E: Environment<H>>
+	where H: Hash + Clone + Eq + Ord + ::std::fmt::Debug
+{
 	env: Arc<E>,
 	best_round: VotingRound<H, E>,
 	past_rounds: FuturesUnordered<BackgroundRound<H, E>>,
+	finalized_notifications: Receiver<u32>,
 }
 
-impl<H, E: Environment<H>> Future for ActiveRounds<H, E: Environment<H>> {
+impl<H, E: Environment<H>> ActiveRounds<H, E>
+	where H: Hash + Clone + Eq + Ord + ::std::fmt::Debug
+{
+	fn prune_background(&mut self) -> Result<(), E::Error> {
+		while let Async::Ready(res) = self.finalized_notifications.poll()
+			.expect("unbounded receivers do not have spurious errors; qed")
+		{
+			let notification = res.expect("one sender always kept alive in self.best_round; qed");
+
+			for bg in self.past_rounds.iter_mut() {
+				bg.update_finalized(notification);
+			}
+		}
+
+		// pump all completed rounds out.
+		while let Async::Ready(Some(_)) = self.past_rounds.poll()? { }
+		Ok(())
+	}
+}
+
+impl<H, E: Environment<H>> Future for ActiveRounds<H, E>
+	where H: Hash + Clone + Eq + Ord + ::std::fmt::Debug
+{
 	type Item = ();
 	type Error = E::Error;
 
 	fn poll(&mut self) -> Poll<(), E::Error> {
-		use ::round::RoundParams;
-
+		self.prune_background()?;
 		let should_start_next = match self.best_round.poll()? {
 			Async::Ready(()) => match self.best_round.state {
-				State::Precommitted => true, // start when we've cast all votes.
-				other => panic!("Returns ready only when round completable and messages flushed; \
+				Some(State::Precommitted) => true, // start when we've cast all votes.
+				_ => panic!("Returns ready only when round completable and messages flushed; \
 					completable implies precommit sent; qed"),
 			},
 			Async::NotReady => false,
@@ -374,14 +405,14 @@ impl<H, E: Environment<H>> Future for ActiveRounds<H, E: Environment<H>> {
 
 		if !should_start_next { return Ok(Async::NotReady) }
 
-		let next_number = self.best_round.votes.round_number() + 1;
+		let next_number = self.best_round.votes.number() + 1;
 		let next_round_data = self.env.round_data(next_number);
 
 		// TODO: choose start block based on what's finalized.
-		let base = self.best_round.base();
+		let base = self.best_round.votes.base();
 
 		let round_params = ::round::RoundParams {
-			round_number: next_number,
+			round_number: next_number as _,
 			voters: next_round_data.voters,
 			base,
 		};

@@ -240,7 +240,7 @@ impl<Id, H, Signature> Round<Id, H, Signature> where
 	}
 
 	/// Return the round number.
-	pub fn number(&self) -> usize {
+	pub fn number(&self) -> u64 {
 		self.round_number
 	}
 
