@@ -366,8 +366,9 @@ impl<H, E: Environment<H>> Future for BackgroundRound<H, E>
 	}
 }
 
-/// A future that maintains and multiplexes between different rounds.
-pub struct ActiveRounds<H, E: Environment<H>>
+/// A future that maintains and multiplexes between different rounds,
+/// and caches votes.
+pub struct Voter<H, E: Environment<H>>
 	where H: Hash + Clone + Eq + Ord + ::std::fmt::Debug
 {
 	env: Arc<E>,
@@ -376,10 +377,10 @@ pub struct ActiveRounds<H, E: Environment<H>>
 	finalized_notifications: UnboundedReceiver<u32>,
 }
 
-impl<H, E: Environment<H>> ActiveRounds<H, E>
+impl<H, E: Environment<H>> Voter<H, E>
 	where H: Hash + Clone + Eq + Ord + ::std::fmt::Debug
 {
-	/// Create new `ActiveRounds` tracker with given round number and base block.
+	/// Create new `Voter` tracker with given round number and base block.
 	///
 	/// Provide data about the last completed round. If there is no
 	/// known last completed round, the genesis state (round number 0),
@@ -416,7 +417,7 @@ impl<H, E: Environment<H>> ActiveRounds<H, E>
 			primary_block: None,
 		};
 
-		ActiveRounds {
+		Voter {
 			env,
 			best_round,
 			past_rounds: FuturesUnordered::new(),
@@ -441,7 +442,7 @@ impl<H, E: Environment<H>> ActiveRounds<H, E>
 	}
 }
 
-impl<H, E: Environment<H>> Future for ActiveRounds<H, E>
+impl<H, E: Environment<H>> Future for Voter<H, E>
 	where H: Hash + Clone + Eq + Ord + ::std::fmt::Debug
 {
 	type Item = ();
