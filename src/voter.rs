@@ -23,7 +23,7 @@
 
 use futures::prelude::*;
 use futures::stream::futures_unordered::FuturesUnordered;
-use futures::sync::mpsc::{self, Sender, Receiver};
+use futures::sync::mpsc::{self, Sender, UnboundedReceiver};
 use std::collections::{HashMap, VecDeque};
 use std::hash::Hash;
 use std::sync::Arc;
@@ -32,6 +32,8 @@ use round::{Round, State as RoundState};
 use ::{Chain, Equivocation, Message, Prevote, Precommit, SignedMessage};
 
 /// Necessary environment for a voter.
+///
+/// This encapsulates the database and networking layers of the chain.
 pub trait Environment<H>: Chain<H> {
 	type Timer: Future<Item=(),Error=Self::Error>;
 	type Id: Hash + Clone + Eq + ::std::fmt::Debug;
@@ -53,13 +55,21 @@ pub trait Environment<H>: Chain<H> {
 	/// is a regular voter, the proposer, or simply an observer.
 	///
 	/// Furthermore, this means that actual logic of creating and verifying
-	/// signatures is separated from the vote-casting logic.
+	/// signatures is flexible and can be maintained outside this crate.
 	fn round_data(&self, round: u64) -> RoundData<
 		Self::Timer,
 		Self::Id,
 		Self::In,
 		Self::Out
 	>;
+
+	/// Note that a round was completed. This is called when a round has been
+	/// voted in.
+	fn completed(&self, round: u64, state: RoundState<H>);
+
+	/// Called when a block should be finalized.
+	// TODO: make this a future that resolves when it's e.g. written to disk?
+	fn finalize_block(&self, hash: H, number: u32);
 
 	// Note that an equivocation in prevotes has occurred.
 	fn prevote_equivocation(&self, round: u64, equivocation: Equivocation<Self::Id, Prevote<H>, Self::Signature>);
@@ -363,12 +373,57 @@ pub struct ActiveRounds<H, E: Environment<H>>
 	env: Arc<E>,
 	best_round: VotingRound<H, E>,
 	past_rounds: FuturesUnordered<BackgroundRound<H, E>>,
-	finalized_notifications: Receiver<u32>,
+	finalized_notifications: UnboundedReceiver<u32>,
 }
 
 impl<H, E: Environment<H>> ActiveRounds<H, E>
 	where H: Hash + Clone + Eq + Ord + ::std::fmt::Debug
 {
+	/// Create new `ActiveRounds` tracker with given round number and base block.
+	///
+	/// Provide data about the last completed round. If there is no
+	/// known last completed round, the genesis state (round number 0),
+	/// should be provided.
+	pub fn new(
+		env: Arc<E>,
+		last_round: u64,
+		last_round_state: RoundState<H>,
+		last_finalized: (H, usize),
+	) -> Self {
+		let (finalized_sender, finalized_notifications) = mpsc::unbounded();
+
+		let next_number = last_round + 1;
+		let round_data = env.round_data(next_number);
+
+		let round_params = ::round::RoundParams {
+			round_number: next_number as _,
+			voters: round_data.voters,
+			base: last_finalized,
+		};
+
+		let best_round = VotingRound {
+			env: env.clone(),
+			votes: Round::new(round_params),
+			incoming: round_data.incoming,
+			outgoing: Buffered {
+				inner: round_data.outgoing,
+				buffer: VecDeque::new(),
+			},
+			state: Some(
+				State::Start(round_data.prevote_timer, round_data.precommit_timer)
+			),
+			last_round_state,
+			primary_block: None,
+		};
+
+		ActiveRounds {
+			env,
+			best_round,
+			past_rounds: FuturesUnordered::new(),
+			finalized_notifications,
+		}
+	}
+
 	fn prune_background(&mut self) -> Result<(), E::Error> {
 		while let Async::Ready(res) = self.finalized_notifications.poll()
 			.expect("unbounded receivers do not have spurious errors; qed")

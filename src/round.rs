@@ -184,6 +184,18 @@ pub struct State<H> {
 	pub completable: bool,
 }
 
+impl<H: Clone> State<H> {
+	// Genesis state.
+	pub fn genesis(genesis: (H, usize)) -> Self {
+		State {
+			prevote_ghost: Some(genesis.clone()),
+			finalized: Some(genesis.clone()),
+			estimate: Some(genesis),
+			completable: true,
+		}
+	}
+}
+
 /// Parameters for starting a round.
 pub struct RoundParams<Id: Hash + Eq, H> {
 	/// The round number for votes.
