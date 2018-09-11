@@ -23,7 +23,7 @@
 
 use futures::prelude::*;
 use futures::stream::futures_unordered::FuturesUnordered;
-use futures::sync::mpsc::{self, Sender, UnboundedReceiver};
+use futures::sync::mpsc::{self, UnboundedSender, UnboundedReceiver};
 use std::collections::{HashMap, VecDeque};
 use std::hash::Hash;
 use std::sync::Arc;
@@ -43,6 +43,9 @@ pub trait Environment<H>: Chain<H> {
 	type Error: From<::Error>;
 
 	/// Produce data necessary to start a round of voting.
+	///
+	/// The input stream should provide messages which correspond to known blocks
+	/// only.
 	///
 	/// The voting logic will push unsigned messages over-eagerly into the
 	/// output stream. It is the job of this stream to determine if those messages
@@ -152,13 +155,14 @@ pub struct VotingRound<H, E: Environment<H>> where H: Hash + Clone + Eq + Ord + 
 	state: Option<State<E::Timer>>,
 	last_round_state: RoundState<H>,
 	primary_block: Option<(H, usize)>,
+	finalized_sender: UnboundedSender<u32>,
 }
 
 impl<H, E: Environment<H>> VotingRound<H, E> where H: Hash + Clone + Eq + Ord + ::std::fmt::Debug {
 	// Poll the round. When the round is completable and messages have been flushed, it will return `Async::Ready` but
 	// can continue to be polled.
 	fn poll(&mut self) -> Poll<(), E::Error> {
-		let mut state = self.votes.state();
+		let pre_state = self.votes.state();
 		while let Async::Ready(Some(incoming)) = self.incoming.poll()? {
 			let SignedMessage { message, signature, id } = incoming;
 
@@ -174,18 +178,17 @@ impl<H, E: Environment<H>> VotingRound<H, E> where H: Hash + Clone + Eq + Ord + 
 					}
 				}
 			};
-
-			let next_state = self.votes.state();
-			// TODO: finality and estimate-update notification based on state comparison
-			state = next_state;
 		}
+
+		let post_state = self.votes.state();
+		self.notify(pre_state, post_state);
 
 		self.prevote()?;
 		self.precommit()?;
 
 		try_ready!(self.outgoing.poll());
 
-		if state.completable {
+		if self.votes.completable() {
 			Ok(Async::Ready(()))
 		} else {
 			Ok(Async::NotReady)
@@ -314,6 +317,24 @@ impl<H, E: Environment<H>> VotingRound<H, E> where H: Hash + Clone + Eq + Ord + 
 			target_number: t.1 as u32,
 		}
 	}
+
+	// notify when new blocks are finalized or when the round-estimate is updated
+	fn notify(&self, last_state: RoundState<H>, new_state: RoundState<H>) {
+		if last_state.finalized != new_state.finalized && new_state.completable {
+			// send notification only when the round is completable and we've cast votes.
+			// this is a workaround for avoiding restarting the round based on
+			match (&self.state, new_state.finalized) {
+				(&Some(State::Precommitted), Some((_, f_num))) => {
+					let _ = self.finalized_sender.unbounded_send(f_num as _);
+				}
+				_ => {}
+			}
+		}
+
+		if last_state.estimate != new_state.estimate {
+			// TODO: notify the next round about it.
+		}
+	}
 }
 
 // wraps a voting round with a new future that resolves when the round can
@@ -415,6 +436,7 @@ impl<H, E: Environment<H>> Voter<H, E>
 			),
 			last_round_state,
 			primary_block: None,
+			finalized_sender,
 		};
 
 		Voter {
@@ -486,6 +508,7 @@ impl<H, E: Environment<H>> Future for Voter<H, E>
 			),
 			last_round_state: self.best_round.votes.state(),
 			primary_block: None,
+			finalized_sender: self.best_round.finalized_sender.clone(),
 		};
 
 		let old_round = ::std::mem::replace(&mut self.best_round, next_round);
