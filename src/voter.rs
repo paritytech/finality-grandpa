@@ -155,7 +155,7 @@ pub struct VotingRound<H, E: Environment<H>> where H: Hash + Clone + Eq + Ord + 
 	state: Option<State<E::Timer>>,
 	last_round_state: RoundState<H>,
 	primary_block: Option<(H, usize)>,
-	finalized_sender: UnboundedSender<u32>,
+	finalized_sender: UnboundedSender<(H, usize)>,
 }
 
 impl<H, E: Environment<H>> VotingRound<H, E> where H: Hash + Clone + Eq + Ord + ::std::fmt::Debug {
@@ -324,8 +324,8 @@ impl<H, E: Environment<H>> VotingRound<H, E> where H: Hash + Clone + Eq + Ord + 
 			// send notification only when the round is completable and we've cast votes.
 			// this is a workaround for avoiding restarting the round based on
 			match (&self.state, new_state.finalized) {
-				(&Some(State::Precommitted), Some((_, f_num))) => {
-					let _ = self.finalized_sender.unbounded_send(f_num as _);
+				(&Some(State::Precommitted), Some(ref f)) => {
+					let _ = self.finalized_sender.unbounded_send(f.clone());
 				}
 				_ => {}
 			}
@@ -395,7 +395,7 @@ pub struct Voter<H, E: Environment<H>>
 	env: Arc<E>,
 	best_round: VotingRound<H, E>,
 	past_rounds: FuturesUnordered<BackgroundRound<H, E>>,
-	finalized_notifications: UnboundedReceiver<u32>,
+	finalized_notifications: UnboundedReceiver<(H, usize)>,
 }
 
 impl<H, E: Environment<H>> Voter<H, E>
@@ -451,11 +451,13 @@ impl<H, E: Environment<H>> Voter<H, E>
 		while let Async::Ready(res) = self.finalized_notifications.poll()
 			.expect("unbounded receivers do not have spurious errors; qed")
 		{
-			let notification = res.expect("one sender always kept alive in self.best_round; qed");
+			let (f_hash, f_num) = res.expect("one sender always kept alive in self.best_round; qed");
 
 			for bg in self.past_rounds.iter_mut() {
-				bg.update_finalized(notification);
+				bg.update_finalized(f_num as u32);
 			}
+
+			self.env.finalize_block(f_hash, f_num as u32);
 		}
 
 		// pump all completed rounds out.
@@ -482,6 +484,8 @@ impl<H, E: Environment<H>> Future for Voter<H, E>
 		};
 
 		if !should_start_next { return Ok(Async::NotReady) }
+
+		self.env.completed(self.best_round.votes.number(), self.best_round.votes.state());
 
 		let next_number = self.best_round.votes.number() + 1;
 		let next_round_data = self.env.round_data(next_number);
@@ -522,5 +526,15 @@ impl<H, E: Environment<H>> Future for Voter<H, E>
 
 		// round has been updated. so we need to re-poll.
 		self.poll()
+	}
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+
+	#[test]
+	fn talking_to_myself() {
+
 	}
 }
