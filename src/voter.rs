@@ -396,6 +396,7 @@ pub struct Voter<H, E: Environment<H>>
 	best_round: VotingRound<H, E>,
 	past_rounds: FuturesUnordered<BackgroundRound<H, E>>,
 	finalized_notifications: UnboundedReceiver<(H, usize)>,
+	last_finalized: (H, usize),
 }
 
 impl<H, E: Environment<H>> Voter<H, E>
@@ -420,7 +421,7 @@ impl<H, E: Environment<H>> Voter<H, E>
 		let round_params = ::round::RoundParams {
 			round_number: next_number as _,
 			voters: round_data.voters,
-			base: last_finalized,
+			base: last_finalized.clone(),
 		};
 
 		let best_round = VotingRound {
@@ -444,6 +445,7 @@ impl<H, E: Environment<H>> Voter<H, E>
 			best_round,
 			past_rounds: FuturesUnordered::new(),
 			finalized_notifications,
+			last_finalized,
 		}
 	}
 
@@ -457,7 +459,11 @@ impl<H, E: Environment<H>> Voter<H, E>
 				bg.update_finalized(f_num as u32);
 			}
 
-			self.env.finalize_block(f_hash, f_num as u32);
+			if f_num > self.last_finalized.1 {
+				// TODO: handle safety violations and check ancestry.
+				self.last_finalized = (f_hash.clone(), f_num);
+				self.env.finalize_block(f_hash, f_num as u32);
+			}
 		}
 
 		// pump all completed rounds out.
@@ -490,13 +496,10 @@ impl<H, E: Environment<H>> Future for Voter<H, E>
 		let next_number = self.best_round.votes.number() + 1;
 		let next_round_data = self.env.round_data(next_number);
 
-		// TODO: choose start block based on what's finalized.
-		let base = self.best_round.votes.base();
-
 		let round_params = ::round::RoundParams {
 			round_number: next_number as _,
 			voters: next_round_data.voters,
-			base,
+			base: self.last_finalized.clone(),
 		};
 
 		let next_round = VotingRound {
