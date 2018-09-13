@@ -577,7 +577,7 @@ impl<H, E: Environment<H>> Future for Voter<H, E>
 mod tests {
 	use super::*;
 	use tokio::runtime::current_thread;
-	use testing::{GENESIS_HASH, DummyChain, Environment, Id};
+	use testing::{GENESIS_HASH, Environment, Id};
 	use std::collections::HashMap;
 
 	#[test]
@@ -608,7 +608,7 @@ mod tests {
 			// wait for the best block to finalize.
 			finalized
 				.take_while(|&(_, n)| Ok(n < 6))
-				.for_each(|n| Ok(()))
+				.for_each(|_| Ok(()))
 		})).unwrap();
 	}
 }

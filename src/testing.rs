@@ -185,7 +185,7 @@ impl ::voter::Environment<&'static str> for Environment {
 	type Out = Box<Sink<SinkItem=Message<&'static str>,SinkError=Error> + Send + 'static>;
 	type Error = Error;
 
-	fn round_data(&self, round: u64) -> RoundData<Self::Timer, Self::Id, Self::In, Self::Out> {
+	fn round_data(&self, _round: u64) -> RoundData<Self::Timer, Self::Id, Self::In, Self::Out> {
 		use std::time::{Instant, Duration};
 		const GOSSIP_DURATION: Duration = Duration::from_millis(500);
 
