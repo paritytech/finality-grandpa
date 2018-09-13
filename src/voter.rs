@@ -520,8 +520,7 @@ impl<H, E: Environment<H>> Future for Voter<H, E>
 		let should_start_next = match self.best_round.poll()? {
 			Async::Ready(()) => match self.best_round.state {
 				Some(State::Precommitted) => true, // start when we've cast all votes.
-				_ => panic!("Returns ready only when round completable and messages flushed; \
-					completable implies precommit sent; qed"),
+				_ => false,
 			},
 			Async::NotReady => false,
 		};

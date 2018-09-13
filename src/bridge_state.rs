@@ -80,7 +80,6 @@ mod tests {
 
 	#[test]
 	fn bridging_state() {
-
 		let initial = RoundState {
 			prevote_ghost: None,
 			finalized: None,
