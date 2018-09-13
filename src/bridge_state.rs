@@ -71,3 +71,45 @@ pub(crate) fn bridge_state<H>(initial: RoundState<H>) -> (PriorView<H>, LatterVi
 		PriorView(inner.clone()), LatterView(inner)
 	)
 }
+
+#[cfg(test)]
+mod tests {
+	use futures::prelude::*;
+	use std::sync::Barrier;
+	use super::*;
+
+	#[test]
+	fn bridging_state() {
+
+		let initial = RoundState {
+			prevote_ghost: None,
+			finalized: None,
+			estimate: None,
+			completable: false,
+		};
+
+		let (prior, latter) = bridge_state(initial);
+		let waits_for_finality = ::futures::future::poll_fn(move || -> Poll<(), ()> {
+			if latter.get().finalized.is_some() {
+				Ok(Async::Ready(()))
+			} else {
+				Ok(Async::NotReady)
+			}
+		});
+
+		let barrier = Arc::new(Barrier::new(2));
+		let barrier_other = barrier.clone();
+		::std::thread::spawn(move || {
+			barrier_other.wait();
+			prior.update(RoundState {
+				prevote_ghost: Some(("5", 5)),
+				finalized: Some(("1", 1)),
+				estimate: Some(("3", 3)),
+				completable: true,
+			});
+		});
+
+		barrier.wait();
+		waits_for_finality.wait().unwrap();
+	}
+}
