@@ -30,14 +30,14 @@ pub const GENESIS_HASH: &str = "genesis";
 const NULL_HASH: &str = "NULL";
 
 struct BlockRecord {
-	number: usize,
+	number: u32,
 	parent: &'static str,
 }
 
 pub struct DummyChain {
 	inner: HashMap<&'static str, BlockRecord>,
 	leaves: Vec<&'static str>,
-	finalized: (&'static str, usize),
+	finalized: (&'static str, u32),
 }
 
 impl DummyChain {
@@ -65,7 +65,7 @@ impl DummyChain {
 
 		for (i, descendent) in blocks.iter().enumerate() {
 			self.inner.insert(descendent, BlockRecord {
-				number: base_number + i,
+				number: base_number + i as u32,
 				parent,
 			});
 
@@ -82,11 +82,11 @@ impl DummyChain {
 		self.leaves.insert(insertion_index, new_leaf);
 	}
 
-	pub fn number(&self, hash: &'static str) -> usize {
+	pub fn number(&self, hash: &'static str) -> u32 {
 		self.inner.get(hash).unwrap().number
 	}
 
-	pub fn last_finalized(&self) -> (&'static str, usize) {
+	pub fn last_finalized(&self) -> (&'static str, u32) {
 		self.finalized.clone()
 	}
 }
@@ -110,7 +110,7 @@ impl Chain<&'static str> for DummyChain {
 		Ok(ancestry)
 	}
 
-	fn best_chain_containing(&self, base: &'static str) -> Option<(&'static str, usize)> {
+	fn best_chain_containing(&self, base: &'static str) -> Option<(&'static str, u32)> {
 		let base_number = self.inner.get(base)?.number;
 
 		for leaf in &self.leaves {
@@ -132,16 +132,16 @@ impl Chain<&'static str> for DummyChain {
 }
 
 #[derive(Hash, Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Id(pub usize);
+pub struct Id(pub u32);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Signature(usize);
+pub struct Signature(u32);
 
 pub struct Environment {
 	chain: Mutex<DummyChain>,
 	voters: HashMap<Id, usize>,
 	local_id: Id,
-	listeners: Mutex<Vec<mpsc::UnboundedSender<(&'static str, usize)>>>,
+	listeners: Mutex<Vec<mpsc::UnboundedSender<(&'static str, u32)>>>,
 }
 
 impl Environment {
@@ -160,7 +160,7 @@ impl Environment {
 	}
 
 	/// Stream of finalized blocks.
-	pub fn finalized_stream(&self) -> mpsc::UnboundedReceiver<(&'static str, usize)> {
+	pub fn finalized_stream(&self) -> mpsc::UnboundedReceiver<(&'static str, u32)> {
 		let (tx, rx) = mpsc::unbounded();
 		self.listeners.lock().push(tx);
 		rx
@@ -172,7 +172,7 @@ impl Chain<&'static str> for Environment {
 		self.chain.lock().ancestry(base, block)
 	}
 
-	fn best_chain_containing(&self, base: &'static str) -> Option<(&'static str, usize)> {
+	fn best_chain_containing(&self, base: &'static str) -> Option<(&'static str, u32)> {
 		self.chain.lock().best_chain_containing(base)
 	}
 }
@@ -207,7 +207,7 @@ impl ::voter::Environment<&'static str> for Environment {
 	fn finalize_block(&self, hash: &'static str, number: u32) {
 		let mut chain = self.chain.lock();
 
-		if number as usize <= chain.finalized.1 { panic!("Attempted to finalize backwards") }
+		if number as u32 <= chain.finalized.1 { panic!("Attempted to finalize backwards") }
 		assert!(chain.ancestry(chain.finalized.0, hash).is_ok(), "Safety violation: reverting finalized block.");
 		chain.finalized = (hash, number as _);
 		self.listeners.lock().retain(|s| s.unbounded_send((hash, number as _)).is_ok());

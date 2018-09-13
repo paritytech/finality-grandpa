@@ -27,7 +27,7 @@ use super::{Chain, Error};
 
 #[derive(Debug)]
 struct Entry<H, V> {
-	number: usize,
+	number: u32,
 	// ancestor hashes in reverse order, e.g. ancestors[0] is the parent
 	// and the last entry is the hash of the parent vote-node.
 	ancestors: Vec<H>,
@@ -38,17 +38,17 @@ struct Entry<H, V> {
 impl<H: Hash + PartialEq + Clone, V> Entry<H, V> {
 	// whether the given hash, number pair is a direct ancestor of this node.
 	// `None` signifies that the graph must be traversed further back.
-	fn in_direct_ancestry(&self, hash: &H, number: usize) -> Option<bool> {
+	fn in_direct_ancestry(&self, hash: &H, number: u32) -> Option<bool> {
 		self.ancestor_block(number).map(|h| h == hash)
 	}
 
 	// Get ancestor block by number. Returns `None` if there is no block
 	// by that number in the direct ancestry.
-	fn ancestor_block(&self, number: usize) -> Option<&H> {
+	fn ancestor_block(&self, number: u32) -> Option<&H> {
 		if number >= self.number { return None }
 		let offset = self.number - number - 1;
 
-		self.ancestors.get(offset)
+		self.ancestors.get(offset as usize)
 	}
 
 	// get ancestor vote-node.
@@ -60,16 +60,16 @@ impl<H: Hash + PartialEq + Clone, V> Entry<H, V> {
 // a subchain of blocks by hash.
 struct Subchain<H> {
 	hashes: Vec<H>, // forward order.
-	best_number: usize,
+	best_number: u32,
 }
 
 impl<H: Clone> Subchain<H> {
-	fn blocks_reverse<'a>(&'a self) -> impl Iterator<Item = (H, usize)> + 'a {
+	fn blocks_reverse<'a>(&'a self) -> impl Iterator<Item = (H, u32)> + 'a {
 		let best = self.best_number;
-		self.hashes.iter().rev().cloned().enumerate().map(move |(i, x)| (x, best - i))
+		self.hashes.iter().rev().cloned().enumerate().map(move |(i, x)| (x, best - i as u32))
 	}
 
-	fn best(&self) -> Option<(H, usize)> {
+	fn best(&self) -> Option<(H, u32)> {
 		self.hashes.last().map(|x| (x.clone(), self.best_number))
 	}
 }
@@ -80,7 +80,7 @@ pub struct VoteGraph<H: Hash + Eq, V> {
 	entries: HashMap<H, Entry<H, V>>,
 	heads: HashSet<H>,
 	base: H,
-	base_number: usize,
+	base_number: u32,
 }
 
 impl<H, V> VoteGraph<H, V> where
@@ -88,7 +88,7 @@ impl<H, V> VoteGraph<H, V> where
 	V: AddAssign + Default + Clone + Debug,
 {
 	/// Create a new `VoteGraph` with base node as given.
-	pub fn new(base_hash: H, base_number: usize) -> Self {
+	pub fn new(base_hash: H, base_number: u32) -> Self {
 		let mut entries = HashMap::new();
 		entries.insert(base_hash.clone(), Entry {
 			number: base_number,
@@ -109,12 +109,12 @@ impl<H, V> VoteGraph<H, V> where
 	}
 
 	/// Get the base block.
-	pub fn base(&self) -> (H, usize) {
+	pub fn base(&self) -> (H, u32) {
 		(self.base.clone(), self.base_number)
 	}
 
 	/// Insert a vote with given value into the graph at given hash and number.
-	pub fn insert<C: Chain<H>>(&mut self, hash: H, number: usize, vote: V, chain: &C) -> Result<(), Error> {
+	pub fn insert<C: Chain<H>>(&mut self, hash: H, number: u32, vote: V, chain: &C) -> Result<(), Error> {
 		match self.find_containing_nodes(hash.clone(), number) {
 			Some(containing) => if containing.is_empty() {
 				self.append(hash.clone(), number, chain)?;
@@ -144,7 +144,7 @@ impl<H, V> VoteGraph<H, V> where
 
 	/// Find the highest block which is either an ancestor of or equal to the given, which fulfills a
 	/// condition.
-	pub fn find_ancestor<'a, F>(&'a self, hash: H, number: usize, condition: F) -> Option<(H, usize)>
+	pub fn find_ancestor<'a, F>(&'a self, hash: H, number: u32, condition: F) -> Option<(H, u32)>
 		where F: Fn(&V) -> bool
 	{
 		let entries = &self.entries;
@@ -212,7 +212,7 @@ impl<H, V> VoteGraph<H, V> where
 	/// enough to trigger the threshold.
 	///
 	/// Returns `None` when the given `current_best` does not fulfill the condition.
-	pub fn find_ghost<'a, F>(&'a self, current_best: Option<(H, usize)>, condition: F) -> Option<(H, usize)>
+	pub fn find_ghost<'a, F>(&'a self, current_best: Option<(H, u32)>, condition: F) -> Option<(H, u32)>
 		where F: Fn(&V) -> bool
 	{
 		let entries = &self.entries;
@@ -286,7 +286,7 @@ impl<H, V> VoteGraph<H, V> where
 		&'a self,
 		node_key: H,
 		active_node: &'a Entry<H, V>,
-		force_constrain: Option<(H, usize)>,
+		force_constrain: Option<(H, u32)>,
 		condition: F,
 	) -> Subchain<H>
 		where F: Fn(&V) -> bool
@@ -306,7 +306,7 @@ impl<H, V> VoteGraph<H, V> where
 		let mut hashes = vec![node_key];
 
 		// TODO: for long ranges of blocks this could get inefficient
-		for offset in 1usize.. {
+		for offset in 1u32.. {
 			let mut new_best = None;
 			for d_node in descendent_nodes.iter() {
 				if let Some(d_block) = d_node.ancestor_block(base_number + offset) {
@@ -352,7 +352,7 @@ impl<H, V> VoteGraph<H, V> where
 	// returns `None` if there is a node by that key already, and a vector
 	// (potentially empty) of nodes with the given block in its ancestor-edge
 	// otherwise.
-	fn find_containing_nodes(&self, hash: H, number: usize) -> Option<Vec<H>> {
+	fn find_containing_nodes(&self, hash: H, number: u32) -> Option<Vec<H>> {
 		if self.entries.contains_key(&hash) {
 			return None
 		}
@@ -400,7 +400,7 @@ impl<H, V> VoteGraph<H, V> where
 	// This function panics if any member of `descendents` is not a vote-node
 	// or does not have ancestor with given hash and number OR if `ancestor_hash`
 	// is already a known entry.
-	fn introduce_branch(&mut self, descendents: Vec<H>, ancestor_hash: H, ancestor_number: usize) {
+	fn introduce_branch(&mut self, descendents: Vec<H>, ancestor_hash: H, ancestor_number: u32) {
 		let produced_entry = descendents.into_iter().fold(None, |mut maybe_entry, descendent| {
 			let entry = self.entries.get_mut(&descendent)
 				.expect("this function only invoked with keys of vote-nodes; qed");
@@ -416,7 +416,7 @@ impl<H, V> VoteGraph<H, V> where
 				let offset = entry.number.checked_sub(ancestor_number)
 					.expect("this function only invoked with direct ancestors; qed");
 				let prev_ancestor  = entry.ancestor_node();
-				let new_ancestors = entry.ancestors.drain(offset..);
+				let new_ancestors = entry.ancestors.drain((offset as usize)..);
 
 				let &mut (ref mut new_entry, _) = maybe_entry.get_or_insert_with(move || {
 					let new_entry = Entry {
@@ -454,7 +454,7 @@ impl<H, V> VoteGraph<H, V> where
 
 	// append a vote-node onto the chain-tree. This should only be called if
 	// no node in the tree keeps the target anyway.
-	fn append<C: Chain<H>>(&mut self, hash: H, number: usize, chain: &C) -> Result<(), Error> {
+	fn append<C: Chain<H>>(&mut self, hash: H, number: u32, chain: &C) -> Result<(), Error> {
 		let mut ancestry = chain.ancestry(self.base.clone(), hash.clone())?;
 
 		let mut ancestor_index = None;
@@ -500,7 +500,7 @@ mod tests {
 		chain.push_blocks("C", &["D1", "E1", "F1"]);
 		chain.push_blocks("C", &["D2", "E2", "F2"]);
 
-		tracker.insert("A", 2, 100usize, &chain).unwrap();
+		tracker.insert("A", 2, 100u32, &chain).unwrap();
 		tracker.insert("E1", 6, 100, &chain).unwrap();
 		tracker.insert("F2", 7, 100, &chain).unwrap();
 
@@ -532,11 +532,11 @@ mod tests {
 		chain.push_blocks("C", &["D1", "E1", "F1"]);
 		chain.push_blocks("C", &["D2", "E2", "F2"]);
 
-		tracker1.insert("C", 4, 100usize, &chain).unwrap();
+		tracker1.insert("C", 4, 100u32, &chain).unwrap();
 		tracker1.insert("E1", 6, 100, &chain).unwrap();
 		tracker1.insert("F2", 7, 100, &chain).unwrap();
 
-		tracker2.insert("E1", 6, 100usize, &chain).unwrap();
+		tracker2.insert("E1", 6, 100u32, &chain).unwrap();
 		tracker2.insert("F2", 7, 100, &chain).unwrap();
 		tracker2.insert("C", 4, 100, &chain).unwrap();
 
@@ -570,7 +570,7 @@ mod tests {
 		chain.push_blocks("C", &["D1", "E1", "F1"]);
 		chain.push_blocks("C", &["D2", "E2", "F2"]);
 
-		tracker.insert("B", 3, 0usize, &chain).unwrap();
+		tracker.insert("B", 3, 0u32, &chain).unwrap();
 		tracker.insert("C", 4, 100, &chain).unwrap();
 		tracker.insert("E1", 6, 100, &chain).unwrap();
 		tracker.insert("F2", 7, 100, &chain).unwrap();
@@ -589,7 +589,7 @@ mod tests {
 		chain.push_blocks("F", &["G1", "H1", "I1"]);
 		chain.push_blocks("F", &["G2", "H2", "I2"]);
 
-		tracker.insert("B", 3, 0usize, &chain).unwrap();
+		tracker.insert("B", 3, 0u32, &chain).unwrap();
 		tracker.insert("G1", 8, 100, &chain).unwrap();
 		tracker.insert("H2", 9, 150, &chain).unwrap();
 
@@ -608,7 +608,7 @@ mod tests {
 		chain.push_blocks("E", &["EA", "EB", "EC", "ED"]);
 		chain.push_blocks("F", &["FA", "FB", "FC"]);
 
-		tracker.insert("FC", 10, 5usize, &chain).unwrap();
+		tracker.insert("FC", 10, 5u32, &chain).unwrap();
 		tracker.insert("ED", 10, 7, &chain).unwrap();
 
 		assert_eq!(tracker.find_ghost(None, |&x| x >= 10), Some(("E", 6)));
@@ -638,9 +638,9 @@ mod tests {
 		chain.push_blocks("C", &["D1", "E1", "F1", "G1", "H1", "I1"]);
 		chain.push_blocks("C", &["D2", "E2", "F2", "G2", "H2", "I2"]);
 
-		tracker.insert("B", 3, 10usize, &chain).unwrap();
-		tracker.insert("F1", 7, 5usize, &chain).unwrap();
-		tracker.insert("G2", 8, 5usize, &chain).unwrap();
+		tracker.insert("B", 3, 10u32, &chain).unwrap();
+		tracker.insert("F1", 7, 5, &chain).unwrap();
+		tracker.insert("G2", 8, 5, &chain).unwrap();
 
 		let test_cases = &[
 			"D1",
@@ -667,9 +667,9 @@ mod tests {
 		chain.push_blocks("D", &["E1", "F1", "G1", "H1", "I1"]);
 		chain.push_blocks("D", &["E2", "F2", "G2", "H2", "I2"]);
 
-		tracker.insert("B", 3, 10usize, &chain).unwrap();
-		tracker.insert("F1", 7, 5usize, &chain).unwrap();
-		tracker.insert("G2", 8, 5usize, &chain).unwrap();
+		tracker.insert("B", 3, 10u32, &chain).unwrap();
+		tracker.insert("F1", 7, 5, &chain).unwrap();
+		tracker.insert("G2", 8, 5, &chain).unwrap();
 
 		assert_eq!(tracker.find_ancestor("G2", 8, |&x| x > 5).unwrap(), ("D", 5));
 		let test_cases = &[
@@ -695,10 +695,10 @@ mod tests {
 		chain.push_blocks("C", &["D1", "E1", "F1", "G1", "H1", "I1"]);
 		chain.push_blocks("C", &["D2", "E2", "F2"]);
 
-		tracker.insert("C", 4, 10usize, &chain).unwrap();
-		tracker.insert("F1", 7, 5usize, &chain).unwrap();
-		tracker.insert("F2", 7, 5usize, &chain).unwrap();
-		tracker.insert("I1", 10, 1usize, &chain).unwrap();
+		tracker.insert("C", 4, 10u32, &chain).unwrap();
+		tracker.insert("F1", 7, 5, &chain).unwrap();
+		tracker.insert("F2", 7, 5, &chain).unwrap();
+		tracker.insert("I1", 10, 1, &chain).unwrap();
 
 		let test_cases = &[
 			"C",

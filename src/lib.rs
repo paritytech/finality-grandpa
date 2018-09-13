@@ -100,7 +100,7 @@ pub trait Chain<H> {
 	/// even if that block is `base` itself.
 	///
 	/// If `base` is unknown, return `None`.
-	fn best_chain_containing(&self, base: H) -> Option<(H, usize)>;
+	fn best_chain_containing(&self, base: H) -> Option<(H, u32)>;
 }
 
 /// An equivocation (double-vote) in a given round.
