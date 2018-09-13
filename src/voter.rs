@@ -153,10 +153,10 @@ pub struct VotingRound<H, E: Environment<H>> where H: Hash + Clone + Eq + Ord + 
 	votes: Round<E::Id, H, E::Signature>,
 	incoming: E::In,
 	outgoing: Buffered<E::Out>,
-	state: Option<State<E::Timer>>,
-	bridged_round_state: Option<::bridge_state::PriorView<H>>,
-	last_round_state: ::bridge_state::LatterView<H>,
-	primary_block: Option<(H, usize)>,
+	state: Option<State<E::Timer>>, // state machine driving votes.
+	bridged_round_state: Option<::bridge_state::PriorView<H>>, // updates to later round
+	last_round_state: ::bridge_state::LatterView<H>, // updates from prior round
+	primary_block: Option<(H, usize)>, // a block posted by primary as a hint. TODO: implement
 	finalized_sender: UnboundedSender<(H, usize)>,
 }
 
@@ -164,6 +164,8 @@ impl<H, E: Environment<H>> VotingRound<H, E> where H: Hash + Clone + Eq + Ord + 
 	// Poll the round. When the round is completable and messages have been flushed, it will return `Async::Ready` but
 	// can continue to be polled.
 	fn poll(&mut self) -> Poll<(), E::Error> {
+		trace!(target: "afg", "Polling round {}", self.votes.number());
+
 		let pre_state = self.votes.state();
 		while let Async::Ready(Some(incoming)) = self.incoming.poll()? {
 			let SignedMessage { message, signature, id } = incoming;
@@ -209,6 +211,7 @@ impl<H, E: Environment<H>> VotingRound<H, E> where H: Hash + Clone + Eq + Ord + 
 
 				if should_prevote {
 					if let Some(prevote) = self.construct_prevote(last_round_state)? {
+						debug!(target: "afg", "Casting prevote for round {}", self.votes.number());
 						self.outgoing.push(Message::Prevote(prevote));
 					}
 					self.state = Some(State::Prevoted(precommit_timer));
@@ -233,7 +236,7 @@ impl<H, E: Environment<H>> VotingRound<H, E> where H: Hash + Clone + Eq + Ord + 
 					// the ancestor of the current round's p-Ghost before precommitting.
 					self.votes.state().prevote_ghost.as_ref().map_or(false, |p_g| {
 						p_g == &last_round_estimate ||
-							match self.env.ancestry(p_g.0.clone(), last_round_estimate.0) {
+							match self.env.ancestry(last_round_estimate.0, p_g.0.clone()) {
 								Ok(_) => true,
 								Err(::Error::NotDescendent) => false,
 							}
@@ -245,6 +248,7 @@ impl<H, E: Environment<H>> VotingRound<H, E> where H: Hash + Clone + Eq + Ord + 
 				};
 
 				if should_precommit {
+					debug!(target: "afg", "Casting precommit for round {}", self.votes.number());
 					let precommit = self.construct_precommit();
 					self.outgoing.push(Message::Precommit(precommit));
 					self.state = Some(State::Precommitted);
@@ -572,9 +576,39 @@ impl<H, E: Environment<H>> Future for Voter<H, E>
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use tokio::runtime::current_thread;
+	use testing::{GENESIS_HASH, DummyChain, Environment, Id};
+	use std::collections::HashMap;
 
 	#[test]
 	fn talking_to_myself() {
+		let local_id = Id(5);
+		let voters = {
+			let mut map = HashMap::new();
+			map.insert(local_id, 100);
+			map
+		};
 
+		let env = Arc::new(Environment::new(voters, local_id));
+		current_thread::block_on_all(::futures::future::lazy(move || {
+			// initialize chain
+			let last_finalized = env.with_chain(|chain| {
+				chain.push_blocks(GENESIS_HASH, &["A", "B", "C", "D", "E"]);
+				chain.last_finalized()
+			});
+
+			let last_round_state = RoundState::genesis((GENESIS_HASH, 1));
+
+			// run voter in background. scheduling it to shut down at the end.
+			let finalized = env.finalized_stream();
+			let (_signal, exit) = ::exit_future::signal();
+			let voter = Voter::new(env.clone(), 0, last_round_state, last_finalized);
+			::tokio::spawn(exit.until(voter.map_err(|_| panic!("Error voting"))).map(|_| ()));
+
+			// wait for the best block to finalize.
+			finalized
+				.take_while(|&(_, n)| Ok(n < 6))
+				.for_each(|n| Ok(()))
+		})).unwrap();
 	}
 }

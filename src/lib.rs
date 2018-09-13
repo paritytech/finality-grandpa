@@ -25,6 +25,11 @@ extern crate futures;
 #[macro_use]
 extern crate log;
 
+#[cfg(test)]
+extern crate tokio;
+#[cfg(test)]
+extern crate exit_future;
+
 pub mod bitfield;
 pub mod round;
 pub mod vote_graph;
@@ -91,7 +96,9 @@ pub trait Chain<H> {
 	/// If the block is not a descendent of `base`, returns an error.
 	fn ancestry(&self, base: H, block: H) -> Result<Vec<H>, Error>;
 
-	/// Return the hash of the best block whose chain contains the given block hash.
+	/// Return the hash of the best block whose chain contains the given block hash,
+	/// even if that block is `base` itself.
+	///
 	/// If `base` is unknown, return `None`.
 	fn best_chain_containing(&self, base: H) -> Option<(H, usize)>;
 }

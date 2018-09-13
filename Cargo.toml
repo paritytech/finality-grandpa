@@ -8,3 +8,7 @@ authors = ["Parity Technologies <admin@parity.io>"]
 parking_lot = "0.4"
 log = "0.4"
 futures = "0.1"
+
+[dev-dependencies]
+tokio = "0.1.8"
+exit-future = "0.1.2"
