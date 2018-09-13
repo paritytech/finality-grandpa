@@ -22,6 +22,7 @@
 //!   - providing voter weights.
 
 use futures::prelude::*;
+use futures::task;
 use futures::stream::futures_unordered::FuturesUnordered;
 use futures::sync::mpsc::{self, UnboundedSender, UnboundedReceiver};
 use std::collections::{HashMap, VecDeque};
@@ -153,7 +154,8 @@ pub struct VotingRound<H, E: Environment<H>> where H: Hash + Clone + Eq + Ord + 
 	incoming: E::In,
 	outgoing: Buffered<E::Out>,
 	state: Option<State<E::Timer>>,
-	last_round_state: RoundState<H>,
+	bridged_round_state: Option<::bridge_state::PriorView<H>>,
+	last_round_state: ::bridge_state::LatterView<H>,
 	primary_block: Option<(H, usize)>,
 	finalized_sender: UnboundedSender<(H, usize)>,
 }
@@ -183,8 +185,9 @@ impl<H, E: Environment<H>> VotingRound<H, E> where H: Hash + Clone + Eq + Ord + 
 		let post_state = self.votes.state();
 		self.notify(pre_state, post_state);
 
-		self.prevote()?;
-		self.precommit()?;
+		let last_round_state = self.last_round_state.get().clone();
+		self.prevote(&last_round_state)?;
+		self.precommit(&last_round_state)?;
 
 		try_ready!(self.outgoing.poll());
 
@@ -195,7 +198,7 @@ impl<H, E: Environment<H>> VotingRound<H, E> where H: Hash + Clone + Eq + Ord + 
 		}
 	}
 
-	fn prevote(&mut self) -> Result<(), E::Error> {
+	fn prevote(&mut self, last_round_state: &RoundState<H>) -> Result<(), E::Error> {
 		match self.state.take() {
 			Some(State::Start(mut prevote_timer, precommit_timer)) => {
 				let should_prevote = match prevote_timer.poll() {
@@ -205,7 +208,7 @@ impl<H, E: Environment<H>> VotingRound<H, E> where H: Hash + Clone + Eq + Ord + 
 				};
 
 				if should_prevote {
-					if let Some(prevote) = self.construct_prevote()? {
+					if let Some(prevote) = self.construct_prevote(last_round_state)? {
 						self.outgoing.push(Message::Prevote(prevote));
 					}
 					self.state = Some(State::Prevoted(precommit_timer));
@@ -219,10 +222,23 @@ impl<H, E: Environment<H>> VotingRound<H, E> where H: Hash + Clone + Eq + Ord + 
 		Ok(())
 	}
 
-	fn precommit(&mut self) -> Result<(), E::Error> {
+	fn precommit(&mut self, last_round_state: &RoundState<H>) -> Result<(), E::Error> {
 		match self.state.take() {
 			Some(State::Prevoted(mut precommit_timer)) => {
-				let should_precommit = match precommit_timer.poll() {
+				let last_round_estimate = last_round_state.estimate.clone()
+					.expect("Rounds only started when prior round completable; qed");
+
+				let should_precommit = {
+					// we wait for the last round's estimate to be equal to or
+					// the ancestor of the current round's p-Ghost before precommitting.
+					self.votes.state().prevote_ghost.as_ref().map_or(false, |p_g| {
+						p_g == &last_round_estimate ||
+							match self.env.ancestry(p_g.0.clone(), last_round_estimate.0) {
+								Ok(_) => true,
+								Err(::Error::NotDescendent) => false,
+							}
+					})
+				} && match precommit_timer.poll() {
 					Err(e) => return Err(e),
 					Ok(Async::Ready(())) => true,
 					Ok(Async::NotReady) => self.votes.completable(),
@@ -243,8 +259,8 @@ impl<H, E: Environment<H>> VotingRound<H, E> where H: Hash + Clone + Eq + Ord + 
 	}
 
 	// construct a prevote message based on local state.
-	fn construct_prevote(&self) -> Result<Option<Prevote<H>>, E::Error> {
-		let last_round_estimate = self.last_round_state.estimate.clone()
+	fn construct_prevote(&self, last_round_state: &RoundState<H>) -> Result<Option<Prevote<H>>, E::Error> {
+		let last_round_estimate = last_round_state.estimate.clone()
 			.expect("Rounds only started when prior round completable; qed");
 
 		let find_descendent_of = match self.primary_block {
@@ -257,7 +273,7 @@ impl<H, E: Environment<H>> VotingRound<H, E> where H: Hash + Clone + Eq + Ord + 
 				// the last round's prevote-GHOST included that block and
 				// that block is a strict descendent of the last round-estimate that we are
 				// aware of.
-				let last_prevote_g = self.last_round_state.prevote_ghost.clone()
+				let last_prevote_g = last_round_state.prevote_ghost.clone()
 					.expect("Rounds only started when prior round completable; qed");
 
 				// if the blocks are equal, we don't check ancestry.
@@ -320,6 +336,12 @@ impl<H, E: Environment<H>> VotingRound<H, E> where H: Hash + Clone + Eq + Ord + 
 
 	// notify when new blocks are finalized or when the round-estimate is updated
 	fn notify(&self, last_state: RoundState<H>, new_state: RoundState<H>) {
+		if last_state == new_state { return }
+
+		if let Some(ref b) = self.bridged_round_state {
+			b.update(new_state.clone());
+		}
+
 		if last_state.finalized != new_state.finalized && new_state.completable {
 			// send notification only when the round is completable and we've cast votes.
 			// this is a workaround for avoiding restarting the round based on
@@ -330,10 +352,19 @@ impl<H, E: Environment<H>> VotingRound<H, E> where H: Hash + Clone + Eq + Ord + 
 				_ => {}
 			}
 		}
+	}
 
-		if last_state.estimate != new_state.estimate {
-			// TODO: notify the next round about it.
+	// call this when we build on top of a given round in order to get a handle
+	// to updates to the latest round-state.
+	fn bridge_state(&mut self) -> ::bridge_state::LatterView<H> {
+		let (prior_view, latter_view) = ::bridge_state::bridge_state(self.votes.state());
+		if self.bridged_round_state.is_some() {
+			warn!(target: "afg", "Bridged state from round {} more than once.",
+				self.votes.number());
 		}
+
+		self.bridged_round_state = Some(prior_view);
+		latter_view
 	}
 }
 
@@ -345,7 +376,7 @@ struct BackgroundRound<H, E: Environment<H>>
 	where H: Hash + Clone + Eq + Ord + ::std::fmt::Debug
 {
 	inner: VotingRound<H, E>,
-	task: Option<::futures::task::Task>,
+	task: Option<task::Task>,
 	finalized_number: u32,
 }
 
@@ -353,6 +384,7 @@ impl<H, E: Environment<H>> BackgroundRound<H, E>
 	where H: Hash + Clone + Eq + Ord + ::std::fmt::Debug
 {
 	fn is_done(&self) -> bool {
+		// no need to listen on a round anymore once the estimate is finalized.
 		self.inner.votes.state().estimate
 			.map_or(false, |x| (x.1 as u32) <= self.finalized_number)
 	}
@@ -424,6 +456,7 @@ impl<H, E: Environment<H>> Voter<H, E>
 			base: last_finalized.clone(),
 		};
 
+		let (_, last_round_state) = ::bridge_state::bridge_state(last_round_state);
 		let best_round = VotingRound {
 			env: env.clone(),
 			votes: Round::new(round_params),
@@ -435,10 +468,14 @@ impl<H, E: Environment<H>> Voter<H, E>
 			state: Some(
 				State::Start(round_data.prevote_timer, round_data.precommit_timer)
 			),
+			bridged_round_state: None,
 			last_round_state,
 			primary_block: None,
 			finalized_sender,
 		};
+
+		// TODO: load last round (or more), re-process all votes from them,
+		// and background until irrelevant
 
 		Voter {
 			env,
@@ -513,7 +550,8 @@ impl<H, E: Environment<H>> Future for Voter<H, E>
 			state: Some(
 				State::Start(next_round_data.prevote_timer, next_round_data.precommit_timer)
 			),
-			last_round_state: self.best_round.votes.state(),
+			bridged_round_state: None,
+			last_round_state: self.best_round.bridge_state(),
 			primary_block: None,
 			finalized_sender: self.best_round.finalized_sender.clone(),
 		};

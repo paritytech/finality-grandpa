@@ -30,6 +30,8 @@ pub mod round;
 pub mod vote_graph;
 pub mod voter;
 
+mod bridge_state;
+
 #[cfg(test)]
 mod testing;
 
