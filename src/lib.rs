@@ -117,6 +117,7 @@ pub struct Equivocation<Id, V, S> {
 }
 
 /// A protocol message or vote.
+#[derive(Clone)]
 pub enum Message<H> {
 	/// A prevote message.
 	Prevote(Prevote<H>),
@@ -126,6 +127,7 @@ pub enum Message<H> {
 }
 
 /// A signed message.
+#[derive(Clone)]
 pub struct SignedMessage<H, S, Id> {
 	pub message: Message<H>,
 	pub signature: S,
