@@ -348,7 +348,9 @@ impl<H, E: Environment<H>> VotingRound<H, E> where H: Hash + Clone + Eq + Ord + 
 
 		if last_state.finalized != new_state.finalized && new_state.completable {
 			// send notification only when the round is completable and we've cast votes.
-			// this is a workaround for avoiding restarting the round based on
+			// this is a workaround that ensures when we re-instantiate the voter after
+			// a shutdown, we never re-create the same round with a base that was finalized
+			// in this round or after.
 			match (&self.state, new_state.finalized) {
 				(&Some(State::Precommitted), Some(ref f)) => {
 					let _ = self.finalized_sender.unbounded_send(f.clone());
