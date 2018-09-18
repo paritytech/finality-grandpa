@@ -19,12 +19,23 @@
 //! https://hackmd.io/iA4XazxWRJ21LqMxwPSEZg?view
 
 extern crate parking_lot;
+
+#[macro_use]
+extern crate futures;
 #[macro_use]
 extern crate log;
+
+#[cfg(test)]
+extern crate tokio;
+#[cfg(test)]
+extern crate exit_future;
 
 pub mod bitfield;
 pub mod round;
 pub mod vote_graph;
+pub mod voter;
+
+mod bridge_state;
 
 #[cfg(test)]
 mod testing;
@@ -58,13 +69,13 @@ impl<H> Precommit<H> {
 
 #[derive(Clone, PartialEq, Debug)]
 pub enum Error {
-	BlockNotInSubtree,
+	NotDescendent,
 }
 
 impl fmt::Display for Error {
 	fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
 		match *self {
-			Error::BlockNotInSubtree => write!(f, "Block not in subtree of base"),
+			Error::NotDescendent => write!(f, "Block not descendent of base"),
 		}
 	}
 }
@@ -72,7 +83,7 @@ impl fmt::Display for Error {
 impl ::std::error::Error for Error {
 	fn description(&self) -> &str {
 		match *self {
-			Error::BlockNotInSubtree => "Block not in subtree of base",
+			Error::NotDescendent => "Block not descendent of base",
 		}
 	}
 }
@@ -84,6 +95,12 @@ pub trait Chain<H> {
 	///
 	/// If the block is not a descendent of `base`, returns an error.
 	fn ancestry(&self, base: H, block: H) -> Result<Vec<H>, Error>;
+
+	/// Return the hash of the best block whose chain contains the given block hash,
+	/// even if that block is `base` itself.
+	///
+	/// If `base` is unknown, return `None`.
+	fn best_chain_containing(&self, base: H) -> Option<(H, usize)>;
 }
 
 /// An equivocation (double-vote) in a given round.
@@ -97,4 +114,20 @@ pub struct Equivocation<Id, V, S> {
 	pub	first: (V, S),
 	/// The second vote in the equivocation.
 	pub second: (V, S),
+}
+
+/// A protocol message or vote.
+pub enum Message<H> {
+	/// A prevote message.
+	Prevote(Prevote<H>),
+	/// A precommit message.
+	Precommit(Precommit<H>),
+	// TODO: liveness-propose and commit messages.
+}
+
+/// A signed message.
+pub struct SignedMessage<H, S, Id> {
+	pub message: Message<H>,
+	pub signature: S,
+	pub id: Id,
 }

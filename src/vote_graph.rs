@@ -80,6 +80,7 @@ pub struct VoteGraph<H: Hash + Eq, V> {
 	entries: HashMap<H, Entry<H, V>>,
 	heads: HashSet<H>,
 	base: H,
+	base_number: usize,
 }
 
 impl<H, V> VoteGraph<H, V> where
@@ -103,7 +104,13 @@ impl<H, V> VoteGraph<H, V> where
 			entries,
 			heads,
 			base: base_hash,
+			base_number,
 		}
+	}
+
+	/// Get the base block.
+	pub fn base(&self) -> (H, usize) {
+		(self.base.clone(), self.base_number)
 	}
 
 	/// Insert a vote with given value into the graph at given hash and number.

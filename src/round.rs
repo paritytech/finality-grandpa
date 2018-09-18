@@ -172,6 +172,31 @@ impl<Id: Hash + Eq + Clone, Vote: Clone + Eq, Signature: Clone> VoteTracker<Id, 
 	}
 }
 
+/// State of the round.
+#[derive(PartialEq, Clone)]
+pub struct State<H> {
+	/// The prevote-GHOST block.
+	pub prevote_ghost: Option<(H, usize)>,
+	/// The finalized block.
+	pub finalized: Option<(H, usize)>,
+	/// The new round-estimate.
+	pub estimate: Option<(H, usize)>,
+	/// Whether the round is completable.
+	pub completable: bool,
+}
+
+impl<H: Clone> State<H> {
+	// Genesis state.
+	pub fn genesis(genesis: (H, usize)) -> Self {
+		State {
+			prevote_ghost: Some(genesis.clone()),
+			finalized: Some(genesis.clone()),
+			estimate: Some(genesis),
+			completable: true,
+		}
+	}
+}
+
 /// Parameters for starting a round.
 pub struct RoundParams<Id: Hash + Eq, H> {
 	/// The round number for votes.
@@ -225,6 +250,11 @@ impl<Id, H, Signature> Round<Id, H, Signature> where
 			estimate: None,
 			completable: false,
 		}
+	}
+
+	/// Return the round number.
+	pub fn number(&self) -> u64 {
+		self.round_number
 	}
 
 	/// Import a prevote. Returns an equivocation proof if the vote is an equivocation.
@@ -286,7 +316,7 @@ impl<Id, H, Signature> Round<Id, H, Signature> where
 			self.prevote_ghost = self.graph.find_ghost(self.prevote_ghost.take(), |v| v.prevote >= threshold);
 		}
 
-		self.update_trackers();
+		self.update();
 		Ok(equivocation)
 	}
 
@@ -344,12 +374,22 @@ impl<Id, H, Signature> Round<Id, H, Signature> where
 			})
 		};
 
-		self.update_trackers();
+		self.update();
 		Ok(equivocation)
 	}
 
+	// Get current
+	pub fn state(&self) -> State<H> {
+		State {
+			prevote_ghost: self.prevote_ghost.clone(),
+			finalized: self.finalized.clone(),
+			estimate: self.finalized.clone(),
+			completable: self.completable,
+		}
+	}
+
 	// update the round-estimate and whether the round is completable.
-	fn update_trackers(&mut self) {
+	fn update(&mut self) {
 		let threshold = self.threshold();
 		if self.prevote.current_weight < threshold { return }
 
@@ -450,6 +490,11 @@ impl<Id, H, Signature> Round<Id, H, Signature> where
 	// Threshold number of weight for supermajority.
 	pub fn threshold(&self) -> usize {
 		threshold(self.total_weight, self.faulty_weight)
+	}
+
+	/// Return the round base.
+	pub fn base(&self) -> (H, usize) {
+		self.graph.base()
 	}
 }
 
