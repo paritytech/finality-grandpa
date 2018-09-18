@@ -176,18 +176,18 @@ impl<Id: Hash + Eq + Clone, Vote: Clone + Eq, Signature: Clone> VoteTracker<Id, 
 #[derive(PartialEq, Clone)]
 pub struct State<H> {
 	/// The prevote-GHOST block.
-	pub prevote_ghost: Option<(H, usize)>,
+	pub prevote_ghost: Option<(H, u32)>,
 	/// The finalized block.
-	pub finalized: Option<(H, usize)>,
+	pub finalized: Option<(H, u32)>,
 	/// The new round-estimate.
-	pub estimate: Option<(H, usize)>,
+	pub estimate: Option<(H, u32)>,
 	/// Whether the round is completable.
 	pub completable: bool,
 }
 
 impl<H: Clone> State<H> {
 	// Genesis state.
-	pub fn genesis(genesis: (H, usize)) -> Self {
+	pub fn genesis(genesis: (H, u32)) -> Self {
 		State {
 			prevote_ghost: Some(genesis.clone()),
 			finalized: Some(genesis.clone()),
@@ -204,7 +204,7 @@ pub struct RoundParams<Id: Hash + Eq, H> {
 	/// Actors and weights in the round.
 	pub voters: HashMap<Id, usize>,
 	/// The base block to build on.
-	pub base: (H, usize),
+	pub base: (H, u32),
 }
 
 /// Stores data for a round.
@@ -217,9 +217,9 @@ pub struct Round<Id: Hash + Eq, H: Hash + Eq, Signature> {
 	faulty_weight: usize,
 	total_weight: usize,
 	bitfield_context: BitfieldContext<Id>,
-	prevote_ghost: Option<(H, usize)>, // current memoized prevote-GHOST block
-	finalized: Option<(H, usize)>, // best finalized block in this round.
-	estimate: Option<(H, usize)>, // current memoized round-estimate
+	prevote_ghost: Option<(H, u32)>, // current memoized prevote-GHOST block
+	finalized: Option<(H, u32)>, // best finalized block in this round.
+	estimate: Option<(H, u32)>, // current memoized round-estimate
 	completable: bool, // whether the round is completable
 }
 
@@ -289,7 +289,7 @@ impl<Id, H, Signature> Round<Id, H, Signature> where
 
 					graph.insert(
 						vote.target_hash.clone(),
-						vote.target_number as usize,
+						vote.target_number,
 						vote_weight,
 						chain
 					)
@@ -353,7 +353,7 @@ impl<Id, H, Signature> Round<Id, H, Signature> where
 
 					graph.insert(
 						vote.target_hash.clone(),
-						vote.target_number as usize,
+						vote.target_number,
 						vote_weight,
 						chain
 					)
@@ -469,12 +469,12 @@ impl<Id, H, Signature> Round<Id, H, Signature> where
 	///
 	/// Returns `None` when new new blocks could have been finalized in this round,
 	/// according to our estimate.
-	pub fn estimate(&self) -> Option<&(H, usize)> {
+	pub fn estimate(&self) -> Option<&(H, u32)> {
 		self.estimate.as_ref()
 	}
 
 	/// Fetch the most recently finalized block.
-	pub fn finalized(&self) -> Option<&(H, usize)> {
+	pub fn finalized(&self) -> Option<&(H, u32)> {
 		self.finalized.as_ref()
 	}
 
@@ -493,7 +493,7 @@ impl<Id, H, Signature> Round<Id, H, Signature> where
 	}
 
 	/// Return the round base.
-	pub fn base(&self) -> (H, usize) {
+	pub fn base(&self) -> (H, u32) {
 		self.graph.base()
 	}
 }

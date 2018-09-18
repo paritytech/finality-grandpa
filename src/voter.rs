@@ -156,8 +156,8 @@ pub struct VotingRound<H, E: Environment<H>> where H: Hash + Clone + Eq + Ord + 
 	state: Option<State<E::Timer>>, // state machine driving votes.
 	bridged_round_state: Option<::bridge_state::PriorView<H>>, // updates to later round
 	last_round_state: ::bridge_state::LatterView<H>, // updates from prior round
-	primary_block: Option<(H, usize)>, // a block posted by primary as a hint. TODO: implement
-	finalized_sender: UnboundedSender<(H, usize)>,
+	primary_block: Option<(H, u32)>, // a block posted by primary as a hint. TODO: implement
+	finalized_sender: UnboundedSender<(H, u32)>,
 }
 
 impl<H, E: Environment<H>> VotingRound<H, E> where H: Hash + Clone + Eq + Ord + ::std::fmt::Debug {
@@ -294,7 +294,7 @@ impl<H, E: Environment<H>> VotingRound<H, E> where H: Hash + Clone + Eq + Ord + 
 					match self.env.ancestry(last_round_estimate.0.clone(), last_prevote_g.0) {
 						Ok(ancestry) => {
 							let offset = last_prevote_g.1.saturating_sub(p_num + 1);
-							if ancestry.get(offset).map_or(false, |b| b == p_hash) {
+							if ancestry.get(offset as usize).map_or(false, |b| b == p_hash) {
 								p_hash.clone()
 							} else {
 								last_round_estimate.0
@@ -321,7 +321,7 @@ impl<H, E: Environment<H>> VotingRound<H, E> where H: Hash + Clone + Eq + Ord + 
 
 		Ok(Some(Prevote {
 			target_hash: t.0,
-			target_number: t.1 as u32,
+			target_number: t.1,
 		}))
 	}
 
@@ -334,7 +334,7 @@ impl<H, E: Environment<H>> VotingRound<H, E> where H: Hash + Clone + Eq + Ord + 
 
 		Precommit {
 			target_hash: t.0,
-			target_number: t.1 as u32,
+			target_number: t.1,
 		}
 	}
 
@@ -392,7 +392,7 @@ impl<H, E: Environment<H>> BackgroundRound<H, E>
 	fn is_done(&self) -> bool {
 		// no need to listen on a round anymore once the estimate is finalized.
 		self.inner.votes.state().estimate
-			.map_or(false, |x| (x.1 as u32) <= self.finalized_number)
+			.map_or(false, |x| (x.1) <= self.finalized_number)
 	}
 
 	fn update_finalized(&mut self, new_finalized: u32) {
@@ -433,8 +433,8 @@ pub struct Voter<H, E: Environment<H>>
 	env: Arc<E>,
 	best_round: VotingRound<H, E>,
 	past_rounds: FuturesUnordered<BackgroundRound<H, E>>,
-	finalized_notifications: UnboundedReceiver<(H, usize)>,
-	last_finalized: (H, usize),
+	finalized_notifications: UnboundedReceiver<(H, u32)>,
+	last_finalized: (H, u32),
 }
 
 impl<H, E: Environment<H>> Voter<H, E>
@@ -449,7 +449,7 @@ impl<H, E: Environment<H>> Voter<H, E>
 		env: Arc<E>,
 		last_round: u64,
 		last_round_state: RoundState<H>,
-		last_finalized: (H, usize),
+		last_finalized: (H, u32),
 	) -> Self {
 		let (finalized_sender, finalized_notifications) = mpsc::unbounded();
 
@@ -457,7 +457,7 @@ impl<H, E: Environment<H>> Voter<H, E>
 		let round_data = env.round_data(next_number);
 
 		let round_params = ::round::RoundParams {
-			round_number: next_number as _,
+			round_number: next_number,
 			voters: round_data.voters,
 			base: last_finalized.clone(),
 		};
@@ -499,13 +499,13 @@ impl<H, E: Environment<H>> Voter<H, E>
 			let (f_hash, f_num) = res.expect("one sender always kept alive in self.best_round; qed");
 
 			for bg in self.past_rounds.iter_mut() {
-				bg.update_finalized(f_num as u32);
+				bg.update_finalized(f_num);
 			}
 
 			if f_num > self.last_finalized.1 {
 				// TODO: handle safety violations and check ancestry.
 				self.last_finalized = (f_hash.clone(), f_num);
-				self.env.finalize_block(f_hash, f_num as u32);
+				self.env.finalize_block(f_hash, f_num);
 			}
 		}
 
@@ -539,7 +539,7 @@ impl<H, E: Environment<H>> Future for Voter<H, E>
 		let next_round_data = self.env.round_data(next_number);
 
 		let round_params = ::round::RoundParams {
-			round_number: next_number as _,
+			round_number: next_number,
 			voters: next_round_data.voters,
 			base: self.last_finalized.clone(),
 		};
@@ -579,7 +579,7 @@ impl<H, E: Environment<H>> Future for Voter<H, E>
 mod tests {
 	use super::*;
 	use tokio::runtime::current_thread;
-	use testing::{GENESIS_HASH, Environment, Id};
+	use testing::{self, GENESIS_HASH, Environment, Id};
 	use std::collections::HashMap;
 
 	#[test]
@@ -591,7 +591,8 @@ mod tests {
 			map
 		};
 
-		let env = Arc::new(Environment::new(voters, local_id));
+		let (network, routing_task) = testing::make_network();
+		let env = Arc::new(Environment::new(voters, network, local_id));
 		current_thread::block_on_all(::futures::future::lazy(move || {
 			// initialize chain
 			let last_finalized = env.with_chain(|chain| {
@@ -605,12 +606,59 @@ mod tests {
 			let finalized = env.finalized_stream();
 			let (_signal, exit) = ::exit_future::signal();
 			let voter = Voter::new(env.clone(), 0, last_round_state, last_finalized);
-			::tokio::spawn(exit.until(voter.map_err(|_| panic!("Error voting"))).map(|_| ()));
+			::tokio::spawn(exit.clone()
+				.until(voter.map_err(|_| panic!("Error voting"))).map(|_| ()));
+
+			::tokio::spawn(exit.until(routing_task).map(|_| ()));
 
 			// wait for the best block to finalize.
 			finalized
 				.take_while(|&(_, n)| Ok(n < 6))
 				.for_each(|_| Ok(()))
+		})).unwrap();
+	}
+
+	#[test]
+	fn finalizing_at_fault_threshold() {
+		// 10 voters
+		let voters = {
+			let mut map = HashMap::new();
+			for i in 0..10 {
+				map.insert(Id(i), 1);
+			}
+			map
+		};
+
+		let (network, routing_task) = testing::make_network();
+		current_thread::block_on_all(::futures::future::lazy(move || {
+			let (_signal, exit) = ::exit_future::signal();
+			::tokio::spawn(exit.clone().until(routing_task).map(|_| ()));
+
+			// 3 voters offline.
+			let finalized_streams = (0..7).map(move |i| {
+				let local_id = Id(i);
+				// initialize chain
+				let env = Arc::new(Environment::new(voters.clone(), network.clone(), local_id));
+				let last_finalized = env.with_chain(|chain| {
+					chain.push_blocks(GENESIS_HASH, &["A", "B", "C", "D", "E"]);
+					chain.last_finalized()
+				});
+
+				let last_round_state = RoundState::genesis((GENESIS_HASH, 1));
+
+				// run voter in background. scheduling it to shut down at the end.
+				let finalized = env.finalized_stream();
+				let voter = Voter::new(env.clone(), 0, last_round_state, last_finalized);
+				::tokio::spawn(exit.clone()
+					.until(voter.map_err(|_| panic!("Error voting"))).map(|_| ()));
+
+				// wait for the best block to be finalized by all honest voters
+				finalized
+					.take_while(|&(_, n)| Ok(n < 6))
+					.for_each(|_| Ok(()))
+			});
+
+			::futures::future::join_all(finalized_streams)
 		})).unwrap();
 	}
 }

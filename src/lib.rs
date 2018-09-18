@@ -100,7 +100,7 @@ pub trait Chain<H> {
 	/// even if that block is `base` itself.
 	///
 	/// If `base` is unknown, return `None`.
-	fn best_chain_containing(&self, base: H) -> Option<(H, usize)>;
+	fn best_chain_containing(&self, base: H) -> Option<(H, u32)>;
 }
 
 /// An equivocation (double-vote) in a given round.
@@ -117,6 +117,7 @@ pub struct Equivocation<Id, V, S> {
 }
 
 /// A protocol message or vote.
+#[derive(Clone)]
 pub enum Message<H> {
 	/// A prevote message.
 	Prevote(Prevote<H>),
@@ -126,6 +127,7 @@ pub enum Message<H> {
 }
 
 /// A signed message.
+#[derive(Clone)]
 pub struct SignedMessage<H, S, Id> {
 	pub message: Message<H>,
 	pub signature: S,
