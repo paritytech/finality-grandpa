@@ -39,6 +39,13 @@ extern crate tokio;
 #[cfg(test)]
 extern crate exit_future;
 
+#[cfg(feature = "derive-codec")]
+#[macro_use]
+extern crate parity_codec_derive;
+
+#[cfg(feature = "derive-codec")]
+extern crate parity_codec;
+
 pub mod bitfield;
 pub mod round;
 pub mod vote_graph;
@@ -52,6 +59,7 @@ mod testing;
 use std::fmt;
 /// A prevote for a block and its ancestors.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "derive-codec", derive(Encode, Decode))]
 pub struct Prevote<H> {
 	target_hash: H,
 	target_number: u32,
@@ -65,6 +73,7 @@ impl<H> Prevote<H> {
 
 /// A precommit for a block and its ancestors.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "derive-codec", derive(Encode, Decode))]
 pub struct Precommit<H> {
 	target_hash: H,
 	target_number: u32,
@@ -76,7 +85,7 @@ impl<H> Precommit<H> {
 	}
 }
 
-#[derive(Clone, PartialEq, Debug)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Error {
 	NotDescendent,
 }
@@ -114,6 +123,7 @@ pub trait Chain<H> {
 
 /// An equivocation (double-vote) in a given round.
 #[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "derive-codec", derive(Encode, Decode))]
 pub struct Equivocation<Id, V, S> {
 	/// The round number equivocated in.
 	pub round_number: u64,
@@ -126,7 +136,8 @@ pub struct Equivocation<Id, V, S> {
 }
 
 /// A protocol message or vote.
-#[derive(Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "derive-codec", derive(Encode, Decode))]
 pub enum Message<H> {
 	/// A prevote message.
 	Prevote(Prevote<H>),
@@ -136,9 +147,32 @@ pub enum Message<H> {
 }
 
 /// A signed message.
-#[derive(Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "derive-codec", derive(Encode, Decode))]
 pub struct SignedMessage<H, S, Id> {
 	pub message: Message<H>,
 	pub signature: S,
 	pub id: Id,
+}
+
+#[cfg(test)]
+mod tests {
+	#[cfg(feature = "derive-codec")]
+	#[test]
+	fn codec_was_derived() {
+		use parity_codec::{Encode, Decode};
+
+		let signed = ::SignedMessage {
+			message: ::Message::Prevote(::Prevote {
+				target_hash: b"Hello".to_vec(),
+				target_number: 5,
+			}),
+			signature: b"Signature".to_vec(),
+			id: 5000,
+		};
+
+		let encoded = signed.encode();
+		let signed2 = ::SignedMessage::decode(&mut &encoded[..]).unwrap();
+		assert_eq!(signed, signed2);
+	}
 }
