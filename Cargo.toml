@@ -3,6 +3,7 @@ name = "finality-grandpa"
 version = "0.1.0"
 description = "PBFT-based finality gadget for blockchains"
 authors = ["Parity Technologies <admin@parity.io>"]
+license = "GPL-3.0"
 
 [dependencies]
 parking_lot = "0.4"
