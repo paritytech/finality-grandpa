@@ -1,22 +1,31 @@
 // Copyright 2018 Parity Technologies (UK) Ltd.
-// This file is part of finality-afg.
+// This file is part of finality-grandpa.
 
-// finality-afg is free software: you can redistribute it and/or modify
+// finality-grandpa is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
 // the Free Software Foundation, either version 3 of the License, or
 // (at your option) any later version.
 
-// finality-afg is distributed in the hope that it will be useful,
+// finality-grandpa is distributed in the hope that it will be useful,
 // but WITHOUT ANY WARRANTY; without even the implied warranty of
 // MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 // GNU General Public License for more details.
 
 // You should have received a copy of the GNU General Public License
-// along with finality-afg. If not, see <http://www.gnu.org/licenses/>.
+// along with finality-grandpa. If not, see <http://www.gnu.org/licenses/>.
 
 //! Finality gadget for blockchains.
 //!
-//! https://hackmd.io/iA4XazxWRJ21LqMxwPSEZg?view
+//! https://github.com/w3f/consensus/blob/master/pdf/grandpa.pdf
+//!
+//! Consensus proceeds in rounds. Each round, voters will cast a prevote
+//! and precommit message.
+//!
+//! Votes on blocks are then applied to the blockchain, being recursively applied to
+//! blocks before them. A DAG is superimposed over the blockchain with the `vote_graph` logic.
+//!
+//! Equivocation detection and vote-set management is done in the `round` module.
+//! The work for actually casting votes is done in the `voter` module.
 
 extern crate parking_lot;
 

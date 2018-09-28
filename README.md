@@ -1,4 +1,5 @@
-# finality-afg
-finality gadget for blockchains, based on PBFT
+# GRANDPA
 
-Implementation in Rust.
+GHOST-based Recursive ANcestor Deriving Prefix Agreement
+
+A finality gadget for blockchains, implemented in Rust.

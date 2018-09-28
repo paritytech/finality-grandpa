@@ -1,18 +1,18 @@
 // Copyright 2018 Parity Technologies (UK) Ltd.
-// This file is part of finality-afg.
+// This file is part of finality-grandpa.
 
-// finality-afg is free software: you can redistribute it and/or modify
+// finality-grandpa is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
 // the Free Software Foundation, either version 3 of the License, or
 // (at your option) any later version.
 
-// finality-afg is distributed in the hope that it will be useful,
+// finality-grandpa is distributed in the hope that it will be useful,
 // but WITHOUT ANY WARRANTY; without even the implied warranty of
 // MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 // GNU General Public License for more details.
 
 // You should have received a copy of the GNU General Public License
-// along with finality-afg. If not, see <http://www.gnu.org/licenses/>.
+// along with finality-grandpa. If not, see <http://www.gnu.org/licenses/>.
 
 //! Bridging round state between rounds.
 

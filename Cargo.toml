@@ -1,5 +1,5 @@
 [package]
-name = "finality-afg"
+name = "finality-grandpa"
 version = "0.1.0"
 description = "PBFT-based finality gadget for blockchains"
 authors = ["Parity Technologies <admin@parity.io>"]
