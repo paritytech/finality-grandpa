@@ -61,8 +61,10 @@ use std::fmt;
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "derive-codec", derive(Encode, Decode))]
 pub struct Prevote<H> {
-	target_hash: H,
-	target_number: u32,
+	/// The target block's hash.
+	pub target_hash: H,
+	/// The target block's number.
+	pub target_number: u32,
 }
 
 impl<H> Prevote<H> {
@@ -75,8 +77,10 @@ impl<H> Prevote<H> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "derive-codec", derive(Encode, Decode))]
 pub struct Precommit<H> {
-	target_hash: H,
-	target_number: u32,
+	/// The target block's hash.
+	pub target_hash: H,
+	/// The target block's number
+	pub target_number: u32,
 }
 
 impl<H> Precommit<H> {
@@ -146,13 +150,33 @@ pub enum Message<H> {
 	// TODO: liveness-propose and commit messages.
 }
 
+impl<H> Message<H> {
+	/// Get the target block of the vote.
+	pub fn target(&self) -> (&H, u32) {
+		match *self {
+			Message::Prevote(ref v) => (&v.target_hash, v.target_number),
+			Message::Precommit(ref v) => (&v.target_hash, v.target_number),
+		}
+	}
+}
+
 /// A signed message.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "derive-codec", derive(Encode, Decode))]
 pub struct SignedMessage<H, S, Id> {
+	/// The internal message which has been signed.
 	pub message: Message<H>,
+	/// The signature on the message.
 	pub signature: S,
+	/// The Id of the signer
 	pub id: Id,
+}
+
+impl<H, S, Id> SignedMessage<H, S, Id> {
+	/// Get the target block of the vote.
+	pub fn target(&self) -> (&H, u32) {
+		self.message.target()
+	}
 }
 
 #[cfg(test)]
