@@ -102,10 +102,10 @@ impl Chain<&'static str> for DummyChain {
 				Some(record) => { block = record.parent; }
 			}
 
-			ancestry.push(block);
-
 			if block == NULL_HASH { return Err(Error::NotDescendent) }
 			if block == base { break }
+
+			ancestry.push(block);
 		}
 
 		Ok(ancestry)
