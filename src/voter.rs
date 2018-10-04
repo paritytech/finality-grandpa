@@ -68,12 +68,12 @@ pub trait Environment<H>: Chain<H> {
 	>;
 
 	/// Note that a round was completed. This is called when a round has been
-	/// voted in.
-	fn completed(&self, round: u64, state: RoundState<H>);
+	/// voted in. Should return an error when something fatal occurs.
+	fn completed(&self, round: u64, state: RoundState<H>) -> Result<(), Self::Error>;
 
 	/// Called when a block should be finalized.
 	// TODO: make this a future that resolves when it's e.g. written to disk?
-	fn finalize_block(&self, hash: H, number: u32);
+	fn finalize_block(&self, hash: H, number: u32) -> Result<(), Self::Error>;
 
 	// Note that an equivocation in prevotes has occurred.
 	fn prevote_equivocation(&self, round: u64, equivocation: Equivocation<Self::Id, Prevote<H>, Self::Signature>);
@@ -505,7 +505,7 @@ impl<H, E: Environment<H>> Voter<H, E>
 			if f_num > self.last_finalized.1 {
 				// TODO: handle safety violations and check ancestry.
 				self.last_finalized = (f_hash.clone(), f_num);
-				self.env.finalize_block(f_hash, f_num);
+				self.env.finalize_block(f_hash, f_num)?;
 			}
 		}
 
@@ -533,7 +533,7 @@ impl<H, E: Environment<H>> Future for Voter<H, E>
 
 		if !should_start_next { return Ok(Async::NotReady) }
 
-		self.env.completed(self.best_round.votes.number(), self.best_round.votes.state());
+		self.env.completed(self.best_round.votes.number(), self.best_round.votes.state())?;
 
 		let next_number = self.best_round.votes.number() + 1;
 		let next_round_data = self.env.round_data(next_number);

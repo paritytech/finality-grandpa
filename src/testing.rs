@@ -205,15 +205,19 @@ impl ::voter::Environment<&'static str> for Environment {
 		}
 	}
 
-	fn completed(&self, _round: u64, _state: RoundState<&'static str>) { }
+	fn completed(&self, _round: u64, _state: RoundState<&'static str>) -> Result<(), Error> {
+		Ok(())
+	}
 
-	fn finalize_block(&self, hash: &'static str, number: u32) {
+	fn finalize_block(&self, hash: &'static str, number: u32) -> Result<(), Error> {
 		let mut chain = self.chain.lock();
 
 		if number as u32 <= chain.finalized.1 { panic!("Attempted to finalize backwards") }
 		assert!(chain.ancestry(chain.finalized.0, hash).is_ok(), "Safety violation: reverting finalized block.");
 		chain.finalized = (hash, number as _);
 		self.listeners.lock().retain(|s| s.unbounded_send((hash, number as _)).is_ok());
+
+		Ok(())
 	}
 
 	fn prevote_equivocation(&self, round: u64, equivocation: Equivocation<Id, Prevote<&'static str>, Signature>) {
