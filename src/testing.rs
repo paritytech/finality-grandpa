@@ -140,14 +140,14 @@ pub struct Signature(u32);
 
 pub struct Environment {
 	chain: Mutex<DummyChain>,
-	voters: HashMap<Id, usize>,
+	voters: HashMap<Id, u64>,
 	local_id: Id,
 	network: Network,
 	listeners: Mutex<Vec<UnboundedSender<(&'static str, u32)>>>,
 }
 
 impl Environment {
-	pub fn new(voters: HashMap<Id, usize>, network: Network, local_id: Id) -> Self {
+	pub fn new(voters: HashMap<Id, u64>, network: Network, local_id: Id) -> Self {
 		Environment {
 			chain: Mutex::new(DummyChain::new()),
 			voters,

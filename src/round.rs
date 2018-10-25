@@ -31,8 +31,8 @@ struct Address;
 
 #[derive(Debug, Clone)]
 struct VoteWeight<Id> {
-	prevote: usize,
-	precommit: usize,
+	prevote: u64,
+	precommit: u64,
 	bitfield: Bitfield<Id>,
 }
 
@@ -76,11 +76,11 @@ enum VoteMultiplicity<Vote, Signature> {
 impl<Vote, Signature> VoteMultiplicity<Vote, Signature> {
 	fn update_graph<Id, F, G>(
 		&self,
-		weight: usize,
+		weight: u64,
 		mut import: F,
 		make_bitfield: G,
 	) -> Result<(), ::Error> where
-		F: FnMut(&Vote, usize, Bitfield<Id>) -> Result<(), ::Error>,
+		F: FnMut(&Vote, u64, Bitfield<Id>) -> Result<(), ::Error>,
 		G: Fn() -> Bitfield<Id>,
 	{
 		match *self {
@@ -125,7 +125,7 @@ impl<Vote, Signature> VoteMultiplicity<Vote, Signature> {
 
 struct VoteTracker<Id: Hash + Eq, Vote, Signature> {
 	votes: HashMap<Id, VoteMultiplicity<Vote, Signature>>,
-	current_weight: usize,
+	current_weight: u64,
 }
 
 impl<Id: Hash + Eq + Clone, Vote: Clone + Eq, Signature: Clone> VoteTracker<Id, Vote, Signature> {
@@ -142,7 +142,7 @@ impl<Id: Hash + Eq + Clone, Vote: Clone + Eq, Signature: Clone> VoteTracker<Id, 
 	//
 	// since this struct doesn't track the round-number of votes, that must be set
 	// by the caller.
-	fn add_vote(&mut self, id: Id, vote: Vote, signature: Signature, weight: usize)
+	fn add_vote(&mut self, id: Id, vote: Vote, signature: Signature, weight: u64)
 		-> &VoteMultiplicity<Vote, Signature>
 	{
 		match self.votes.entry(id) {
@@ -203,7 +203,7 @@ pub struct RoundParams<Id: Hash + Eq, H> {
 	/// The round number for votes.
 	pub round_number: u64,
 	/// Actors and weights in the round.
-	pub voters: HashMap<Id, usize>,
+	pub voters: HashMap<Id, u64>,
 	/// The base block to build on.
 	pub base: (H, u32),
 }
@@ -214,9 +214,9 @@ pub struct Round<Id: Hash + Eq, H: Hash + Eq, Signature> {
 	prevote: VoteTracker<Id, Prevote<H>, Signature>, // tracks prevotes that have been counted
 	precommit: VoteTracker<Id, Precommit<H>, Signature>, // tracks precommits
 	round_number: u64,
-	voters: HashMap<Id, usize>,
-	faulty_weight: usize,
-	total_weight: usize,
+	voters: HashMap<Id, u64>,
+	faulty_weight: u64,
+	total_weight: u64,
 	bitfield_context: BitfieldContext<Id>,
 	prevote_ghost: Option<(H, u32)>, // current memoized prevote-GHOST block
 	finalized: Option<(H, u32)>, // best finalized block in this round.
@@ -233,7 +233,7 @@ impl<Id, H, Signature> Round<Id, H, Signature> where
 	/// Not guaranteed to work correctly unless total_weight more than 3x larger than faulty_weight
 	pub fn new(round_params: RoundParams<Id, H>) -> Self {
 		let (base_hash, base_number) = round_params.base;
-		let total_weight: usize = round_params.voters.values().cloned().sum();
+		let total_weight: u64 = round_params.voters.values().cloned().sum();
 		let faulty_weight = total_weight.saturating_sub(1) / 3;
 		let n_validators = round_params.voters.len();
 
@@ -489,7 +489,7 @@ impl<Id, H, Signature> Round<Id, H, Signature> where
 	}
 
 	// Threshold number of weight for supermajority.
-	pub fn threshold(&self) -> usize {
+	pub fn threshold(&self) -> u64 {
 		threshold(self.total_weight, self.faulty_weight)
 	}
 
@@ -499,7 +499,7 @@ impl<Id, H, Signature> Round<Id, H, Signature> where
 	}
 }
 
-fn threshold(total_weight: usize, faulty_weight: usize) -> usize {
+fn threshold(total_weight: u64, faulty_weight: u64) -> u64 {
 	let mut double_supermajority = total_weight + faulty_weight + 1;
 	double_supermajority += double_supermajority & 1;
 	double_supermajority / 2
@@ -510,7 +510,7 @@ mod tests {
 	use super::*;
 	use testing::{GENESIS_HASH, DummyChain};
 
-	fn voters() -> HashMap<&'static str, usize> {
+	fn voters() -> HashMap<&'static str, u64> {
 		[
 			("Alice", 5),
 			("Bob", 7),

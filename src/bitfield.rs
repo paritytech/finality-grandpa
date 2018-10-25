@@ -86,7 +86,7 @@ impl<Id> Clone for Bitfield<Id> {
 
 impl<Id: Eq> Bitfield<Id> {
 	/// Find total equivocating weight (prevote, precommit).
-	pub fn total_weight(&self) -> (usize, usize) {
+	pub fn total_weight(&self) -> (u64, u64) {
 		match *self {
 			Bitfield::Blank => (0, 0),
 			Bitfield::Live(ref live) => live.total_weight(),
@@ -113,7 +113,7 @@ impl<Id: Eq> Bitfield<Id> {
 	}
 
 	/// Find overlap weight (prevote, precommit) between this bitfield and another.
-	pub fn overlap(&self, other: &Self) -> Result<(usize, usize), Error> {
+	pub fn overlap(&self, other: &Self) -> Result<(u64, u64), Error> {
 		match (self, other) {
 			(&Bitfield::Live(ref a), &Bitfield::Live(ref b)) => {
 				if a.shared.idx != b.shared.idx {
@@ -156,7 +156,7 @@ impl<Id: Eq> LiveBitfield<Id> {
 	/// Note a validator's equivocation in prevote.
 	/// Fails if more equivocators than the number of validators have
 	/// been registered.
-	pub fn equivocated_prevote(&mut self, id: Id, weight: usize) -> Result<(), Error> {
+	pub fn equivocated_prevote(&mut self, id: Id, weight: u64) -> Result<(), Error> {
 		let val_off = self.shared.get_or_register_equivocator(id, weight)?;
 		self.set_bit(val_off * 2);
 		Ok(())
@@ -165,7 +165,7 @@ impl<Id: Eq> LiveBitfield<Id> {
 	/// Note a validator's equivocation in precommit.
 	/// Fails if more equivocators than the number of validators have
 	/// been registered.
-	pub fn equivocated_precommit(&mut self, id: Id, weight: usize) -> Result<(), Error> {
+	pub fn equivocated_precommit(&mut self, id: Id, weight: u64) -> Result<(), Error> {
 		let val_off = self.shared.get_or_register_equivocator(id, weight)?;
 		self.set_bit(val_off * 2 + 1);
 		Ok(())
@@ -186,20 +186,20 @@ impl<Id: Eq> LiveBitfield<Id> {
 	}
 
 	// find total weight of this bitfield (prevote, precommit).
-	fn total_weight(&self) -> (usize, usize) {
+	fn total_weight(&self) -> (u64, u64) {
 		total_weight(self.bits.iter().cloned(), self.shared.validators.read().as_slice())
 	}
 }
 
 // find total weight of the given iterable of bits. assumes that there are enough
 // validators in the given context to correspond to all bits.
-fn total_weight<Iter, Id>(iterable: Iter, validators: &[ValidatorEntry<Id>]) -> (usize, usize)
+fn total_weight<Iter, Id>(iterable: Iter, validators: &[ValidatorEntry<Id>]) -> (u64, u64)
 	where Iter: IntoIterator<Item=u64>
 {
 		struct State {
 			word_idx: usize,
-			prevote: usize,
-			precommit: usize,
+			prevote: u64,
+			precommit: u64,
 		};
 
 		let state = State {
@@ -269,7 +269,7 @@ impl<Id: Eq> Shared<Id> {
 		vec![0; n_words]
 	}
 
-	fn get_or_register_equivocator(&self, equivocator: Id, weight: usize) -> Result<usize, Error> {
+	fn get_or_register_equivocator(&self, equivocator: Id, weight: u64) -> Result<usize, Error> {
 		{
 			// linear search is probably fast enough until we have thousands of
 			// equivocators. finding the bit to set is slow but happens rarely.
@@ -295,7 +295,7 @@ impl<Id: Eq> Shared<Id> {
 #[derive(Debug)]
 struct ValidatorEntry<Id> {
 	id: Id,
-	weight: usize,
+	weight: u64,
 }
 
 #[cfg(test)]
