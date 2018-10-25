@@ -89,7 +89,7 @@ pub struct RoundData<Timer, Id, Input, Output> {
 	/// Timer before precommits can be cast. This should be Start + 4T
 	pub precommit_timer: Timer,
 	/// All voters in this round.
-	pub voters: HashMap<Id, usize>,
+	pub voters: HashMap<Id, u64>,
 	/// Incoming messages.
 	pub incoming: Input,
 	/// Outgoing messages.
