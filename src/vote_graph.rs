@@ -23,11 +23,11 @@ use std::fmt::Debug;
 use std::hash::Hash;
 use std::ops::AddAssign;
 
-use super::{Chain, Error};
+use super::{Chain, Error, BlockNumberOps};
 
 #[derive(Debug)]
-struct Entry<H, V> {
-	number: u32,
+struct Entry<H, N, V> {
+	number: N,
 	// ancestor hashes in reverse order, e.g. ancestors[0] is the parent
 	// and the last entry is the hash of the parent vote-node.
 	ancestors: Vec<H>,
@@ -35,20 +35,20 @@ struct Entry<H, V> {
 	cumulative_vote: V,
 }
 
-impl<H: Hash + PartialEq + Clone, V> Entry<H, V> {
+impl<H: Hash + PartialEq + Clone, N: BlockNumberOps, V> Entry<H, N, V> {
 	// whether the given hash, number pair is a direct ancestor of this node.
 	// `None` signifies that the graph must be traversed further back.
-	fn in_direct_ancestry(&self, hash: &H, number: u32) -> Option<bool> {
+	fn in_direct_ancestry(&self, hash: &H, number: N) -> Option<bool> {
 		self.ancestor_block(number).map(|h| h == hash)
 	}
 
 	// Get ancestor block by number. Returns `None` if there is no block
 	// by that number in the direct ancestry.
-	fn ancestor_block(&self, number: u32) -> Option<&H> {
+	fn ancestor_block(&self, number: N) -> Option<&H> {
 		if number >= self.number { return None }
-		let offset = self.number - number - 1;
+		let offset = self.number - number - N::one();
 
-		self.ancestors.get(offset as usize)
+		self.ancestors.get(offset.as_())
 	}
 
 	// get ancestor vote-node.
@@ -58,37 +58,43 @@ impl<H: Hash + PartialEq + Clone, V> Entry<H, V> {
 }
 
 // a subchain of blocks by hash.
-struct Subchain<H> {
+struct Subchain<H, N> {
 	hashes: Vec<H>, // forward order.
-	best_number: u32,
+	best_number: N,
 }
 
-impl<H: Clone> Subchain<H> {
-	fn blocks_reverse<'a>(&'a self) -> impl Iterator<Item = (H, u32)> + 'a {
+impl<H: Clone, N: Copy + BlockNumberOps> Subchain<H, N> {
+	fn blocks_reverse<'a>(&'a self) -> impl Iterator<Item = (H, N)> + 'a {
 		let best = self.best_number;
-		self.hashes.iter().rev().cloned().enumerate().map(move |(i, x)| (x, best - i as u32))
+		let mut count = N::zero();
+		self.hashes.iter().rev().cloned().map(move |x| {
+			let res = (x, best - count);
+			count = count + N::one();
+			res
+		})
 	}
 
-	fn best(&self) -> Option<(H, u32)> {
+	fn best(&self) -> Option<(H, N)> {
 		self.hashes.last().map(|x| (x.clone(), self.best_number))
 	}
 }
 
 /// Maintains a DAG of blocks in the chain which have votes attached to them,
 /// and vote data which is accumulated along edges.
-pub struct VoteGraph<H: Hash + Eq, V> {
-	entries: HashMap<H, Entry<H, V>>,
+pub struct VoteGraph<H: Hash + Eq, N, V> {
+	entries: HashMap<H, Entry<H, N, V>>,
 	heads: HashSet<H>,
 	base: H,
-	base_number: u32,
+	base_number: N,
 }
 
-impl<H, V> VoteGraph<H, V> where
+impl<H, N, V> VoteGraph<H, N, V> where
 	H: Hash + Eq + Clone + Ord + Debug,
 	V: AddAssign + Default + Clone + Debug,
+	N: Copy + Debug + BlockNumberOps,
 {
 	/// Create a new `VoteGraph` with base node as given.
-	pub fn new(base_hash: H, base_number: u32) -> Self {
+	pub fn new(base_hash: H, base_number: N) -> Self {
 		let mut entries = HashMap::new();
 		entries.insert(base_hash.clone(), Entry {
 			number: base_number,
@@ -109,12 +115,12 @@ impl<H, V> VoteGraph<H, V> where
 	}
 
 	/// Get the base block.
-	pub fn base(&self) -> (H, u32) {
+	pub fn base(&self) -> (H, N) {
 		(self.base.clone(), self.base_number)
 	}
 
 	/// Insert a vote with given value into the graph at given hash and number.
-	pub fn insert<C: Chain<H>>(&mut self, hash: H, number: u32, vote: V, chain: &C) -> Result<(), Error> {
+	pub fn insert<C: Chain<H, N>>(&mut self, hash: H, number: N, vote: V, chain: &C) -> Result<(), Error> {
 		match self.find_containing_nodes(hash.clone(), number) {
 			Some(containing) => if containing.is_empty() {
 				self.append(hash.clone(), number, chain)?;
@@ -144,7 +150,7 @@ impl<H, V> VoteGraph<H, V> where
 
 	/// Find the highest block which is either an ancestor of or equal to the given, which fulfills a
 	/// condition.
-	pub fn find_ancestor<'a, F>(&'a self, hash: H, number: u32, condition: F) -> Option<(H, u32)>
+	pub fn find_ancestor<'a, F>(&'a self, hash: H, number: N, condition: F) -> Option<(H, N)>
 		where F: Fn(&V) -> bool
 	{
 		let entries = &self.entries;
@@ -212,7 +218,7 @@ impl<H, V> VoteGraph<H, V> where
 	/// enough to trigger the threshold.
 	///
 	/// Returns `None` when the given `current_best` does not fulfill the condition.
-	pub fn find_ghost<'a, F>(&'a self, current_best: Option<(H, u32)>, condition: F) -> Option<(H, u32)>
+	pub fn find_ghost<'a, F>(&'a self, current_best: Option<(H, N)>, condition: F) -> Option<(H, N)>
 		where F: Fn(&V) -> bool
 	{
 		let entries = &self.entries;
@@ -285,10 +291,10 @@ impl<H, V> VoteGraph<H, V> where
 	fn ghost_find_merge_point<'a, F>(
 		&'a self,
 		node_key: H,
-		active_node: &'a Entry<H, V>,
-		force_constrain: Option<(H, u32)>,
+		active_node: &'a Entry<H, N, V>,
+		force_constrain: Option<(H, N)>,
 		condition: F,
-	) -> Subchain<H>
+	) -> Subchain<H, N>
 		where F: Fn(&V) -> bool
 	{
 		let mut descendent_nodes: Vec<_> = active_node.descendents.iter()
@@ -306,7 +312,10 @@ impl<H, V> VoteGraph<H, V> where
 		let mut hashes = vec![node_key];
 
 		// TODO: for long ranges of blocks this could get inefficient
-		for offset in 1u32.. {
+		let mut offset = N::zero();
+		loop {
+			offset = offset + N::one();
+
 			let mut new_best = None;
 			for d_node in descendent_nodes.iter() {
 				if let Some(d_block) = d_node.ancestor_block(base_number + offset) {
@@ -328,7 +337,7 @@ impl<H, V> VoteGraph<H, V> where
 
 			match new_best {
 				Some(new_best) => {
-					best_number += 1;
+					best_number = best_number + N::one();
 
 					descendent_blocks.clear();
 					descendent_nodes.retain(
@@ -352,7 +361,7 @@ impl<H, V> VoteGraph<H, V> where
 	// returns `None` if there is a node by that key already, and a vector
 	// (potentially empty) of nodes with the given block in its ancestor-edge
 	// otherwise.
-	fn find_containing_nodes(&self, hash: H, number: u32) -> Option<Vec<H>> {
+	fn find_containing_nodes(&self, hash: H, number: N) -> Option<Vec<H>> {
 		if self.entries.contains_key(&hash) {
 			return None
 		}
@@ -400,7 +409,7 @@ impl<H, V> VoteGraph<H, V> where
 	// This function panics if any member of `descendents` is not a vote-node
 	// or does not have ancestor with given hash and number OR if `ancestor_hash`
 	// is already a known entry.
-	fn introduce_branch(&mut self, descendents: Vec<H>, ancestor_hash: H, ancestor_number: u32) {
+	fn introduce_branch(&mut self, descendents: Vec<H>, ancestor_hash: H, ancestor_number: N) {
 		let produced_entry = descendents.into_iter().fold(None, |mut maybe_entry, descendent| {
 			let entry = self.entries.get_mut(&descendent)
 				.expect("this function only invoked with keys of vote-nodes; qed");
@@ -413,10 +422,13 @@ impl<H, V> VoteGraph<H, V> where
 			// we ensure the `entry.ancestors` is drained regardless of whether
 			// the `new_entry` has already been constructed.
 			{
-				let offset = entry.number.checked_sub(ancestor_number)
-					.expect("this function only invoked with direct ancestors; qed");
-				let prev_ancestor  = entry.ancestor_node();
-				let new_ancestors = entry.ancestors.drain((offset as usize)..);
+				let prev_ancestor = entry.ancestor_node();
+				let offset_usize: usize = if ancestor_number > entry.number {
+					panic!("this function only invoked with direct ancestors; qed")
+				} else {
+					(entry.number - ancestor_number).as_()
+				};
+				let new_ancestors = entry.ancestors.drain(offset_usize..);
 
 				let &mut (ref mut new_entry, _) = maybe_entry.get_or_insert_with(move || {
 					let new_entry = Entry {
@@ -454,7 +466,7 @@ impl<H, V> VoteGraph<H, V> where
 
 	// append a vote-node onto the chain-tree. This should only be called if
 	// no node in the tree keeps the target anyway.
-	fn append<C: Chain<H>>(&mut self, hash: H, number: u32, chain: &C) -> Result<(), Error> {
+	fn append<C: Chain<H, N>>(&mut self, hash: H, number: N, chain: &C) -> Result<(), Error> {
 		let mut ancestry = chain.ancestry(self.base.clone(), hash.clone())?;
 		ancestry.push(self.base.clone()); // ancestry doesn't include base.
 

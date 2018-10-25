@@ -22,13 +22,13 @@ use parking_lot::{RwLock, RwLockReadGuard};
 use std::sync::Arc;
 
 // round state bridged across rounds.
-struct Bridged<H> {
-	inner: RwLock<RoundState<H>>,
+struct Bridged<H, N> {
+	inner: RwLock<RoundState<H, N>>,
 	task: task::AtomicTask,
 }
 
-impl<H> Bridged<H> {
-	fn new(inner: RwLock<RoundState<H>>) -> Self {
+impl<H, N> Bridged<H, N> {
+	fn new(inner: RwLock<RoundState<H, N>>) -> Self {
 		Bridged {
 			inner,
 			task: task::AtomicTask::new(),
@@ -37,22 +37,22 @@ impl<H> Bridged<H> {
 }
 
 /// A prior view of a round-state.
-pub(crate) struct PriorView<H>(Arc<Bridged<H>>);
+pub(crate) struct PriorView<H, N>(Arc<Bridged<H, N>>);
 
-impl<H> PriorView<H> {
+impl<H, N> PriorView<H, N> {
 	/// Push an update to the latter view.
-	pub(crate) fn update(&self, new: RoundState<H>) {
+	pub(crate) fn update(&self, new: RoundState<H, N>) {
 		*self.0.inner.write() = new;
 		self.0.task.notify();
 	}
 }
 
 /// A latter view of a round-state.
-pub(crate) struct LatterView<H>(Arc<Bridged<H>>);
+pub(crate) struct LatterView<H, N>(Arc<Bridged<H, N>>);
 
-impl<H> LatterView<H> {
+impl<H, N> LatterView<H, N> {
 	/// Fetch a handle to the last round-state.
-	pub(crate) fn get(&self) -> RwLockReadGuard<RoundState<H>> {
+	pub(crate) fn get(&self) -> RwLockReadGuard<RoundState<H, N>> {
 		self.0.task.register();
 		self.0.inner.read()
 	}
@@ -65,7 +65,7 @@ impl<H> LatterView<H> {
 ///
 /// The latter view is held by the subsequent round, which blocks certain activity
 /// while waiting for events on an older round.
-pub(crate) fn bridge_state<H>(initial: RoundState<H>) -> (PriorView<H>, LatterView<H>) {
+pub(crate) fn bridge_state<H, N>(initial: RoundState<H, N>) -> (PriorView<H, N>, LatterView<H, N>) {
 	let inner = Arc::new(Bridged::new(RwLock::new(initial)));
 	(
 		PriorView(inner.clone()), LatterView(inner)

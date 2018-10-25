@@ -28,6 +28,7 @@
 //! The work for actually casting votes is done in the `voter` module.
 
 extern crate parking_lot;
+extern crate num_traits as num;
 
 #[macro_use]
 extern crate futures;
@@ -60,15 +61,15 @@ use std::fmt;
 /// A prevote for a block and its ancestors.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "derive-codec", derive(Encode, Decode))]
-pub struct Prevote<H> {
+pub struct Prevote<H, N> {
 	/// The target block's hash.
 	pub target_hash: H,
 	/// The target block's number.
-	pub target_number: u32,
+	pub target_number: N,
 }
 
-impl<H> Prevote<H> {
-	pub fn new(target_hash: H, target_number: u32) -> Self {
+impl<H, N> Prevote<H, N> {
+	pub fn new(target_hash: H, target_number: N) -> Self {
 		Prevote { target_hash, target_number }
 	}
 }
@@ -76,15 +77,15 @@ impl<H> Prevote<H> {
 /// A precommit for a block and its ancestors.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "derive-codec", derive(Encode, Decode))]
-pub struct Precommit<H> {
+pub struct Precommit<H, N> {
 	/// The target block's hash.
 	pub target_hash: H,
 	/// The target block's number
-	pub target_number: u32,
+	pub target_number: N,
 }
 
-impl<H> Precommit<H> {
-	pub fn new(target_hash: H, target_number: u32) -> Self {
+impl<H, N> Precommit<H, N> {
+	pub fn new(target_hash: H, target_number: N) -> Self {
 		Precommit { target_hash, target_number }
 	}
 }
@@ -110,8 +111,29 @@ impl ::std::error::Error for Error {
 	}
 }
 
+/// Arithmetic necessary for a block number.
+pub trait BlockNumberOps:
+	::std::fmt::Debug +
+	::std::cmp::Ord +
+	::std::ops::Add<Output=Self> +
+	::std::ops::Sub<Output=Self> +
+	::num::One +
+	::num::Zero +
+	::num::AsPrimitive<usize>
+{}
+
+impl<T> BlockNumberOps for T where
+	T: ::std::fmt::Debug,
+	T: ::std::cmp::Ord,
+	T: ::std::ops::Add<Output=Self>,
+	T: ::std::ops::Sub<Output=Self>,
+	T: ::num::One,
+	T: ::num::Zero,
+	T: ::num::AsPrimitive<usize>,
+{}
+
 /// Chain context necessary for implementation of the finality gadget.
-pub trait Chain<H> {
+pub trait Chain<H, N: Copy + BlockNumberOps> {
 	/// Get the ancestry of a block up to but not including the base hash.
 	/// Should be in reverse order from `block`'s parent.
 	///
@@ -122,7 +144,7 @@ pub trait Chain<H> {
 	/// even if that block is `base` itself.
 	///
 	/// If `base` is unknown, return `None`.
-	fn best_chain_containing(&self, base: H) -> Option<(H, u32)>;
+	fn best_chain_containing(&self, base: H) -> Option<(H, N)>;
 }
 
 /// An equivocation (double-vote) in a given round.
@@ -142,17 +164,17 @@ pub struct Equivocation<Id, V, S> {
 /// A protocol message or vote.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "derive-codec", derive(Encode, Decode))]
-pub enum Message<H> {
+pub enum Message<H, N> {
 	/// A prevote message.
-	Prevote(Prevote<H>),
+	Prevote(Prevote<H, N>),
 	/// A precommit message.
-	Precommit(Precommit<H>),
+	Precommit(Precommit<H, N>),
 	// TODO: liveness-propose and commit messages.
 }
 
-impl<H> Message<H> {
+impl<H, N: Copy> Message<H, N> {
 	/// Get the target block of the vote.
-	pub fn target(&self) -> (&H, u32) {
+	pub fn target(&self) -> (&H, N) {
 		match *self {
 			Message::Prevote(ref v) => (&v.target_hash, v.target_number),
 			Message::Precommit(ref v) => (&v.target_hash, v.target_number),
@@ -163,18 +185,18 @@ impl<H> Message<H> {
 /// A signed message.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "derive-codec", derive(Encode, Decode))]
-pub struct SignedMessage<H, S, Id> {
+pub struct SignedMessage<H, N, S, Id> {
 	/// The internal message which has been signed.
-	pub message: Message<H>,
+	pub message: Message<H, N>,
 	/// The signature on the message.
 	pub signature: S,
 	/// The Id of the signer
 	pub id: Id,
 }
 
-impl<H, S, Id> SignedMessage<H, S, Id> {
+impl<H, N: Copy, S, Id> SignedMessage<H, N, S, Id> {
 	/// Get the target block of the vote.
-	pub fn target(&self) -> (&H, u32) {
+	pub fn target(&self) -> (&H, N) {
 		self.message.target()
 	}
 }

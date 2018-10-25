@@ -30,17 +30,17 @@ use std::hash::Hash;
 use std::sync::Arc;
 use round::{Round, State as RoundState};
 
-use ::{Chain, Equivocation, Message, Prevote, Precommit, SignedMessage};
+use ::{Chain, Equivocation, Message, Prevote, Precommit, SignedMessage, BlockNumberOps};
 
 /// Necessary environment for a voter.
 ///
 /// This encapsulates the database and networking layers of the chain.
-pub trait Environment<H>: Chain<H> {
+pub trait Environment<H, N: BlockNumberOps>: Chain<H, N> {
 	type Timer: Future<Item=(),Error=Self::Error>;
 	type Id: Hash + Clone + Eq + ::std::fmt::Debug;
 	type Signature: Eq + Clone;
-	type In: Stream<Item=SignedMessage<H, Self::Signature, Self::Id>,Error=Self::Error>;
-	type Out: Sink<SinkItem=Message<H>,SinkError=Self::Error>;
+	type In: Stream<Item=SignedMessage<H, N, Self::Signature, Self::Id>,Error=Self::Error>;
+	type Out: Sink<SinkItem=Message<H, N>,SinkError=Self::Error>;
 	type Error: From<::Error>;
 
 	/// Produce data necessary to start a round of voting.
@@ -69,16 +69,16 @@ pub trait Environment<H>: Chain<H> {
 
 	/// Note that a round was completed. This is called when a round has been
 	/// voted in. Should return an error when something fatal occurs.
-	fn completed(&self, round: u64, state: RoundState<H>) -> Result<(), Self::Error>;
+	fn completed(&self, round: u64, state: RoundState<H, N>) -> Result<(), Self::Error>;
 
 	/// Called when a block should be finalized.
 	// TODO: make this a future that resolves when it's e.g. written to disk?
-	fn finalize_block(&self, hash: H, number: u32) -> Result<(), Self::Error>;
+	fn finalize_block(&self, hash: H, number: N) -> Result<(), Self::Error>;
 
-	// Note that an equivocation in prevotes has occurred.
-	fn prevote_equivocation(&self, round: u64, equivocation: Equivocation<Self::Id, Prevote<H>, Self::Signature>);
+	// Note that an equivocation in prevotes has occurred.s
+	fn prevote_equivocation(&self, round: u64, equivocation: Equivocation<Self::Id, Prevote<H, N>, Self::Signature>);
 	// Note that an equivocation in precommits has occurred.
-	fn precommit_equivocation(&self, round: u64, equivocation: Equivocation<Self::Id, Precommit<H>, Self::Signature>);
+	fn precommit_equivocation(&self, round: u64, equivocation: Equivocation<Self::Id, Precommit<H, N>, Self::Signature>);
 }
 
 /// Data necessary to participate in a round.
@@ -148,19 +148,25 @@ impl<S: Sink> Buffered<S> {
 }
 
 /// Logic for a voter on a specific round.
-pub struct VotingRound<H, E: Environment<H>> where H: Hash + Clone + Eq + Ord + ::std::fmt::Debug {
+pub struct VotingRound<H, N, E: Environment<H, N>> where
+	H: Hash + Clone + Eq + Ord + ::std::fmt::Debug,
+	N: Copy + BlockNumberOps + ::std::fmt::Debug,
+{
 	env: Arc<E>,
-	votes: Round<E::Id, H, E::Signature>,
+	votes: Round<E::Id, H, N, E::Signature>,
 	incoming: E::In,
 	outgoing: Buffered<E::Out>,
 	state: Option<State<E::Timer>>, // state machine driving votes.
-	bridged_round_state: Option<::bridge_state::PriorView<H>>, // updates to later round
-	last_round_state: ::bridge_state::LatterView<H>, // updates from prior round
-	primary_block: Option<(H, u32)>, // a block posted by primary as a hint. TODO: implement
-	finalized_sender: UnboundedSender<(H, u32)>,
+	bridged_round_state: Option<::bridge_state::PriorView<H, N>>, // updates to later round
+	last_round_state: ::bridge_state::LatterView<H, N>, // updates from prior round
+	primary_block: Option<(H, N)>, // a block posted by primary as a hint. TODO: implement
+	finalized_sender: UnboundedSender<(H, N)>,
 }
 
-impl<H, E: Environment<H>> VotingRound<H, E> where H: Hash + Clone + Eq + Ord + ::std::fmt::Debug {
+impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
+	H: Hash + Clone + Eq + Ord + ::std::fmt::Debug,
+	N: Copy + BlockNumberOps + ::std::fmt::Debug,
+{
 	// Poll the round. When the round is completable and messages have been flushed, it will return `Async::Ready` but
 	// can continue to be polled.
 	fn poll(&mut self) -> Poll<(), E::Error> {
@@ -200,7 +206,7 @@ impl<H, E: Environment<H>> VotingRound<H, E> where H: Hash + Clone + Eq + Ord + 
 		}
 	}
 
-	fn prevote(&mut self, last_round_state: &RoundState<H>) -> Result<(), E::Error> {
+	fn prevote(&mut self, last_round_state: &RoundState<H, N>) -> Result<(), E::Error> {
 		match self.state.take() {
 			Some(State::Start(mut prevote_timer, precommit_timer)) => {
 				let should_prevote = match prevote_timer.poll() {
@@ -225,7 +231,7 @@ impl<H, E: Environment<H>> VotingRound<H, E> where H: Hash + Clone + Eq + Ord + 
 		Ok(())
 	}
 
-	fn precommit(&mut self, last_round_state: &RoundState<H>) -> Result<(), E::Error> {
+	fn precommit(&mut self, last_round_state: &RoundState<H, N>) -> Result<(), E::Error> {
 		match self.state.take() {
 			Some(State::Prevoted(mut precommit_timer)) => {
 				let last_round_estimate = last_round_state.estimate.clone()
@@ -263,7 +269,7 @@ impl<H, E: Environment<H>> VotingRound<H, E> where H: Hash + Clone + Eq + Ord + 
 	}
 
 	// construct a prevote message based on local state.
-	fn construct_prevote(&self, last_round_state: &RoundState<H>) -> Result<Option<Prevote<H>>, E::Error> {
+	fn construct_prevote(&self, last_round_state: &RoundState<H, N>) -> Result<Option<Prevote<H, N>>, E::Error> {
 		let last_round_estimate = last_round_state.estimate.clone()
 			.expect("Rounds only started when prior round completable; qed");
 
@@ -293,8 +299,15 @@ impl<H, E: Environment<H>> VotingRound<H, E> where H: Hash + Clone + Eq + Ord + 
 					let &(ref p_hash, p_num) = primary_block;
 					match self.env.ancestry(last_round_estimate.0.clone(), last_prevote_g.0) {
 						Ok(ancestry) => {
-							let offset = last_prevote_g.1.saturating_sub(p_num + 1);
-							if ancestry.get(offset as usize).map_or(false, |b| b == p_hash) {
+							let to_sub = p_num + N::one();
+
+							let offset: usize = if last_prevote_g.1 < to_sub {
+								0
+							} else {
+								(last_prevote_g.1 - to_sub).as_()
+							};
+
+							if ancestry.get(offset).map_or(false, |b| b == p_hash) {
 								p_hash.clone()
 							} else {
 								last_round_estimate.0
@@ -326,7 +339,7 @@ impl<H, E: Environment<H>> VotingRound<H, E> where H: Hash + Clone + Eq + Ord + 
 	}
 
 	// construct a precommit message based on local state.
-	fn construct_precommit(&self) -> Precommit<H> {
+	fn construct_precommit(&self) -> Precommit<H, N> {
 		let t = match self.votes.state().prevote_ghost {
 			Some(target) => target,
 			None => self.votes.base(),
@@ -339,7 +352,7 @@ impl<H, E: Environment<H>> VotingRound<H, E> where H: Hash + Clone + Eq + Ord + 
 	}
 
 	// notify when new blocks are finalized or when the round-estimate is updated
-	fn notify(&self, last_state: RoundState<H>, new_state: RoundState<H>) {
+	fn notify(&self, last_state: RoundState<H, N>, new_state: RoundState<H, N>) {
 		if last_state == new_state { return }
 
 		if let Some(ref b) = self.bridged_round_state {
@@ -362,7 +375,7 @@ impl<H, E: Environment<H>> VotingRound<H, E> where H: Hash + Clone + Eq + Ord + 
 
 	// call this when we build on top of a given round in order to get a handle
 	// to updates to the latest round-state.
-	fn bridge_state(&mut self) -> ::bridge_state::LatterView<H> {
+	fn bridge_state(&mut self) -> ::bridge_state::LatterView<H, N> {
 		let (prior_view, latter_view) = ::bridge_state::bridge_state(self.votes.state());
 		if self.bridged_round_state.is_some() {
 			warn!(target: "afg", "Bridged state from round {} more than once.",
@@ -378,16 +391,18 @@ impl<H, E: Environment<H>> VotingRound<H, E> where H: Hash + Clone + Eq + Ord + 
 // be discarded from the working set.
 //
 // that point is when the round-estimate is finalized.
-struct BackgroundRound<H, E: Environment<H>>
-	where H: Hash + Clone + Eq + Ord + ::std::fmt::Debug
+struct BackgroundRound<H, N, E: Environment<H, N>> where
+	H: Hash + Clone + Eq + Ord + ::std::fmt::Debug,
+	N: Copy + BlockNumberOps + ::std::fmt::Debug,
 {
-	inner: VotingRound<H, E>,
+	inner: VotingRound<H, N, E>,
 	task: Option<task::Task>,
-	finalized_number: u32,
+	finalized_number: N,
 }
 
-impl<H, E: Environment<H>> BackgroundRound<H, E>
-	where H: Hash + Clone + Eq + Ord + ::std::fmt::Debug
+impl<H, N, E: Environment<H, N>> BackgroundRound<H, N, E> where
+	H: Hash + Clone + Eq + Ord + ::std::fmt::Debug,
+	N: Copy + BlockNumberOps + ::std::fmt::Debug,
 {
 	fn is_done(&self) -> bool {
 		// no need to listen on a round anymore once the estimate is finalized.
@@ -395,7 +410,7 @@ impl<H, E: Environment<H>> BackgroundRound<H, E>
 			.map_or(false, |x| (x.1) <= self.finalized_number)
 	}
 
-	fn update_finalized(&mut self, new_finalized: u32) {
+	fn update_finalized(&mut self, new_finalized: N) {
 		self.finalized_number = ::std::cmp::max(self.finalized_number, new_finalized);
 
 		// wake up the future to be polled if done.
@@ -407,8 +422,9 @@ impl<H, E: Environment<H>> BackgroundRound<H, E>
 	}
 }
 
-impl<H, E: Environment<H>> Future for BackgroundRound<H, E>
-	where H: Hash + Clone + Eq + Ord + ::std::fmt::Debug
+impl<H, N, E: Environment<H, N>> Future for BackgroundRound<H, N, E> where
+	H: Hash + Clone + Eq + Ord + ::std::fmt::Debug,
+	N: Copy + BlockNumberOps + ::std::fmt::Debug,
 {
 	type Item = u64; // round number
 	type Error = E::Error;
@@ -427,18 +443,21 @@ impl<H, E: Environment<H>> Future for BackgroundRound<H, E>
 
 /// A future that maintains and multiplexes between different rounds,
 /// and caches votes.
-pub struct Voter<H, E: Environment<H>>
-	where H: Hash + Clone + Eq + Ord + ::std::fmt::Debug
+pub struct Voter<H, N, E: Environment<H, N>> where
+	H: Hash + Clone + Eq + Ord + ::std::fmt::Debug,
+	N: Copy + BlockNumberOps + ::std::fmt::Debug,
 {
 	env: Arc<E>,
-	best_round: VotingRound<H, E>,
-	past_rounds: FuturesUnordered<BackgroundRound<H, E>>,
-	finalized_notifications: UnboundedReceiver<(H, u32)>,
-	last_finalized: (H, u32),
+	best_round: VotingRound<H, N, E>,
+	past_rounds: FuturesUnordered<BackgroundRound<H, N, E>>,
+	finalized_notifications: UnboundedReceiver<(H, N)>,
+	last_finalized: (H, N),
 }
 
-impl<H, E: Environment<H>> Voter<H, E>
-	where H: Hash + Clone + Eq + Ord + ::std::fmt::Debug
+impl<H, N, E: Environment<H, N>> Voter<H, N, E> where
+	H: Hash + Clone + Eq + Ord + ::std::fmt::Debug,
+	N: Copy + BlockNumberOps + ::std::fmt::Debug,
+
 {
 	/// Create new `Voter` tracker with given round number and base block.
 	///
@@ -448,8 +467,8 @@ impl<H, E: Environment<H>> Voter<H, E>
 	pub fn new(
 		env: Arc<E>,
 		last_round: u64,
-		last_round_state: RoundState<H>,
-		last_finalized: (H, u32),
+		last_round_state: RoundState<H, N>,
+		last_finalized: (H, N),
 	) -> Self {
 		let (finalized_sender, finalized_notifications) = mpsc::unbounded();
 
@@ -515,8 +534,9 @@ impl<H, E: Environment<H>> Voter<H, E>
 	}
 }
 
-impl<H, E: Environment<H>> Future for Voter<H, E>
-	where H: Hash + Clone + Eq + Ord + ::std::fmt::Debug
+impl<H, N, E: Environment<H, N>> Future for Voter<H, N, E> where
+	H: Hash + Clone + Eq + Ord + ::std::fmt::Debug,
+	N: Copy + BlockNumberOps + ::std::fmt::Debug,
 {
 	type Item = ();
 	type Error = E::Error;
@@ -565,7 +585,7 @@ impl<H, E: Environment<H>> Future for Voter<H, E>
 		let background = BackgroundRound {
 			inner: old_round,
 			task: None,
-			finalized_number: 0, // TODO: do that right.
+			finalized_number: N::zero(), // TODO: do that right.
 		};
 
 		self.past_rounds.push(background);
