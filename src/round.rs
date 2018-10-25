@@ -24,7 +24,7 @@ use std::ops::AddAssign;
 
 use bitfield::{Bitfield, Shared as BitfieldContext, LiveBitfield};
 
-use super::{Equivocation, Prevote, Precommit, Chain};
+use super::{Equivocation, Prevote, Precommit, Chain, BlockNumberOps};
 
 #[derive(Hash, Eq, PartialEq)]
 struct Address;
@@ -175,20 +175,20 @@ impl<Id: Hash + Eq + Clone, Vote: Clone + Eq, Signature: Clone> VoteTracker<Id, 
 /// State of the round.
 #[derive(PartialEq, Clone)]
 #[cfg_attr(feature = "derive-codec", derive(Encode, Decode))]
-pub struct State<H> {
+pub struct State<H, N> {
 	/// The prevote-GHOST block.
-	pub prevote_ghost: Option<(H, u32)>,
+	pub prevote_ghost: Option<(H, N)>,
 	/// The finalized block.
-	pub finalized: Option<(H, u32)>,
+	pub finalized: Option<(H, N)>,
 	/// The new round-estimate.
-	pub estimate: Option<(H, u32)>,
+	pub estimate: Option<(H, N)>,
 	/// Whether the round is completable.
 	pub completable: bool,
 }
 
-impl<H: Clone> State<H> {
+impl<H: Clone, N: Clone> State<H, N> {
 	// Genesis state.
-	pub fn genesis(genesis: (H, u32)) -> Self {
+	pub fn genesis(genesis: (H, N)) -> Self {
 		State {
 			prevote_ghost: Some(genesis.clone()),
 			finalized: Some(genesis.clone()),
@@ -199,39 +199,40 @@ impl<H: Clone> State<H> {
 }
 
 /// Parameters for starting a round.
-pub struct RoundParams<Id: Hash + Eq, H> {
+pub struct RoundParams<Id: Hash + Eq, H, N> {
 	/// The round number for votes.
 	pub round_number: u64,
 	/// Actors and weights in the round.
 	pub voters: HashMap<Id, u64>,
 	/// The base block to build on.
-	pub base: (H, u32),
+	pub base: (H, N),
 }
 
 /// Stores data for a round.
-pub struct Round<Id: Hash + Eq, H: Hash + Eq, Signature> {
-	graph: VoteGraph<H, VoteWeight<Id>>, // DAG of blocks which have been voted on.
-	prevote: VoteTracker<Id, Prevote<H>, Signature>, // tracks prevotes that have been counted
-	precommit: VoteTracker<Id, Precommit<H>, Signature>, // tracks precommits
+pub struct Round<Id: Hash + Eq, H: Hash + Eq, N, Signature> {
+	graph: VoteGraph<H, N, VoteWeight<Id>>, // DAG of blocks which have been voted on.
+	prevote: VoteTracker<Id, Prevote<H, N>, Signature>, // tracks prevotes that have been counted
+	precommit: VoteTracker<Id, Precommit<H, N>, Signature>, // tracks precommits
 	round_number: u64,
 	voters: HashMap<Id, u64>,
 	faulty_weight: u64,
 	total_weight: u64,
 	bitfield_context: BitfieldContext<Id>,
-	prevote_ghost: Option<(H, u32)>, // current memoized prevote-GHOST block
-	finalized: Option<(H, u32)>, // best finalized block in this round.
-	estimate: Option<(H, u32)>, // current memoized round-estimate
+	prevote_ghost: Option<(H, N)>, // current memoized prevote-GHOST block
+	finalized: Option<(H, N)>, // best finalized block in this round.
+	estimate: Option<(H, N)>, // current memoized round-estimate
 	completable: bool, // whether the round is completable
 }
 
-impl<Id, H, Signature> Round<Id, H, Signature> where
+impl<Id, H, N, Signature> Round<Id, H, N, Signature> where
 	Id: Hash + Clone + Eq + ::std::fmt::Debug,
 	H: Hash + Clone + Eq + Ord + ::std::fmt::Debug,
+	N: Copy + ::std::fmt::Debug + BlockNumberOps,
 	Signature: Eq + Clone,
 {
 	/// Create a new round accumulator for given round number and with given weight.
 	/// Not guaranteed to work correctly unless total_weight more than 3x larger than faulty_weight
-	pub fn new(round_params: RoundParams<Id, H>) -> Self {
+	pub fn new(round_params: RoundParams<Id, H, N>) -> Self {
 		let (base_hash, base_number) = round_params.base;
 		let total_weight: u64 = round_params.voters.values().cloned().sum();
 		let faulty_weight = total_weight.saturating_sub(1) / 3;
@@ -261,13 +262,13 @@ impl<Id, H, Signature> Round<Id, H, Signature> where
 	/// Import a prevote. Returns an equivocation proof if the vote is an equivocation.
 	///
 	/// Should not import the same prevote more than once.
-	pub fn import_prevote<C: Chain<H>>(
+	pub fn import_prevote<C: Chain<H, N>>(
 		&mut self,
 		chain: &C,
-		vote: Prevote<H>,
+		vote: Prevote<H, N>,
 		signer: Id,
 		signature: Signature,
-	) -> Result<Option<Equivocation<Id, Prevote<H>, Signature>>, ::Error> {
+	) -> Result<Option<Equivocation<Id, Prevote<H, N>, Signature>>, ::Error> {
 		let weight = match self.voters.get(&signer) {
 			Some(weight) => *weight,
 			None => return Ok(None),
@@ -325,13 +326,13 @@ impl<Id, H, Signature> Round<Id, H, Signature> where
 	/// equivocation.
 	///
 	/// Should not import the same precommit more than once.
-	pub fn import_precommit<C: Chain<H>>(
+	pub fn import_precommit<C: Chain<H, N>>(
 		&mut self,
 		chain: &C,
-		vote: Precommit<H>,
+		vote: Precommit<H, N>,
 		signer: Id,
 		signature: Signature,
-	) -> Result<Option<Equivocation<Id, Precommit<H>, Signature>>, ::Error> {
+	) -> Result<Option<Equivocation<Id, Precommit<H, N>, Signature>>, ::Error> {
 		let weight = match self.voters.get(&signer) {
 			Some(weight) => *weight,
 			None => return Ok(None),
@@ -380,7 +381,7 @@ impl<Id, H, Signature> Round<Id, H, Signature> where
 	}
 
 	// Get current
-	pub fn state(&self) -> State<H> {
+	pub fn state(&self) -> State<H, N> {
 		State {
 			prevote_ghost: self.prevote_ghost.clone(),
 			finalized: self.finalized.clone(),
@@ -470,12 +471,12 @@ impl<Id, H, Signature> Round<Id, H, Signature> where
 	///
 	/// Returns `None` when new new blocks could have been finalized in this round,
 	/// according to our estimate.
-	pub fn estimate(&self) -> Option<&(H, u32)> {
+	pub fn estimate(&self) -> Option<&(H, N)> {
 		self.estimate.as_ref()
 	}
 
 	/// Fetch the most recently finalized block.
-	pub fn finalized(&self) -> Option<&(H, u32)> {
+	pub fn finalized(&self) -> Option<&(H, N)> {
 		self.finalized.as_ref()
 	}
 
@@ -494,7 +495,7 @@ impl<Id, H, Signature> Round<Id, H, Signature> where
 	}
 
 	/// Return the round base.
-	pub fn base(&self) -> (H, u32) {
+	pub fn base(&self) -> (H, N) {
 		self.graph.base()
 	}
 }

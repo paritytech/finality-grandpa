@@ -92,7 +92,7 @@ impl DummyChain {
 	}
 }
 
-impl Chain<&'static str> for DummyChain {
+impl Chain<&'static str, u32> for DummyChain {
 	fn ancestry(&self, base: &'static str, mut block: &'static str) -> Result<Vec<&'static str>, Error> {
 		let mut ancestry = Vec::new();
 
@@ -170,7 +170,7 @@ impl Environment {
 	}
 }
 
-impl Chain<&'static str> for Environment {
+impl Chain<&'static str, u32> for Environment {
 	fn ancestry(&self, base: &'static str, block: &'static str) -> Result<Vec<&'static str>, Error> {
 		self.chain.lock().ancestry(base, block)
 	}
@@ -180,12 +180,12 @@ impl Chain<&'static str> for Environment {
 	}
 }
 
-impl ::voter::Environment<&'static str> for Environment {
+impl ::voter::Environment<&'static str, u32> for Environment {
 	type Timer = Box<Future<Item=(),Error=Error> + Send + 'static>;
 	type Id = Id;
 	type Signature = Signature;
-	type In = Box<Stream<Item=SignedMessage<&'static str, Signature, Id>,Error=Error> + Send + 'static>;
-	type Out = Box<Sink<SinkItem=Message<&'static str>,SinkError=Error> + Send + 'static>;
+	type In = Box<Stream<Item=SignedMessage<&'static str, u32, Signature, Id>,Error=Error> + Send + 'static>;
+	type Out = Box<Sink<SinkItem=Message<&'static str, u32>,SinkError=Error> + Send + 'static>;
 	type Error = Error;
 
 	fn round_data(&self, round: u64) -> RoundData<Self::Timer, Self::Id, Self::In, Self::Out> {
@@ -205,7 +205,7 @@ impl ::voter::Environment<&'static str> for Environment {
 		}
 	}
 
-	fn completed(&self, _round: u64, _state: RoundState<&'static str>) -> Result<(), Error> {
+	fn completed(&self, _round: u64, _state: RoundState<&'static str, u32>) -> Result<(), Error> {
 		Ok(())
 	}
 
@@ -220,21 +220,21 @@ impl ::voter::Environment<&'static str> for Environment {
 		Ok(())
 	}
 
-	fn prevote_equivocation(&self, round: u64, equivocation: Equivocation<Id, Prevote<&'static str>, Signature>) {
+	fn prevote_equivocation(&self, round: u64, equivocation: Equivocation<Id, Prevote<&'static str, u32>, Signature>) {
 		panic!("Encountered equivocation in round {}: {:?}", round, equivocation);
 	}
 
-	fn precommit_equivocation(&self, round: u64, equivocation: Equivocation<Id, Precommit<&'static str>, Signature>) {
+	fn precommit_equivocation(&self, round: u64, equivocation: Equivocation<Id, Precommit<&'static str, u32>, Signature>) {
 		panic!("Encountered equivocation in round {}: {:?}", round, equivocation);
 	}
 }
 
 // p2p network data for a round.
 struct RoundNetwork {
-	receiver: UnboundedReceiver<SignedMessage<&'static str, Signature, Id>>,
-	raw_sender: UnboundedSender<SignedMessage<&'static str, Signature, Id>>,
-	senders: Vec<UnboundedSender<SignedMessage<&'static str, Signature, Id>>>,
-	history: Vec<SignedMessage<&'static str, Signature, Id>>,
+	receiver: UnboundedReceiver<SignedMessage<&'static str, u32, Signature, Id>>,
+	raw_sender: UnboundedSender<SignedMessage<&'static str, u32, Signature, Id>>,
+	senders: Vec<UnboundedSender<SignedMessage<&'static str, u32, Signature, Id>>>,
+	history: Vec<SignedMessage<&'static str, u32, Signature, Id>>,
 }
 
 impl RoundNetwork {
@@ -250,8 +250,8 @@ impl RoundNetwork {
 
 	// add a node to the network for a round.
 	fn add_node(&mut self, id: Id) -> (
-		impl Stream<Item=SignedMessage<&'static str, Signature, Id>,Error=Error>,
-		impl Sink<SinkItem=Message<&'static str>,SinkError=Error>
+		impl Stream<Item=SignedMessage<&'static str, u32, Signature, Id>,Error=Error>,
+		impl Sink<SinkItem=Message<&'static str, u32>,SinkError=Error>
 	) {
 		let (tx, rx) = mpsc::unbounded();
 		let messages_out = self.raw_sender.clone()
@@ -309,8 +309,8 @@ pub struct Network {
 
 impl Network {
 	fn make_round_comms(&self, round_number: u64, node_id: Id) -> (
-		impl Stream<Item=SignedMessage<&'static str, Signature, Id>,Error=Error>,
-		impl Sink<SinkItem=Message<&'static str>,SinkError=Error>
+		impl Stream<Item=SignedMessage<&'static str, u32, Signature, Id>,Error=Error>,
+		impl Sink<SinkItem=Message<&'static str, u32>,SinkError=Error>
 	) {
 		let mut rounds = self.rounds.lock();
 		rounds.entry(round_number).or_insert_with(RoundNetwork::new).add_node(node_id)
