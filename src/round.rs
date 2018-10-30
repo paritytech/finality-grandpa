@@ -385,7 +385,7 @@ impl<Id, H, N, Signature> Round<Id, H, N, Signature> where
 		State {
 			prevote_ghost: self.prevote_ghost.clone(),
 			finalized: self.finalized.clone(),
-			estimate: self.finalized.clone(),
+			estimate: self.estimate.clone(),
 			completable: self.completable,
 		}
 	}
