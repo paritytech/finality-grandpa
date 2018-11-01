@@ -215,7 +215,7 @@ pub struct Round<Id: Hash + Eq, H: Hash + Eq, N, Signature> {
 	precommit: VoteTracker<Id, Precommit<H, N>, Signature>, // tracks precommits
 	round_number: u64,
 	voters: HashMap<Id, u64>,
-	faulty_weight: u64,
+	threshold_weight: u64,
 	total_weight: u64,
 	bitfield_context: BitfieldContext<Id>,
 	prevote_ghost: Option<(H, N)>, // current memoized prevote-GHOST block
@@ -235,12 +235,12 @@ impl<Id, H, N, Signature> Round<Id, H, N, Signature> where
 	pub fn new(round_params: RoundParams<Id, H, N>) -> Self {
 		let (base_hash, base_number) = round_params.base;
 		let total_weight: u64 = round_params.voters.values().cloned().sum();
-		let faulty_weight = total_weight.saturating_sub(1) / 3;
+		let threshold_weight = threshold(total_weight);
 		let n_validators = round_params.voters.len();
 
 		Round {
 			round_number: round_params.round_number,
-			faulty_weight: faulty_weight,
+			threshold_weight,
 			total_weight: total_weight,
 			voters: round_params.voters,
 			graph: VoteGraph::new(base_hash, base_number),
@@ -491,7 +491,7 @@ impl<Id, H, N, Signature> Round<Id, H, N, Signature> where
 
 	// Threshold number of weight for supermajority.
 	pub fn threshold(&self) -> u64 {
-		threshold(self.total_weight, self.faulty_weight)
+		self.threshold_weight
 	}
 
 	/// Return the round base.
@@ -500,10 +500,9 @@ impl<Id, H, N, Signature> Round<Id, H, N, Signature> where
 	}
 }
 
-fn threshold(total_weight: u64, faulty_weight: u64) -> u64 {
-	let mut double_supermajority = total_weight + faulty_weight + 1;
-	double_supermajority += double_supermajority & 1;
-	double_supermajority / 2
+fn threshold(total_weight: u64) -> u64 {
+	let faulty = total_weight.saturating_sub(1) / 3;
+	total_weight - faulty
 }
 
 #[cfg(test)]
@@ -524,10 +523,16 @@ mod tests {
 
 	#[test]
 	fn threshold_is_right() {
-		assert_eq!(threshold(10, 3), 7);
-		assert_eq!(threshold(100, 33), 67);
-		assert_eq!(threshold(101, 33), 68);
-		assert_eq!(threshold(102, 33), 68);
+		assert_eq!(threshold(3), 3);
+		assert_eq!(threshold(4), 3);
+		assert_eq!(threshold(5), 4);
+		assert_eq!(threshold(6), 5);
+		assert_eq!(threshold(7), 5);
+		assert_eq!(threshold(10), 7);
+		assert_eq!(threshold(100), 67);
+		assert_eq!(threshold(101), 68);
+		assert_eq!(threshold(102), 69);
+		assert_eq!(threshold(103), 69);
 	}
 
 	#[test]
