@@ -512,7 +512,7 @@ mod tests {
 
 	fn voters() -> HashMap<&'static str, u64> {
 		[
-			("Alice", 5),
+			("Alice", 4),
 			("Bob", 7),
 			("Eve", 3),
 		].iter().cloned().collect()
@@ -658,7 +658,7 @@ mod tests {
 		assert!(round.import_prevote(
 			&chain,
 			Prevote::new("FC", 10),
-			"Eve",
+			"Eve", // 3 on F, E
 			Signature("Eve-1"),
 		).unwrap().is_none());
 
@@ -668,14 +668,14 @@ mod tests {
 		assert!(round.import_prevote(
 			&chain,
 			Prevote::new("ED", 10),
-			"Eve",
+			"Eve", // still 3 on E
 			Signature("Eve-2"),
 		).unwrap().is_some());
 
 		assert!(round.import_prevote(
 			&chain,
 			Prevote::new("F", 7),
-			"Eve",
+			"Eve", // still 3 on F and E
 			Signature("Eve-2"),
 		).unwrap().is_some());
 
@@ -686,7 +686,7 @@ mod tests {
 		assert!(round.import_prevote(
 			&chain,
 			Prevote::new("FA", 8),
-			"Bob",
+			"Bob", // add 7 to FA and you get FA.
 			Signature("Bob-1"),
 		).unwrap().is_none());
 
