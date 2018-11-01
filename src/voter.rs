@@ -161,6 +161,7 @@ pub struct VotingRound<H, N, E: Environment<H, N>> where
 	last_round_state: ::bridge_state::LatterView<H, N>, // updates from prior round
 	primary_block: Option<(H, N)>, // a block posted by primary as a hint. TODO: implement
 	finalized_sender: UnboundedSender<(H, N)>,
+	//best_finalized: N,
 }
 
 impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
@@ -170,10 +171,32 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 	// Poll the round. When the round is completable and messages have been flushed, it will return `Async::Ready` but
 	// can continue to be polled.
 	fn poll(&mut self) -> Poll<(), E::Error> {
-		trace!(target: "afg", "Polling round {}", self.votes.number());
+		trace!(target: "afg", "Polling round {}, state = {:?}", self.votes.number(), self.votes.state());
 
 		let pre_state = self.votes.state();
+
+		self.process_incoming()?;
+		let last_round_state = self.last_round_state.get().clone();
+		self.prevote(&last_round_state)?;
+		self.precommit(&last_round_state)?;
+
+		try_ready!(self.outgoing.poll());
+		self.process_incoming()?; // in case we got a new message signed locally.
+
+		// broadcast finality notifications after attempting to cast votes
+		let post_state = self.votes.state();
+		self.notify(pre_state, post_state);
+
+		if self.votes.completable() {
+			Ok(Async::Ready(()))
+		} else {
+			Ok(Async::NotReady)
+		}
+	}
+
+	fn process_incoming(&mut self) -> Result<(), E::Error> {
 		while let Async::Ready(Some(incoming)) = self.incoming.poll()? {
+			trace!(target: "afg", "Got incoming message");
 			let SignedMessage { message, signature, id } = incoming;
 
 			match message {
@@ -190,20 +213,7 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 			};
 		}
 
-		let post_state = self.votes.state();
-		self.notify(pre_state, post_state);
-
-		let last_round_state = self.last_round_state.get().clone();
-		self.prevote(&last_round_state)?;
-		self.precommit(&last_round_state)?;
-
-		try_ready!(self.outgoing.poll());
-
-		if self.votes.completable() {
-			Ok(Async::Ready(()))
-		} else {
-			Ok(Async::NotReady)
-		}
+		Ok(())
 	}
 
 	fn prevote(&mut self, last_round_state: &RoundState<H, N>) -> Result<(), E::Error> {
@@ -512,11 +522,16 @@ impl<H, N, E: Environment<H, N>> Voter<H, N, E> where
 	}
 
 	fn prune_background(&mut self) -> Result<(), E::Error> {
+		// Do work on all rounds, pumping out any that are complete.
+		while let Async::Ready(Some(_)) = self.past_rounds.poll()? { }
+
 		while let Async::Ready(res) = self.finalized_notifications.poll()
 			.expect("unbounded receivers do not have spurious errors; qed")
 		{
 			let (f_hash, f_num) = res.expect("one sender always kept alive in self.best_round; qed");
 
+			// have the task check if it should be pruned.
+			// if so, this future will be re-polled
 			for bg in self.past_rounds.iter_mut() {
 				bg.update_finalized(f_num);
 			}
@@ -528,8 +543,6 @@ impl<H, N, E: Environment<H, N>> Voter<H, N, E> where
 			}
 		}
 
-		// pump all completed rounds out.
-		while let Async::Ready(Some(_)) = self.past_rounds.poll()? { }
 		Ok(())
 	}
 }
