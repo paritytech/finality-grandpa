@@ -319,15 +319,15 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 			}
 		};
 
-		let best_chain = self.env.best_chain_containing(find_descendent_of);
-		debug_assert!(best_chain.is_some(), "Previously known block has disappeared from chain");
+		let best_chain = self.env.best_chain_containing(find_descendent_of.clone());
+		debug_assert!(best_chain.is_some(), "Previously known block {:?} has disappeared from chain", find_descendent_of);
 
 		let t = match best_chain {
 			Some(target) => target,
 			None => {
 				// If this block is considered unknown, something has gone wrong.
 				// log and handle, but skip casting a vote.
-				warn!(target: "afg", "Could not cast prevote: previously known block has disappeared");
+				warn!(target: "afg", "Could not cast prevote: previously known block {:?} has disappeared", find_descendent_of);
 				return Ok(None)
 			}
 		};

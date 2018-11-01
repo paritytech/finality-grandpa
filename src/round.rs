@@ -402,7 +402,7 @@ impl<Id, H, N, Signature> Round<Id, H, N, Signature> where
 		};
 
 		// anything new finalized? finalized blocks are those which have both
-		// 2/3+ prevote and prevote weight.
+		// 2/3+ prevote and precommit weight.
 		let threshold = self.threshold();
 		if self.precommit.current_weight >= threshold {
 			self.finalized = self.graph.find_ancestor(
