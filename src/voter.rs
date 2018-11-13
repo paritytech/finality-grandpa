@@ -109,6 +109,16 @@ enum State<T> {
 	Precommitted,
 }
 
+impl<T> std::fmt::Debug for State<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+		match self {
+			State::Start(..) => write!(f, "Start"),
+			State::Prevoted(_) => write!(f, "Prevoted"),
+			State::Precommitted => write!(f, "Precommitted"),
+		}
+    }
+}
+
 struct Buffered<S: Sink> {
 	inner: S,
 	buffer: VecDeque<S::SinkItem>,
@@ -185,7 +195,7 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 	// Poll the round. When the round is completable and messages have been flushed, it will return `Async::Ready` but
 	// can continue to be polled.
 	fn poll(&mut self) -> Poll<(), E::Error> {
-		trace!(target: "afg", "Polling round {}, state = {:?}", self.votes.number(), self.votes.state());
+		trace!(target: "afg", "Polling round {}, state = {:?}, step = {:?}", self.votes.number(), self.votes.state(), self.state);
 
 		let pre_state = self.votes.state();
 
