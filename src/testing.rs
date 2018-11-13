@@ -215,18 +215,7 @@ impl ::voter::Environment<&'static str, u32> for Environment {
 	}
 
 	fn committer_data(&self) -> (Self::CommitIn, Self::CommitOut) {
-		fn aux(id: Id, commits: &mut CommitNetwork) -> (
-			impl Stream<Item=(u64, SignedCommit<&'static str, u32, Signature, Id>),Error=Error>,
-			impl Sink<SinkItem=(u64, Commit<&'static str, u32, Signature, Id>),SinkError=Error>,
-		) {
-			commits.add_node(move |(round_number, commit)| (round_number, SignedCommit {
-				commit,
-				signature: Signature(id.0),
-				id: id,
-			}))
-		};
-
-		let (incoming, outgoing) = aux(self.local_id, &mut self.network.commits.lock());
+		let (incoming, outgoing) = self.network.commits_comms(self.local_id);
 		(Box::new(incoming), Box::new(outgoing))
 	}
 
@@ -346,6 +335,18 @@ impl Network {
 				signature: Signature(node_id.0),
 				id: node_id,
 			})
+	}
+
+	pub fn commits_comms(&self, node_id: Id) -> (
+		impl Stream<Item=(u64, SignedCommit<&'static str, u32, Signature, Id>),Error=Error>,
+		impl Sink<SinkItem=(u64, Commit<&'static str, u32, Signature, Id>),SinkError=Error>
+	) {
+		let mut commits = self.commits.lock();
+		commits.add_node(move |(round_number, commit)| (round_number, SignedCommit {
+			commit,
+			signature: Signature(node_id.0),
+			id: node_id,
+		}))
 	}
 }
 

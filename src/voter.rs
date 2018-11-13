@@ -893,4 +893,40 @@ mod tests {
 			::futures::future::join_all(finalized_streams).map(|_| signal.fire())
 		})).unwrap();
 	}
+
+	#[test]
+	fn broadcast_commits() {
+		let local_id = Id(5);
+		let voters = {
+			let mut map = HashMap::new();
+			map.insert(local_id, 100);
+			map
+		};
+
+		let (network, routing_task) = testing::make_network();
+		let (commits, _) = network.commits_comms(Id(42));
+
+		let (signal, exit) = ::exit_future::signal();
+
+		let env = Arc::new(Environment::new(voters, network, local_id));
+		current_thread::block_on_all(::futures::future::lazy(move || {
+			// initialize chain
+			let last_finalized = env.with_chain(|chain| {
+				chain.push_blocks(GENESIS_HASH, &["A", "B", "C", "D", "E"]);
+				chain.last_finalized()
+			});
+
+			let last_round_state = RoundState::genesis((GENESIS_HASH, 1));
+
+			// run voter in background. scheduling it to shut down at the end.
+			let voter = Voter::new(env.clone(), 0, last_round_state, last_finalized);
+			::tokio::spawn(exit.clone()
+				.until(voter.map_err(|_| panic!("Error voting"))).map(|_| ()));
+
+			::tokio::spawn(exit.until(routing_task).map(|_| ()));
+
+			// wait for the node to broadcast a commit message
+			commits.take(1).for_each(|_| Ok(())).map(|_| signal.fire())
+		})).unwrap();
+	}
 }
