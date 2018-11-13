@@ -821,6 +821,8 @@ mod tests {
 		};
 
 		let (network, routing_task) = testing::make_network();
+		let (signal, exit) = ::exit_future::signal();
+
 		let env = Arc::new(Environment::new(voters, network, local_id));
 		current_thread::block_on_all(::futures::future::lazy(move || {
 			// initialize chain
@@ -833,7 +835,6 @@ mod tests {
 
 			// run voter in background. scheduling it to shut down at the end.
 			let finalized = env.finalized_stream();
-			let (_signal, exit) = ::exit_future::signal();
 			let voter = Voter::new(env.clone(), 0, last_round_state, last_finalized);
 			::tokio::spawn(exit.clone()
 				.until(voter.map_err(|_| panic!("Error voting"))).map(|_| ()));
@@ -844,6 +845,7 @@ mod tests {
 			finalized
 				.take_while(|&(_, n)| Ok(n < 6))
 				.for_each(|_| Ok(()))
+				.map(|_| signal.fire())
 		})).unwrap();
 	}
 
@@ -859,8 +861,9 @@ mod tests {
 		};
 
 		let (network, routing_task) = testing::make_network();
+		let (signal, exit) = ::exit_future::signal();
+
 		current_thread::block_on_all(::futures::future::lazy(move || {
-			let (_signal, exit) = ::exit_future::signal();
 			::tokio::spawn(exit.clone().until(routing_task).map(|_| ()));
 
 			// 3 voters offline.
@@ -887,7 +890,7 @@ mod tests {
 					.for_each(|_| Ok(()))
 			});
 
-			::futures::future::join_all(finalized_streams)
+			::futures::future::join_all(finalized_streams).map(|_| signal.fire())
 		})).unwrap();
 	}
 }
