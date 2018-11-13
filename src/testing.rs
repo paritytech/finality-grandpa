@@ -18,6 +18,7 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::{Instant, Duration};
 
 use round::State as RoundState;
 use voter::RoundData;
@@ -25,7 +26,7 @@ use tokio::timer::Delay;
 use parking_lot::Mutex;
 use futures::prelude::*;
 use futures::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
-use super::{Chain, Error, Equivocation, Message, Prevote, Precommit, SignedMessage};
+use super::{Chain, Commit, Error, Equivocation, Message, Prevote, Precommit, SignedCommit, SignedMessage};
 
 pub const GENESIS_HASH: &str = "genesis";
 const NULL_HASH: &str = "NULL";
@@ -186,10 +187,11 @@ impl ::voter::Environment<&'static str, u32> for Environment {
 	type Signature = Signature;
 	type In = Box<Stream<Item=SignedMessage<&'static str, u32, Signature, Id>,Error=Error> + Send + 'static>;
 	type Out = Box<Sink<SinkItem=Message<&'static str, u32>,SinkError=Error> + Send + 'static>;
+	type CommitIn = Box<Stream<Item=(u64, SignedCommit<&'static str, u32, Signature, Id>), Error=Error> + Send + 'static>;
+	type CommitOut = Box<Sink<SinkItem=(u64, Commit<&'static str, u32, Signature, Id>), SinkError=Error> + Send + 'static>;
 	type Error = Error;
 
 	fn round_data(&self, round: u64) -> RoundData<Self::Timer, Self::Id, Self::In, Self::Out> {
-		use std::time::{Instant, Duration};
 		const GOSSIP_DURATION: Duration = Duration::from_millis(500);
 
 		let now = Instant::now();
@@ -203,6 +205,29 @@ impl ::voter::Environment<&'static str, u32> for Environment {
 			incoming: Box::new(incoming),
 			outgoing: Box::new(outgoing),
 		}
+	}
+
+	fn round_commit_timer(&self) -> Self::Timer {
+		const COMMIT_DELAY: Duration = Duration::from_millis(100);
+
+		let now = Instant::now();
+		Box::new(Delay::new(now + COMMIT_DELAY).map_err(|_| panic!("Timer failed")))
+	}
+
+	fn committer_data(&self) -> (Self::CommitIn, Self::CommitOut) {
+		fn aux(id: Id, commits: &mut CommitNetwork) -> (
+			impl Stream<Item=(u64, SignedCommit<&'static str, u32, Signature, Id>),Error=Error>,
+			impl Sink<SinkItem=(u64, Commit<&'static str, u32, Signature, Id>),SinkError=Error>,
+		) {
+			commits.add_node(move |(round_number, commit)| (round_number, SignedCommit {
+				commit,
+				signature: Signature(id.0),
+				id: id,
+			}))
+		};
+
+		let (incoming, outgoing) = aux(self.local_id, &mut self.network.commits.lock());
+		(Box::new(incoming), Box::new(outgoing))
 	}
 
 	fn completed(&self, _round: u64, _state: RoundState<&'static str, u32>) -> Result<(), Error> {
@@ -230,17 +255,17 @@ impl ::voter::Environment<&'static str, u32> for Environment {
 }
 
 // p2p network data for a round.
-struct RoundNetwork {
-	receiver: UnboundedReceiver<SignedMessage<&'static str, u32, Signature, Id>>,
-	raw_sender: UnboundedSender<SignedMessage<&'static str, u32, Signature, Id>>,
-	senders: Vec<UnboundedSender<SignedMessage<&'static str, u32, Signature, Id>>>,
-	history: Vec<SignedMessage<&'static str, u32, Signature, Id>>,
+struct BroadcastNetwork<M> {
+	receiver: UnboundedReceiver<M>,
+	raw_sender: UnboundedSender<M>,
+	senders: Vec<UnboundedSender<M>>,
+	history: Vec<M>,
 }
 
-impl RoundNetwork {
+impl<M: Clone> BroadcastNetwork<M> {
 	fn new() -> Self {
 		let (tx, rx) = mpsc::unbounded();
-		RoundNetwork {
+		BroadcastNetwork {
 			receiver: rx,
 			raw_sender: tx,
 			senders: Vec::new(),
@@ -249,18 +274,14 @@ impl RoundNetwork {
 	}
 
 	// add a node to the network for a round.
-	fn add_node(&mut self, id: Id) -> (
-		impl Stream<Item=SignedMessage<&'static str, u32, Signature, Id>,Error=Error>,
-		impl Sink<SinkItem=Message<&'static str, u32>,SinkError=Error>
+	fn add_node<N, F: Fn(N) -> M>(&mut self, f: F) -> (
+		impl Stream<Item=M,Error=Error>,
+		impl Sink<SinkItem=N,SinkError=Error>
 	) {
 		let (tx, rx) = mpsc::unbounded();
 		let messages_out = self.raw_sender.clone()
 			.sink_map_err(|e| panic!("Error sending messages: {:?}", e))
-			.with(move |message| Ok(SignedMessage {
-				message,
-				signature: Signature(id.0),
-				id: id,
-			}));
+			.with(move |message| Ok(f(message)));
 
 		// get history to the node.
 		for prior_message in self.history.iter().cloned() {
@@ -294,17 +315,22 @@ impl RoundNetwork {
 /// Give the network future to node environments and spawn the routing task
 /// to run.
 pub fn make_network() -> (Network, NetworkRouting) {
+	let commits = Arc::new(Mutex::new(CommitNetwork::new()));
 	let rounds = Arc::new(Mutex::new(HashMap::new()));
 	(
-		Network { rounds: rounds.clone() },
-		NetworkRouting { rounds }
+		Network { commits: commits.clone(), rounds: rounds.clone() },
+		NetworkRouting { commits, rounds }
 	)
 }
+
+type RoundNetwork = BroadcastNetwork<SignedMessage<&'static str, u32, Signature, Id>>;
+type CommitNetwork = BroadcastNetwork<(u64, SignedCommit<&'static str, u32, Signature, Id>)>;
 
 /// A test network. Instantiate this with `make_network`,
 #[derive(Clone)]
 pub struct Network {
 	rounds: Arc<Mutex<HashMap<u64, RoundNetwork>>>,
+	commits: Arc<Mutex<CommitNetwork>>,
 }
 
 impl Network {
@@ -313,13 +339,20 @@ impl Network {
 		impl Sink<SinkItem=Message<&'static str, u32>,SinkError=Error>
 	) {
 		let mut rounds = self.rounds.lock();
-		rounds.entry(round_number).or_insert_with(RoundNetwork::new).add_node(node_id)
+		rounds.entry(round_number)
+			.or_insert_with(RoundNetwork::new)
+			.add_node(move |message| SignedMessage {
+				message,
+				signature: Signature(node_id.0),
+				id: node_id,
+			})
 	}
 }
 
 /// the network routing task.
 pub struct NetworkRouting {
 	rounds: Arc<Mutex<HashMap<u64, RoundNetwork>>>,
+	commits: Arc<Mutex<CommitNetwork>>,
 }
 
 impl Future for NetworkRouting {
@@ -332,6 +365,9 @@ impl Future for NetworkRouting {
 			Ok(Async::Ready(())) | Err(()) => false,
 			Ok(Async::NotReady) => true,
 		});
+
+		let mut commits = self.commits.lock();
+		let _ = commits.route();
 
 		Ok(Async::NotReady)
 	}

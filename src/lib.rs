@@ -201,6 +201,39 @@ impl<H, N: Copy, S, Id> SignedMessage<H, N, S, Id> {
 	}
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "derive-codec", derive(Encode, Decode))]
+pub struct Commit<H, N, S, Id> {
+	/// The target block's hash.
+	pub target_hash: H,
+	/// The target block's number
+	pub target_number: N,
+	/// Precommits for target block or any block after it that justify this commit.
+	pub justification: Vec<SignedPrecommit<H, N, S, Id>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "derive-codec", derive(Encode, Decode))]
+pub struct SignedPrecommit<H, N, S, Id> {
+	/// The precommit message which has been signed.
+	pub precommit: Precommit<H, N>,
+	/// The signature on the message.
+	pub signature: S,
+	/// The Id of the signer.
+	pub id: Id,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "derive-codec", derive(Encode, Decode))]
+pub struct SignedCommit<H, N, S, Id> {
+	/// The commit message which has been signed.
+	pub commit: Commit<H, N, S, Id>,
+	/// The signature on the message.
+	pub signature: S,
+	/// The Id of the signer.
+	pub id: Id,
+}
+
 #[cfg(test)]
 mod tests {
 	#[cfg(feature = "derive-codec")]

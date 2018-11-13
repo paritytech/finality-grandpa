@@ -667,6 +667,7 @@ mod tests {
 			Precommit::new("FC", 10),
 			"Alice",
 			Signature("Alice"),
+			false,
 		).unwrap();
 
 		round.import_precommit(
@@ -674,6 +675,7 @@ mod tests {
 			Precommit::new("ED", 10),
 			"Bob",
 			Signature("Bob"),
+			false,
 		).unwrap();
 
 		assert_eq!(round.finalized, None);
@@ -709,6 +711,7 @@ mod tests {
 			Precommit::new("EA", 7),
 			"Eve",
 			Signature("Eve"),
+			false,
 		).unwrap();
 
 		assert_eq!(round.finalized, Some(("EA", 7)));
