@@ -765,7 +765,7 @@ impl<H, N, E: Environment<H, N>> Future for Voter<H, N, E> where
 
 		self.env.completed(self.best_round.votes.number(), self.best_round.votes.state())?;
 
-		let old_number = self.best_round.votes.number() + 1;
+		let old_number = self.best_round.votes.number();
 		let next_number = old_number + 1;
 		let next_round_data = self.env.round_data(next_number);
 
