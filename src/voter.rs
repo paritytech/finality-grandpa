@@ -573,23 +573,20 @@ impl<H, N, E: Environment<H, N>> RoundCommitter<H, N, E> where
 
 		let voting_round = self.voting_round.lock();
 		let commit = || -> Option<Commit<H, N, E::Signature, E::Id>> {
-			if let Some((target_hash, target_number)) = voting_round.votes.finalized().cloned() {
-				let justification = voting_round.votes.valid_precommits().map(|(id, precommit, signature)| {
-					SignedPrecommit {
-						precommit: precommit.clone(),
-						signature: signature.clone(),
-						id: id.clone(),
-					}
-				}).collect();
+			let (target_hash, target_number) = voting_round.votes.finalized().cloned()?;
+			let justification = voting_round.votes.valid_precommits().map(|(id, precommit, signature)| {
+				SignedPrecommit {
+					precommit: precommit.clone(),
+					signature: signature.clone(),
+					id: id.clone(),
+				}
+			}).collect();
 
-				return Some(Commit {
-					target_hash,
-					target_number,
-					justification,
-				});
-			}
-
-			None
+			Some(Commit {
+				target_hash,
+				target_number,
+				justification,
+			})
 		};
 
 		match (self.last_commit.take(), voting_round.votes.finalized()) {
