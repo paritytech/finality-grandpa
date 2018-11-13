@@ -73,7 +73,7 @@ enum VoteMultiplicity<Vote, Signature> {
 	EquivocatedMany(Vec<(Vote, Signature)>),
 }
 
-impl<Vote, Signature> VoteMultiplicity<Vote, Signature> {
+impl<Vote: Eq, Signature: Eq> VoteMultiplicity<Vote, Signature> {
 	fn update_graph<Id, F, G>(
 		&self,
 		weight: u64,
@@ -121,6 +121,20 @@ impl<Vote, Signature> VoteMultiplicity<Vote, Signature> {
 			}
 		}
 	}
+
+	fn contains(&self, vote: &Vote, signature: &Signature) -> bool {
+		match *self {
+			VoteMultiplicity::Single(ref v, ref s) =>
+				v == vote && s == signature,
+			VoteMultiplicity::Equivocated((ref v1, ref s1), (ref v2, ref s2)) => {
+				v1 == vote && s1 == signature ||
+					v2 == vote && s2 == signature
+			},
+			VoteMultiplicity::EquivocatedMany(ref v) => {
+				v.iter().any(|(ref v, ref s)| v == vote && s == signature)
+			},
+		}
+	}
 }
 
 struct VoteTracker<Id: Hash + Eq, Vote, Signature> {
@@ -128,7 +142,7 @@ struct VoteTracker<Id: Hash + Eq, Vote, Signature> {
 	current_weight: u64,
 }
 
-impl<Id: Hash + Eq + Clone, Vote: Clone + Eq, Signature: Clone> VoteTracker<Id, Vote, Signature> {
+impl<Id: Hash + Eq + Clone, Vote: Clone + Eq, Signature: Clone + Eq> VoteTracker<Id, Vote, Signature> {
 	fn new() -> Self {
 		VoteTracker {
 			votes: HashMap::new(),
@@ -169,6 +183,48 @@ impl<Id: Hash + Eq + Clone, Vote: Clone + Eq, Signature: Clone> VoteTracker<Id, 
 				&*occupied.into_mut()
 			}
 		}
+	}
+
+	fn maybe_add_vote(&mut self, id: Id, vote: Vote, signature: Signature, weight: u64)
+		-> Option<&VoteMultiplicity<Vote, Signature>>
+	{
+		match self.votes.entry(id) {
+			Entry::Vacant(vacant) => {
+				self.current_weight += weight;
+				return Some(&*vacant.insert(VoteMultiplicity::Single(vote, signature)));
+			}
+			Entry::Occupied(mut occupied) => {
+				if occupied.get().contains(&vote, &signature) {
+					return None;
+				}
+
+				let new_val = match *occupied.get_mut() {
+					VoteMultiplicity::Single(ref v, ref s) =>
+						Some(VoteMultiplicity::Equivocated((v.clone(), s.clone()), (vote, signature))),
+					VoteMultiplicity::Equivocated(ref a, ref b) =>
+						Some(VoteMultiplicity::EquivocatedMany(vec![a.clone(), b.clone(), (vote, signature)])),
+					VoteMultiplicity::EquivocatedMany(ref mut v) => {
+						v.push((vote, signature));
+						None
+					}
+				};
+
+				if let Some(new_val) = new_val {
+					*occupied.get_mut() = new_val;
+				}
+
+				Some(&*occupied.into_mut())
+			}
+		}
+	}
+
+	fn valid_votes<'a>(&'a self) -> impl Iterator<Item=(Id, Vote, Signature)> + 'a {
+		self.votes.iter().filter_map(|(id, vote)| {
+			match vote {
+				VoteMultiplicity::Single(v, s) => Some((id.clone(), v.clone(), s.clone())),
+				_ => None,
+			}
+		})
 	}
 }
 
@@ -332,6 +388,7 @@ impl<Id, H, N, Signature> Round<Id, H, N, Signature> where
 		vote: Precommit<H, N>,
 		signer: Id,
 		signature: Signature,
+		maybe_duplicate: bool,
 	) -> Result<Option<Equivocation<Id, Precommit<H, N>, Signature>>, ::Error> {
 		let weight = match self.voters.get(&signer) {
 			Some(weight) => *weight,
@@ -341,7 +398,14 @@ impl<Id, H, N, Signature> Round<Id, H, N, Signature> where
 		let equivocation = {
 			let graph = &mut self.graph;
 			let bitfield_context = &self.bitfield_context;
-			let multiplicity = self.precommit.add_vote(signer.clone(), vote, signature, weight);
+			let multiplicity = if maybe_duplicate {
+				match self.precommit.maybe_add_vote(signer.clone(), vote, signature, weight) {
+					Some(m) => m,
+					_ => return Ok(None),
+				}
+			} else {
+				self.precommit.add_vote(signer.clone(), vote, signature, weight)
+			};
 			let round_number = self.round_number;
 
 			multiplicity.update_graph(
@@ -497,6 +561,14 @@ impl<Id, H, N, Signature> Round<Id, H, N, Signature> where
 	/// Return the round base.
 	pub fn base(&self) -> (H, N) {
 		self.graph.base()
+	}
+
+	pub fn weight(&self, signer: &Id) -> Option<u64> {
+		self.voters.get(signer).cloned()
+	}
+
+	pub fn valid_precommits<'a>(&'a self) -> impl Iterator<Item=(Id, Precommit<H, N>, Signature)> + 'a {
+		self.precommit.valid_votes()
 	}
 }
 
