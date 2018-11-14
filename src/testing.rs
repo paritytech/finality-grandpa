@@ -100,11 +100,13 @@ impl Chain<&'static str, u32> for DummyChain {
 		loop {
 			match self.inner.get(block) {
 				None => return Err(Error::NotDescendent),
-				Some(record) => { block = record.parent; }
+				Some(record) => {
+					if block == base { break }
+					block = record.parent;
+				}
 			}
 
 			if block == NULL_HASH { return Err(Error::NotDescendent) }
-			if block == base { break }
 
 			ancestry.push(block);
 		}
