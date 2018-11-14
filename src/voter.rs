@@ -71,11 +71,22 @@ pub trait Environment<H, N: BlockNumberOps>: Chain<H, N> {
 		Self::Out
 	>;
 
-	fn voters(&self, round: u64) -> &HashMap<Self::Id, u64>;
-
+	/// Produce the input and output streams used for the commit protocol.
+	///
+	/// The input stream should provide commits which correspond to known blocks
+	/// only (including all its precommits).
+	///
+	/// The input stream is also responsible for validating the signature data
+	/// in commit messages.
 	fn committer_data(&self) -> (Self::CommitIn, Self::CommitOut);
 
+	/// Return a timer that will be used to delay the broadcast of a commit
+	/// message. This delay should not be static to minimize the amount of
+	/// commit messages that are sent (e.g. random value in [0, 1] seconds).
 	fn round_commit_timer(&self) -> Self::Timer;
+
+	/// Return the voters and respective weights for a given round.
+	fn voters(&self, round: u64) -> &HashMap<Self::Id, u64>;
 
 	/// Note that a round was completed. This is called when a round has been
 	/// voted in. Should return an error when something fatal occurs.
@@ -481,7 +492,7 @@ impl<H, N, E: Environment<H, N>> Future for BackgroundRound<H, N, E> where
 	}
 }
 
-pub struct RoundCommitter<H, N, E: Environment<H, N>> where
+struct RoundCommitter<H, N, E: Environment<H, N>> where
 	H: Hash + Clone + Eq + Ord + ::std::fmt::Debug,
 	N: Copy + BlockNumberOps + ::std::fmt::Debug,
 {
@@ -569,7 +580,7 @@ impl<H, N, E: Environment<H, N>> RoundCommitter<H, N, E> where
 	}
 }
 
-pub struct Committer<H, N, E: Environment<H, N>> where
+struct Committer<H, N, E: Environment<H, N>> where
 	H: Hash + Clone + Eq + Ord + ::std::fmt::Debug,
 	N: Copy + BlockNumberOps + ::std::fmt::Debug,
 {

@@ -201,6 +201,7 @@ impl<H, N: Copy, S, Id> SignedMessage<H, N, S, Id> {
 	}
 }
 
+/// A commit message which is an aggregate of precommits.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "derive-codec", derive(Encode, Decode))]
 pub struct Commit<H, N, S, Id> {
@@ -212,6 +213,7 @@ pub struct Commit<H, N, S, Id> {
 	pub precommits: Vec<SignedPrecommit<H, N, S, Id>>,
 }
 
+/// A signed precommit message.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "derive-codec", derive(Encode, Decode))]
 pub struct SignedPrecommit<H, N, S, Id> {
@@ -223,6 +225,7 @@ pub struct SignedPrecommit<H, N, S, Id> {
 	pub id: Id,
 }
 
+/// A commit message with compact representation of authentication data.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "derive-codec", derive(Encode, Decode))]
 pub struct CompactCommit<H, N, S, Id> {

@@ -546,7 +546,7 @@ impl<Id, H, N, Signature> Round<Id, H, N, Signature> where
 		self.graph.base()
 	}
 
-	/// Return the round voters weights.
+	/// Return the round voters and weights.
 	pub fn voters(&self) -> &HashMap<Id, u64> {
 		&self.voters
 	}
