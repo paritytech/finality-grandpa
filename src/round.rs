@@ -157,35 +157,6 @@ impl<Id: Hash + Eq + Clone, Vote: Clone + Eq, Signature: Clone + Eq> VoteTracker
 	// since this struct doesn't track the round-number of votes, that must be set
 	// by the caller.
 	fn add_vote(&mut self, id: Id, vote: Vote, signature: Signature, weight: u64)
-		-> &VoteMultiplicity<Vote, Signature>
-	{
-		match self.votes.entry(id) {
-			Entry::Vacant(vacant) => {
-				self.current_weight += weight;
-				&*vacant.insert(VoteMultiplicity::Single(vote, signature))
-			}
-			Entry::Occupied(mut occupied) => {
-				let new_val = match *occupied.get_mut() {
-					VoteMultiplicity::Single(ref v, ref s) =>
-						Some(VoteMultiplicity::Equivocated((v.clone(), s.clone()), (vote, signature))),
-					VoteMultiplicity::Equivocated(ref a, ref b) =>
-						Some(VoteMultiplicity::EquivocatedMany(vec![a.clone(), b.clone(), (vote, signature)])),
-					VoteMultiplicity::EquivocatedMany(ref mut v) => {
-						v.push((vote, signature));
-						None
-					}
-				};
-
-				if let Some(new_val) = new_val {
-					*occupied.get_mut() = new_val;
-				}
-
-				&*occupied.into_mut()
-			}
-		}
-	}
-
-	fn maybe_add_vote(&mut self, id: Id, vote: Vote, signature: Signature, weight: u64)
 		-> Option<&VoteMultiplicity<Vote, Signature>>
 	{
 		match self.votes.entry(id) {
@@ -317,7 +288,7 @@ impl<Id, H, N, Signature> Round<Id, H, N, Signature> where
 
 	/// Import a prevote. Returns an equivocation proof if the vote is an equivocation.
 	///
-	/// Should not import the same prevote more than once.
+	/// Ignores duplicate prevotes (not equivocations).
 	pub fn import_prevote<C: Chain<H, N>>(
 		&mut self,
 		chain: &C,
@@ -333,7 +304,10 @@ impl<Id, H, N, Signature> Round<Id, H, N, Signature> where
 		let equivocation = {
 			let graph = &mut self.graph;
 			let bitfield_context = &self.bitfield_context;
-			let multiplicity = self.prevote.add_vote(signer.clone(), vote, signature, weight);
+			let multiplicity = match self.prevote.add_vote(signer.clone(), vote, signature, weight) {
+				Some(m) => m,
+				_ => return Ok(None),
+			};
 			let round_number = self.round_number;
 
 			multiplicity.update_graph(
@@ -381,14 +355,13 @@ impl<Id, H, N, Signature> Round<Id, H, N, Signature> where
 	/// Import a precommit. Returns an equivocation proof if the vote is an
 	/// equivocation.
 	///
-	/// Should not import the same precommit more than once.
+	/// Ignores duplicate precommits (not equivocations).
 	pub fn import_precommit<C: Chain<H, N>>(
 		&mut self,
 		chain: &C,
 		vote: Precommit<H, N>,
 		signer: Id,
 		signature: Signature,
-		maybe_duplicate: bool,
 	) -> Result<Option<Equivocation<Id, Precommit<H, N>, Signature>>, ::Error> {
 		let weight = match self.voters.get(&signer) {
 			Some(weight) => *weight,
@@ -398,13 +371,9 @@ impl<Id, H, N, Signature> Round<Id, H, N, Signature> where
 		let equivocation = {
 			let graph = &mut self.graph;
 			let bitfield_context = &self.bitfield_context;
-			let multiplicity = if maybe_duplicate {
-				match self.precommit.maybe_add_vote(signer.clone(), vote, signature, weight) {
-					Some(m) => m,
-					_ => return Ok(None),
-				}
-			} else {
-				self.precommit.add_vote(signer.clone(), vote, signature, weight)
+			let multiplicity = match self.precommit.add_vote(signer.clone(), vote, signature, weight) {
+				Some(m) => m,
+				_ => return Ok(None),
 			};
 			let round_number = self.round_number;
 
@@ -667,7 +636,6 @@ mod tests {
 			Precommit::new("FC", 10),
 			"Alice",
 			Signature("Alice"),
-			false,
 		).unwrap();
 
 		round.import_precommit(
@@ -675,7 +643,6 @@ mod tests {
 			Precommit::new("ED", 10),
 			"Bob",
 			Signature("Bob"),
-			false,
 		).unwrap();
 
 		assert_eq!(round.finalized, None);
@@ -711,7 +678,6 @@ mod tests {
 			Precommit::new("EA", 7),
 			"Eve",
 			Signature("Eve"),
-			false,
 		).unwrap();
 
 		assert_eq!(round.finalized, Some(("EA", 7)));

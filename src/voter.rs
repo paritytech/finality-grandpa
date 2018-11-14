@@ -230,7 +230,7 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 					}
 				}
 				Message::Precommit(precommit) => {
-					if let Some(e) = self.votes.import_precommit(&*self.env, precommit, id, signature, false)? {
+					if let Some(e) = self.votes.import_precommit(&*self.env, precommit, id, signature)? {
 						self.env.precommit_equivocation(self.votes.number(), e);
 					}
 				}
@@ -529,7 +529,7 @@ impl<H, N, E: Environment<H, N>> RoundCommitter<H, N, E> where
 		}
 
 		for SignedPrecommit { precommit, signature, id } in commit.justification.clone() {
-			if let Some(e) = voting_round.votes.import_precommit(env, precommit, id, signature, true)? {
+			if let Some(e) = voting_round.votes.import_precommit(env, precommit, id, signature)? {
 				env.precommit_equivocation(voting_round.votes.number(), e);
 			}
 		}
