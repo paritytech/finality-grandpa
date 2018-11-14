@@ -24,7 +24,7 @@ use std::ops::AddAssign;
 
 use bitfield::{Bitfield, Shared as BitfieldContext, LiveBitfield};
 
-use super::{Equivocation, Prevote, Precommit, Chain, BlockNumberOps};
+use super::{Equivocation, Prevote, Precommit, Chain, BlockNumberOps, threshold};
 
 #[derive(Hash, Eq, PartialEq)]
 struct Address;
@@ -555,11 +555,6 @@ impl<Id, H, N, Signature> Round<Id, H, N, Signature> where
 	pub fn precommits(&self) -> Vec<(Id, Precommit<H, N>, Signature)> {
 		self.precommit.votes()
 	}
-}
-
-fn threshold(total_weight: u64) -> u64 {
-	let faulty = total_weight.saturating_sub(1) / 3;
-	total_weight - faulty
 }
 
 #[cfg(test)]

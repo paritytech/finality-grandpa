@@ -32,7 +32,7 @@ use parking_lot::Mutex;
 
 use round::{Round, State as RoundState};
 use vote_graph::VoteGraph;
-use ::{Chain, Commit, CompactCommit, Equivocation, Message, Prevote, Precommit, SignedMessage, SignedPrecommit, BlockNumberOps};
+use ::{Chain, Commit, CompactCommit, Equivocation, Message, Prevote, Precommit, SignedMessage, SignedPrecommit, BlockNumberOps, threshold};
 
 /// Necessary environment for a voter.
 ///
@@ -70,6 +70,8 @@ pub trait Environment<H, N: BlockNumberOps>: Chain<H, N> {
 		Self::In,
 		Self::Out
 	>;
+
+	fn voters(&self, round: u64) -> &HashMap<Self::Id, u64>;
 
 	fn committer_data(&self) -> (Self::CommitIn, Self::CommitOut);
 
@@ -604,10 +606,25 @@ impl<H, N, E: Environment<H, N>> Committer<H, N, E> where
 				commit.target_hash,
 			);
 
+			// if the commit is for a running round dispatch to round committer
 			if let Some(round) = self.rounds.get_mut(&round_number) {
 				if !round.import_commit(&*self.env, commit.into())? {
 					trace!(target: "afg", "Ignoring invalid commit");
 				};
+			} else {
+				// otherwise validate the commit and signal the finalized block
+				// (if any) to the environment
+				let voters = self.env.voters(round_number);
+				let threshold = threshold(voters.values().sum());
+
+				if let Some((finalized_hash, finalized_number)) = validate_commit(
+					&commit.into(),
+					voters,
+					threshold,
+					&*self.env,
+				)? {
+					self.env.finalize_block(finalized_hash, finalized_number)?;
+				}
 			}
 		}
 
