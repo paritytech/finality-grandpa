@@ -110,13 +110,13 @@ enum State<T> {
 }
 
 impl<T> std::fmt::Debug for State<T> {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+	fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
 		match self {
 			State::Start(..) => write!(f, "Start"),
 			State::Prevoted(_) => write!(f, "Prevoted"),
 			State::Precommitted => write!(f, "Precommitted"),
 		}
-    }
+	}
 }
 
 struct Buffered<S: Sink> {
