@@ -604,8 +604,6 @@ impl<H, N, E: Environment<H, N>> Committer<H, N, E> where
 	}
 
 	fn process_incoming(&mut self) -> Result<(), E::Error> {
-		// TODO: import commits for rounds that aren't running, i.e. calculate
-		// `precommit_ghost` and finalize that
 		while let Async::Ready(Some(incoming)) = self.incoming.poll()? {
 			// NOTE: we assume the signature for the commit has been checked as
 			// well as all the internal signatures on each precommit
