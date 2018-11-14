@@ -31,6 +31,7 @@ use std::sync::Arc;
 use parking_lot::Mutex;
 
 use round::{Round, State as RoundState};
+use vote_graph::VoteGraph;
 use ::{Chain, Commit, Equivocation, Message, Prevote, Precommit, SignedCommit, SignedMessage, SignedPrecommit, BlockNumberOps};
 
 /// Necessary environment for a voter.
@@ -497,7 +498,7 @@ impl<H, N, E: Environment<H, N>> RoundCommitter<H, N, E> where
 	) -> Result<bool, E::Error> {
 		let mut voting_round = self.voting_round.lock();
 
-		// ignore commits for a lower block than we already finalized
+		// ignore commits for a block lower than we already finalized
 		if commit.target_number < voting_round.votes.finalized().map(|(_, n)| *n).unwrap_or(N::zero()) {
 			return Ok(true);
 		}
@@ -514,27 +515,43 @@ impl<H, N, E: Environment<H, N>> RoundCommitter<H, N, E> where
 			return Ok(false);
 		}
 
-		// check that the total vote weight of all precommits is higher than the threshold
-		let commit_weight = commit.justification.iter().fold(0, |total_weight, signed| {
-			total_weight + voting_round.votes.weight(&signed.id).unwrap_or(0)
-		});
-
-		if commit_weight < voting_round.votes.threshold() {
+		// check that the precommits don't include equivocations
+		let mut ids = HashSet::new();
+		if !commit.justification.iter().all(|signed| ids.insert(signed.id.clone())) {
 			return Ok(false);
 		}
 
-		// import all precommits
+		// check all precommits are from authorities
+		if !commit.justification.iter().all(|signed| voting_round.votes.is_voter(&signed.id)) {
+			return Ok(false);
+		}
+
+		// add all precommits to an empty vote graph with the commit target as the base
+		let mut vote_graph = VoteGraph::new(commit.target_hash.clone(), commit.target_number.clone());
+		for SignedPrecommit { precommit, id, .. } in commit.justification.iter() {
+			let weight = voting_round.votes.weight(id)
+				.expect("returns None if id is not a voter; previously verified that all ids are voters; qed");
+			vote_graph.insert(precommit.target_hash.clone(), precommit.target_number.clone(), weight, env)?;
+		}
+
+		// find ghost using commit target as current best
+		let ghost = vote_graph.find_ghost(
+			Some((commit.target_hash.clone(), commit.target_number.clone())),
+			|w| *w >= voting_round.votes.threshold(),
+		);
+
+		// if a ghost is found then it must be equal or higher than the commit
+		// target, therefore the commit is valid
+		if ghost.is_none() {
+			return Ok(false);
+		}
+
+		// import all precommits into current round
 		for SignedPrecommit { precommit, signature, id } in commit.justification.clone() {
 			if let Some(e) = voting_round.votes.import_precommit(env, precommit, id, signature)? {
 				env.precommit_equivocation(voting_round.votes.number(), e);
 			}
 		}
-
-		// TODO: is this right?
-		assert_eq!(
-			voting_round.votes.finalized(),
-			Some(&(commit.target_hash.clone(), commit.target_number.clone()))
-		);
 
 		self.last_commit = Some(commit);
 

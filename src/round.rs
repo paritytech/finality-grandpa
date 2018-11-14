@@ -549,6 +549,10 @@ impl<Id, H, N, Signature> Round<Id, H, N, Signature> where
 		self.voters.get(signer).cloned()
 	}
 
+	pub fn is_voter(&self, id: &Id) -> bool {
+		self.voters.contains_key(id)
+	}
+
 	pub fn precommits(&self) -> Vec<(Id, Precommit<H, N>, Signature)> {
 		self.precommit.votes()
 	}
