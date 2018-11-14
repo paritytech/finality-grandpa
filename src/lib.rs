@@ -223,17 +223,6 @@ pub struct SignedPrecommit<H, N, S, Id> {
 	pub id: Id,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-#[cfg_attr(feature = "derive-codec", derive(Encode, Decode))]
-pub struct SignedCommit<H, N, S, Id> {
-	/// The commit message which has been signed.
-	pub commit: Commit<H, N, S, Id>,
-	/// The signature on the message.
-	pub signature: S,
-	/// The Id of the signer.
-	pub id: Id,
-}
-
 #[cfg(test)]
 mod tests {
 	#[cfg(feature = "derive-codec")]

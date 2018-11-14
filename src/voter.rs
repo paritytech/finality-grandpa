@@ -32,7 +32,7 @@ use parking_lot::Mutex;
 
 use round::{Round, State as RoundState};
 use vote_graph::VoteGraph;
-use ::{Chain, Commit, Equivocation, Message, Prevote, Precommit, SignedCommit, SignedMessage, SignedPrecommit, BlockNumberOps};
+use ::{Chain, Commit, Equivocation, Message, Prevote, Precommit, SignedMessage, SignedPrecommit, BlockNumberOps};
 
 /// Necessary environment for a voter.
 ///
@@ -43,7 +43,7 @@ pub trait Environment<H, N: BlockNumberOps>: Chain<H, N> {
 	type Signature: Eq + Clone;
 	type In: Stream<Item=SignedMessage<H, N, Self::Signature, Self::Id>,Error=Self::Error>;
 	type Out: Sink<SinkItem=Message<H, N>,SinkError=Self::Error>;
-	type CommitIn: Stream<Item=(u64, SignedCommit<H, N, Self::Signature, Self::Id>), Error=Self::Error>;
+	type CommitIn: Stream<Item=(u64, Commit<H, N, Self::Signature, Self::Id>), Error=Self::Error>;
 	type CommitOut: Sink<SinkItem=(u64, Commit<H, N, Self::Signature, Self::Id>), SinkError=Self::Error>;
 	type Error: From<::Error>;
 
@@ -625,14 +625,15 @@ impl<H, N, E: Environment<H, N>> Committer<H, N, E> where
 	}
 
 	fn process_incoming(&mut self) -> Result<(), E::Error> {
+		// TODO: import commits for rounds that aren't running, i.e. calculate
+		// `precommit_ghost` and finalize that
 		while let Async::Ready(Some(incoming)) = self.incoming.poll()? {
 			// NOTE: we assume the signature for the commit has been checked as
 			// well as all the internal signatures on each precommit
-			let (round_number, SignedCommit { commit, id, .. }) = incoming;
+			let (round_number, commit) = incoming;
 
-			trace!(target: "afg", "Got commit for round_number: {:?}, from: {:?}, target_number: {:?}, target_hash: {:?}",
+			trace!(target: "afg", "Got commit for round_number {:?}: target_number: {:?}, target_hash: {:?}",
 				round_number,
-				id,
 				commit.target_number,
 				commit.target_hash,
 			);
@@ -955,7 +956,7 @@ mod tests {
 		};
 
 		let (network, routing_task) = testing::make_network();
-		let (commits, _) = network.make_commits_comms(Id(42));
+		let (commits, _) = network.make_commits_comms();
 
 		let (signal, exit) = ::exit_future::signal();
 
@@ -993,7 +994,7 @@ mod tests {
 		};
 
 		let (network, routing_task) = testing::make_network();
-		let (commits_stream, commits_sink) = network.make_commits_comms(test_id);
+		let (commits_stream, commits_sink) = network.make_commits_comms();
 		let (round_stream, round_sink) = network.make_round_comms(1, test_id);
 
 		let prevote = Message::Prevote(Prevote {
