@@ -139,7 +139,7 @@ impl Chain<&'static str, u32> for DummyChain {
 pub struct Id(pub u32);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Signature(u32);
+pub struct Signature(pub u32);
 
 pub struct Environment {
 	chain: Mutex<DummyChain>,
@@ -217,7 +217,7 @@ impl ::voter::Environment<&'static str, u32> for Environment {
 	}
 
 	fn committer_data(&self) -> (Self::CommitIn, Self::CommitOut) {
-		let (incoming, outgoing) = self.network.commits_comms(self.local_id);
+		let (incoming, outgoing) = self.network.make_commits_comms(self.local_id);
 		(Box::new(incoming), Box::new(outgoing))
 	}
 
@@ -325,7 +325,7 @@ pub struct Network {
 }
 
 impl Network {
-	fn make_round_comms(&self, round_number: u64, node_id: Id) -> (
+	pub fn make_round_comms(&self, round_number: u64, node_id: Id) -> (
 		impl Stream<Item=SignedMessage<&'static str, u32, Signature, Id>,Error=Error>,
 		impl Sink<SinkItem=Message<&'static str, u32>,SinkError=Error>
 	) {
@@ -339,7 +339,7 @@ impl Network {
 			})
 	}
 
-	pub fn commits_comms(&self, node_id: Id) -> (
+	pub fn make_commits_comms(&self, node_id: Id) -> (
 		impl Stream<Item=(u64, SignedCommit<&'static str, u32, Signature, Id>),Error=Error>,
 		impl Sink<SinkItem=(u64, Commit<&'static str, u32, Signature, Id>),SinkError=Error>
 	) {

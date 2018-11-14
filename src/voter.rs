@@ -817,9 +817,11 @@ impl<H, N, E: Environment<H, N>> Future for Voter<H, N, E> where
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use tokio::prelude::FutureExt;
 	use tokio::runtime::current_thread;
 	use testing::{self, GENESIS_HASH, Environment, Id};
 	use std::collections::HashMap;
+	use std::time::Duration;
 
 	#[test]
 	fn talking_to_myself() {
@@ -905,7 +907,7 @@ mod tests {
 	}
 
 	#[test]
-	fn broadcast_commits() {
+	fn broadcast_commit() {
 		let local_id = Id(5);
 		let voters = {
 			let mut map = HashMap::new();
@@ -914,7 +916,7 @@ mod tests {
 		};
 
 		let (network, routing_task) = testing::make_network();
-		let (commits, _) = network.commits_comms(Id(42));
+		let (commits, _) = network.make_commits_comms(Id(42));
 
 		let (signal, exit) = ::exit_future::signal();
 
@@ -937,6 +939,96 @@ mod tests {
 
 			// wait for the node to broadcast a commit message
 			commits.take(1).for_each(|_| Ok(())).map(|_| signal.fire())
+		})).unwrap();
+	}
+
+	#[test]
+	fn broadcast_commit_if_newer() {
+		let local_id = Id(5);
+		let test_id = Id(42);
+		let voters = {
+			let mut map = HashMap::new();
+			map.insert(local_id, 100);
+			map.insert(test_id, 201);
+			map
+		};
+
+		let (network, routing_task) = testing::make_network();
+		let (commits_stream, commits_sink) = network.make_commits_comms(test_id);
+		let (round_stream, round_sink) = network.make_round_comms(1, test_id);
+
+		let prevote = Message::Prevote(Prevote {
+			target_hash: "E",
+			target_number: 6,
+		});
+
+		let precommit = Message::Precommit(Precommit {
+			target_hash: "E",
+			target_number: 6,
+		});
+
+		let commit = (1, Commit {
+			target_hash: "E",
+			target_number: 6,
+			justification: vec![SignedPrecommit {
+				precommit: Precommit { target_hash: "E", target_number: 6 },
+				signature: testing::Signature(test_id.0),
+				id: test_id
+			}],
+		});
+
+		let (signal, exit) = ::exit_future::signal();
+
+		let env = Arc::new(Environment::new(voters, network, local_id));
+		current_thread::block_on_all(::futures::future::lazy(move || {
+			// initialize chain
+			let last_finalized = env.with_chain(|chain| {
+				chain.push_blocks(GENESIS_HASH, &["A", "B", "C", "D", "E"]);
+				chain.last_finalized()
+			});
+
+			let last_round_state = RoundState::genesis((GENESIS_HASH, 1));
+
+			// run voter in background. scheduling it to shut down at the end.
+			let voter = Voter::new(env.clone(), 0, last_round_state, last_finalized);
+			::tokio::spawn(exit.clone()
+				.until(voter.map_err(|e| panic!("Error voting: {:?}", e))).map(|_| ()));
+
+			::tokio::spawn(exit.clone().until(routing_task).map(|_| ()));
+
+			::tokio::spawn(exit.until(::futures::future::lazy(|| {
+				round_stream.into_future().map_err(|(e, _)| e)
+					.and_then(|(value, stream)| { // wait for a prevote
+						assert!(match value {
+							Some(SignedMessage { message: Message::Prevote(_), id: Id(5), .. }) => true,
+							_ => false,
+						});
+						let votes = vec![prevote, precommit].into_iter().map(Result::Ok);
+						round_sink.send_all(futures::stream::iter_result(votes)).map(|_| stream) // send our prevote
+					})
+					.and_then(|stream| {
+						stream.take_while(|value| match value { // wait for a precommit
+							SignedMessage { message: Message::Precommit(_), id: Id(5), .. } => Ok(false),
+							_ => Ok(true),
+						}).for_each(|_| Ok(()))
+					})
+					.and_then(|_| {
+						commits_sink.send(commit) // send our commit
+					})
+					.map_err(|_| ())
+			})).map(|_| ()));
+
+			// wait for the first commit (ours)
+			commits_stream.into_future().map_err(|_| ())
+				.and_then(|(_, stream)| {
+					stream.take(1).for_each(|_| Ok(())) //the second commit should never arrive
+						.timeout(Duration::from_millis(500)).map_err(|_| ())
+				})
+				.then(|res| {
+					assert!(res.is_err()); // so the previous future times out
+					signal.fire();
+					futures::future::ok::<(), ()>(())
+				})
 		})).unwrap();
 	}
 }
