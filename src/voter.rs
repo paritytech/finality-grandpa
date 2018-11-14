@@ -438,9 +438,7 @@ impl<H, N, E: Environment<H, N>> BackgroundRound<H, N, E> where
 	H: Hash + Clone + Eq + Ord + ::std::fmt::Debug,
 	N: Copy + BlockNumberOps + ::std::fmt::Debug,
 {
-	fn is_done(&self) -> bool {
-		let voting_round = self.inner.lock();
-
+	fn is_done(&self, voting_round: &VotingRound<H, N, E>) -> bool {
 		// no need to listen on a round anymore once the estimate is finalized.
 		voting_round.votes.state().estimate
 			.map_or(false, |x| (x.1) <= self.finalized_number)
@@ -450,7 +448,7 @@ impl<H, N, E: Environment<H, N>> BackgroundRound<H, N, E> where
 		self.finalized_number = ::std::cmp::max(self.finalized_number, new_finalized);
 
 		// wake up the future to be polled if done.
-		if self.is_done() {
+		if self.is_done(&self.inner.lock()) {
 			if let Some(ref task) = self.task {
 				task.notify();
 			}
@@ -468,15 +466,10 @@ impl<H, N, E: Environment<H, N>> Future for BackgroundRound<H, N, E> where
 	fn poll(&mut self) -> Poll<u64, E::Error> {
 		self.task = Some(::futures::task::current());
 
-		// FIXME: maybe try_lock
-		{
-			let mut voting_round = self.inner.lock();
-			voting_round.poll()?;
-		}
+		let mut voting_round = self.inner.lock();
+		voting_round.poll()?;
 
-		if self.is_done() {
-			// FIXME: clean up
-			let voting_round = self.inner.lock();
+		if self.is_done(&voting_round) {
 			Ok(Async::Ready(voting_round.votes.number()))
 		} else {
 			Ok(Async::NotReady)
@@ -958,7 +951,7 @@ mod tests {
 	}
 
 	#[test]
-	fn broadcast_commit_if_newer() {
+	fn broadcast_commit_only_if_newer() {
 		let local_id = Id(5);
 		let test_id = Id(42);
 		let voters = {
@@ -1036,7 +1029,7 @@ mod tests {
 			// wait for the first commit (ours)
 			commits_stream.into_future().map_err(|_| ())
 				.and_then(|(_, stream)| {
-					stream.take(1).for_each(|_| Ok(())) //the second commit should never arrive
+					stream.take(1).for_each(|_| Ok(())) // the second commit should never arrive
 						.timeout(Duration::from_millis(500)).map_err(|_| ())
 				})
 				.then(|res| {
