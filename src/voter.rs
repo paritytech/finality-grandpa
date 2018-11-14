@@ -25,7 +25,7 @@ use futures::prelude::*;
 use futures::task;
 use futures::stream::futures_unordered::FuturesUnordered;
 use futures::sync::mpsc::{self, UnboundedSender, UnboundedReceiver};
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::hash::Hash;
 use std::sync::Arc;
 use parking_lot::Mutex;
@@ -541,19 +541,32 @@ impl<H, N, E: Environment<H, N>> RoundCommitter<H, N, E> where
 		Ok(true)
 	}
 
-	fn commit(&mut self) -> Poll<Option<Commit<H, N, E::Signature, E::Id>>, E::Error> {
+	fn commit(&mut self, env: &E) -> Poll<Option<Commit<H, N, E::Signature, E::Id>>, E::Error> {
 		try_ready!(self.commit_timer.poll());
 
 		let voting_round = self.voting_round.lock();
 		let commit = || -> Option<Commit<H, N, E::Signature, E::Id>> {
+			// TODO: vote based on `precommit_ghost`, limited to `prevote_ghost` chain
 			let (target_hash, target_number) = voting_round.votes.finalized().cloned()?;
-			let justification = voting_round.votes.valid_precommits().map(|(id, precommit, signature)| {
-				SignedPrecommit {
-					precommit: precommit.clone(),
-					signature: signature.clone(),
-					id: id.clone(),
-				}
-			}).collect();
+
+			let mut ids = HashSet::new();
+			let justification =
+				voting_round.votes.precommits().into_iter().filter_map(|(id, precommit, signature)| {
+					match env.ancestry(target_hash.clone(), precommit.target_hash.clone()) {
+						// if an authority equivocated then only include one of its
+						// votes that justify the commit
+						Ok(_) => if ids.insert(id.clone()) {
+							Some(SignedPrecommit {
+								precommit: precommit,
+								signature: signature,
+								id: id,
+							})
+						} else {
+							None
+						},
+						Err(::Error::NotDescendent) => None,
+					}
+				}).collect();
 
 			Some(Commit {
 				target_hash,
@@ -618,11 +631,12 @@ impl<H, N, E: Environment<H, N>> Committer<H, N, E> where
 	}
 
 	fn process_timers(&mut self) -> Result<(), E::Error> {
+		let env = self.env.clone();
 		let mut commits = Vec::new();
 
 		self.rounds.retain(|round_number, committer| {
 			// FIXME: shouldn't swallow commit errors
-			match committer.commit() {
+			match committer.commit(&env) {
 				Ok(Async::NotReady) => true,
 				Ok(Async::Ready(Some(commit))) => {
 					commits.push((*round_number, commit));

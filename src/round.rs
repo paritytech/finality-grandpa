@@ -123,15 +123,15 @@ impl<Vote: Eq, Signature: Eq> VoteMultiplicity<Vote, Signature> {
 	}
 
 	fn contains(&self, vote: &Vote, signature: &Signature) -> bool {
-		match *self {
-			VoteMultiplicity::Single(ref v, ref s) =>
+		match self {
+			VoteMultiplicity::Single(v, s) =>
 				v == vote && s == signature,
-			VoteMultiplicity::Equivocated((ref v1, ref s1), (ref v2, ref s2)) => {
+			VoteMultiplicity::Equivocated((v1, s1), (v2, s2)) => {
 				v1 == vote && s1 == signature ||
 					v2 == vote && s2 == signature
 			},
-			VoteMultiplicity::EquivocatedMany(ref v) => {
-				v.iter().any(|(ref v, ref s)| v == vote && s == signature)
+			VoteMultiplicity::EquivocatedMany(v) => {
+				v.iter().any(|(v, s)| v == vote && s == signature)
 			},
 		}
 	}
@@ -189,13 +189,26 @@ impl<Id: Hash + Eq + Clone, Vote: Clone + Eq, Signature: Clone + Eq> VoteTracker
 		}
 	}
 
-	fn valid_votes<'a>(&'a self) -> impl Iterator<Item=(Id, Vote, Signature)> + 'a {
-		self.votes.iter().filter_map(|(id, vote)| {
+	fn votes(&self) -> Vec<(Id, Vote, Signature)> {
+		let mut votes = Vec::new();
+
+		for (id, vote) in self.votes.iter() {
 			match vote {
-				VoteMultiplicity::Single(v, s) => Some((id.clone(), v.clone(), s.clone())),
-				_ => None,
+				VoteMultiplicity::Single(v, s) => {
+					votes.push((id.clone(), v.clone(), s.clone()))
+				},
+				VoteMultiplicity::Equivocated((v1, s1), (v2, s2)) => {
+					votes.push((id.clone(), v1.clone(), s1.clone()));
+					votes.push((id.clone(), v2.clone(), s2.clone()));
+				},
+				VoteMultiplicity::EquivocatedMany(vs) => {
+					votes.extend(
+						vs.iter().map(|(v, s)| (id.clone(), v.clone(), s.clone())));
+				},
 			}
-		})
+		}
+
+		votes
 	}
 }
 
@@ -536,8 +549,8 @@ impl<Id, H, N, Signature> Round<Id, H, N, Signature> where
 		self.voters.get(signer).cloned()
 	}
 
-	pub fn valid_precommits<'a>(&'a self) -> impl Iterator<Item=(Id, Precommit<H, N>, Signature)> + 'a {
-		self.precommit.valid_votes()
+	pub fn precommits(&self) -> Vec<(Id, Precommit<H, N>, Signature)> {
+		self.precommit.votes()
 	}
 }
 
