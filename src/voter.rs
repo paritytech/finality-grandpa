@@ -1117,4 +1117,58 @@ mod tests {
 				})
 		})).unwrap();
 	}
+
+	#[test]
+	fn import_commit_for_any_round() {
+		let local_id = Id(5);
+		let test_id = Id(42);
+		let voters = {
+			let mut map = HashMap::new();
+			map.insert(local_id, 100);
+			map.insert(test_id, 201);
+			map
+		};
+
+		let (network, routing_task) = testing::make_network();
+		let (_, commits_sink) = network.make_commits_comms();
+
+		let (signal, exit) = ::exit_future::signal();
+
+		// this is a commit for a previous round
+		let commit = (0, Commit {
+			target_hash: "E",
+			target_number: 6,
+			precommits: vec![SignedPrecommit {
+				precommit: Precommit { target_hash: "E", target_number: 6 },
+				signature: testing::Signature(test_id.0),
+				id: test_id
+			}],
+		});
+
+		let env = Arc::new(Environment::new(voters, network, local_id));
+		current_thread::block_on_all(::futures::future::lazy(move || {
+			// initialize chain
+			let last_finalized = env.with_chain(|chain| {
+				chain.push_blocks(GENESIS_HASH, &["A", "B", "C", "D", "E"]);
+				chain.last_finalized()
+			});
+
+			let last_round_state = RoundState::genesis((GENESIS_HASH, 1));
+
+			// run voter in background. scheduling it to shut down at the end.
+			let voter = Voter::new(env.clone(), 1, last_round_state, last_finalized);
+			::tokio::spawn(exit.clone()
+				.until(voter.map_err(|_| panic!("Error voting"))).map(|_| ()));
+
+			::tokio::spawn(exit.until(routing_task).map(|_| ()));
+
+			::tokio::spawn(commits_sink.send(commit).map_err(|_| ()).map(|_| ()));
+
+			// wait for the commit message to be processed which finalized block 6
+			env.finalized_stream()
+				.take_while(|&(_, n)| Ok(n < 6))
+				.for_each(|_| Ok(()))
+				.map(|_| signal.fire())
+		})).unwrap();
+	}
 }
