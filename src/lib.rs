@@ -206,10 +206,10 @@ impl<H, N: Copy, S, Id> SignedMessage<H, N, S, Id> {
 pub struct Commit<H, N, S, Id> {
 	/// The target block's hash.
 	pub target_hash: H,
-	/// The target block's number
+	/// The target block's number.
 	pub target_number: N,
 	/// Precommits for target block or any block after it that justify this commit.
-	pub justification: Vec<SignedPrecommit<H, N, S, Id>>,
+	pub precommits: Vec<SignedPrecommit<H, N, S, Id>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -221,6 +221,47 @@ pub struct SignedPrecommit<H, N, S, Id> {
 	pub signature: S,
 	/// The Id of the signer.
 	pub id: Id,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "derive-codec", derive(Encode, Decode))]
+pub struct CompactCommit<H, N, S, Id> {
+	/// The target block's hash.
+	pub target_hash: H,
+	/// The target block's number.
+	pub target_number: N,
+	/// Precommits for target block or any block after it that justify this commit.
+	pub precommits: Vec<Precommit<H, N>>,
+	/// Authentication data for the commit.
+	pub auth_data: CommitAuthData<S, Id>,
+}
+
+// Authentication data for a commit, currently a set of precommit signatures but
+// in the future could be optimized with BLS signature aggregation.
+type CommitAuthData<S, Id> = Vec<(S, Id)>;
+
+impl<H, N, S, Id> From<CompactCommit<H, N, S, Id>> for Commit<H, N, S, Id> {
+	fn from(commit: CompactCommit<H, N, S, Id>) -> Commit<H, N, S, Id> {
+		Commit {
+			target_hash: commit.target_hash,
+			target_number: commit.target_number,
+			precommits: commit.precommits.into_iter()
+				.zip(commit.auth_data.into_iter())
+				.map(|(precommit, (signature, id))| SignedPrecommit { precommit, signature, id })
+				.collect()
+		}
+	}
+}
+
+impl<H: Clone, N: Clone, S, Id> From<Commit<H, N, S, Id>> for CompactCommit<H, N, S, Id> {
+	fn from(commit: Commit<H, N, S, Id>) -> CompactCommit<H, N, S, Id> {
+		CompactCommit {
+			target_hash: commit.target_hash,
+			target_number: commit.target_number,
+			precommits: commit.precommits.iter().map(|signed| signed.precommit.clone()).collect(),
+			auth_data: commit.precommits.into_iter().map(|signed| (signed.signature, signed.id)).collect(),
+		}
+	}
 }
 
 #[cfg(test)]

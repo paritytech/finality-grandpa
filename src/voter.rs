@@ -32,7 +32,7 @@ use parking_lot::Mutex;
 
 use round::{Round, State as RoundState};
 use vote_graph::VoteGraph;
-use ::{Chain, Commit, Equivocation, Message, Prevote, Precommit, SignedMessage, SignedPrecommit, BlockNumberOps};
+use ::{Chain, Commit, CompactCommit, Equivocation, Message, Prevote, Precommit, SignedMessage, SignedPrecommit, BlockNumberOps};
 
 /// Necessary environment for a voter.
 ///
@@ -43,7 +43,7 @@ pub trait Environment<H, N: BlockNumberOps>: Chain<H, N> {
 	type Signature: Eq + Clone;
 	type In: Stream<Item=SignedMessage<H, N, Self::Signature, Self::Id>,Error=Self::Error>;
 	type Out: Sink<SinkItem=Message<H, N>,SinkError=Self::Error>;
-	type CommitIn: Stream<Item=(u64, Commit<H, N, Self::Signature, Self::Id>), Error=Self::Error>;
+	type CommitIn: Stream<Item=(u64, CompactCommit<H, N, Self::Signature, Self::Id>), Error=Self::Error>;
 	type CommitOut: Sink<SinkItem=(u64, Commit<H, N, Self::Signature, Self::Id>), SinkError=Self::Error>;
 	type Error: From<::Error>;
 
@@ -505,7 +505,7 @@ impl<H, N, E: Environment<H, N>> RoundCommitter<H, N, E> where
 
 		// check that all precommits are for blocks higher than the target
 		// commit block, and that they're its descendents
-		if !commit.justification.iter().all(|signed| {
+		if !commit.precommits.iter().all(|signed| {
 			signed.precommit.target_number >= commit.target_number &&
 				env.ancestry(
 					commit.target_hash.clone(),
@@ -517,18 +517,18 @@ impl<H, N, E: Environment<H, N>> RoundCommitter<H, N, E> where
 
 		// check that the precommits don't include equivocations
 		let mut ids = HashSet::new();
-		if !commit.justification.iter().all(|signed| ids.insert(signed.id.clone())) {
+		if !commit.precommits.iter().all(|signed| ids.insert(signed.id.clone())) {
 			return Ok(false);
 		}
 
 		// check all precommits are from authorities
-		if !commit.justification.iter().all(|signed| voting_round.votes.is_voter(&signed.id)) {
+		if !commit.precommits.iter().all(|signed| voting_round.votes.is_voter(&signed.id)) {
 			return Ok(false);
 		}
 
 		// add all precommits to an empty vote graph with the commit target as the base
 		let mut vote_graph = VoteGraph::new(commit.target_hash.clone(), commit.target_number.clone());
-		for SignedPrecommit { precommit, id, .. } in commit.justification.iter() {
+		for SignedPrecommit { precommit, id, .. } in commit.precommits.iter() {
 			let weight = voting_round.votes.weight(id)
 				.expect("returns None if id is not a voter; previously verified that all ids are voters; qed");
 			vote_graph.insert(precommit.target_hash.clone(), precommit.target_number.clone(), weight, env)?;
@@ -547,7 +547,7 @@ impl<H, N, E: Environment<H, N>> RoundCommitter<H, N, E> where
 		}
 
 		// import all precommits into current round
-		for SignedPrecommit { precommit, signature, id } in commit.justification.clone() {
+		for SignedPrecommit { precommit, signature, id } in commit.precommits.clone() {
 			if let Some(e) = voting_round.votes.import_precommit(env, precommit, id, signature)? {
 				env.precommit_equivocation(voting_round.votes.number(), e);
 			}
@@ -567,7 +567,7 @@ impl<H, N, E: Environment<H, N>> RoundCommitter<H, N, E> where
 			let (target_hash, target_number) = voting_round.votes.finalized().cloned()?;
 
 			let mut ids = HashSet::new();
-			let justification =
+			let precommits =
 				voting_round.votes.precommits().into_iter().filter_map(|(id, precommit, signature)| {
 					match env.ancestry(target_hash.clone(), precommit.target_hash.clone()) {
 						// if an authority equivocated then only include one of its
@@ -588,7 +588,7 @@ impl<H, N, E: Environment<H, N>> RoundCommitter<H, N, E> where
 			Some(Commit {
 				target_hash,
 				target_number,
-				justification,
+				precommits,
 			})
 		};
 
@@ -639,7 +639,7 @@ impl<H, N, E: Environment<H, N>> Committer<H, N, E> where
 			);
 
 			if let Some(round) = self.rounds.get_mut(&round_number) {
-				if !round.import_commit(&*self.env, commit)? {
+				if !round.import_commit(&*self.env, commit.into())? {
 					trace!(target: "afg", "Ignoring invalid commit");
 				};
 			}
@@ -1010,7 +1010,7 @@ mod tests {
 		let commit = (1, Commit {
 			target_hash: "E",
 			target_number: 6,
-			justification: vec![SignedPrecommit {
+			precommits: vec![SignedPrecommit {
 				precommit: Precommit { target_hash: "E", target_number: 6 },
 				signature: testing::Signature(test_id.0),
 				id: test_id

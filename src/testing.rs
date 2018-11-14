@@ -26,7 +26,7 @@ use tokio::timer::Delay;
 use parking_lot::Mutex;
 use futures::prelude::*;
 use futures::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
-use super::{Chain, Commit, Error, Equivocation, Message, Prevote, Precommit, SignedMessage};
+use super::{Chain, Commit, CompactCommit, Error, Equivocation, Message, Prevote, Precommit, SignedMessage};
 
 pub const GENESIS_HASH: &str = "genesis";
 const NULL_HASH: &str = "NULL";
@@ -189,7 +189,7 @@ impl ::voter::Environment<&'static str, u32> for Environment {
 	type Signature = Signature;
 	type In = Box<Stream<Item=SignedMessage<&'static str, u32, Signature, Id>,Error=Error> + Send + 'static>;
 	type Out = Box<Sink<SinkItem=Message<&'static str, u32>,SinkError=Error> + Send + 'static>;
-	type CommitIn = Box<Stream<Item=(u64, Commit<&'static str, u32, Signature, Id>), Error=Error> + Send + 'static>;
+	type CommitIn = Box<Stream<Item=(u64, CompactCommit<&'static str, u32, Signature, Id>), Error=Error> + Send + 'static>;
 	type CommitOut = Box<Sink<SinkItem=(u64, Commit<&'static str, u32, Signature, Id>), SinkError=Error> + Send + 'static>;
 	type Error = Error;
 
@@ -315,7 +315,7 @@ pub fn make_network() -> (Network, NetworkRouting) {
 }
 
 type RoundNetwork = BroadcastNetwork<SignedMessage<&'static str, u32, Signature, Id>>;
-type CommitNetwork = BroadcastNetwork<(u64, Commit<&'static str, u32, Signature, Id>)>;
+type CommitNetwork = BroadcastNetwork<(u64, CompactCommit<&'static str, u32, Signature, Id>)>;
 
 /// A test network. Instantiate this with `make_network`,
 #[derive(Clone)]
@@ -340,11 +340,11 @@ impl Network {
 	}
 
 	pub fn make_commits_comms(&self) -> (
-		impl Stream<Item=(u64, Commit<&'static str, u32, Signature, Id>),Error=Error>,
+		impl Stream<Item=(u64, CompactCommit<&'static str, u32, Signature, Id>),Error=Error>,
 		impl Sink<SinkItem=(u64, Commit<&'static str, u32, Signature, Id>),SinkError=Error>
 	) {
 		let mut commits = self.commits.lock();
-		commits.add_node(|c| c)
+		commits.add_node(|(round_number, commit)| (round_number, CompactCommit::from(commit)))
 	}
 }
 
