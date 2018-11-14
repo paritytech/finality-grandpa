@@ -623,6 +623,8 @@ impl<H, N, E: Environment<H, N>> Committer<H, N, E> where
 					threshold,
 					&*self.env,
 				)? {
+					// TODO: should we check if > last finalized to avoid
+					// finalizing backwards?
 					self.env.finalize_block(finalized_hash, finalized_number)?;
 				}
 			}
