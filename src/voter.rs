@@ -80,6 +80,7 @@ pub trait Environment<H, N: BlockNumberOps>: Chain<H, N> {
 	fn completed(&self, round: u64, state: RoundState<H, N>) -> Result<(), Self::Error>;
 
 	/// Called when a block should be finalized.
+	/// May be called more than once with the same block.
 	// TODO: make this a future that resolves when it's e.g. written to disk?
 	fn finalize_block(&self, hash: H, number: N) -> Result<(), Self::Error>;
 
@@ -503,50 +504,16 @@ impl<H, N, E: Environment<H, N>> RoundCommitter<H, N, E> where
 			return Ok(true);
 		}
 
-		// check that all precommits are for blocks higher than the target
-		// commit block, and that they're its descendents
-		if !commit.precommits.iter().all(|signed| {
-			signed.precommit.target_number >= commit.target_number &&
-				env.ancestry(
-					commit.target_hash.clone(),
-					signed.precommit.target_hash.clone(),
-				).is_ok()
-		}) {
+		if validate_commit(
+			&commit,
+			voting_round.votes.voters(),
+			voting_round.votes.threshold(),
+			env,
+		)?.is_none() {
 			return Ok(false);
 		}
 
-		// check that the precommits don't include equivocations
-		let mut ids = HashSet::new();
-		if !commit.precommits.iter().all(|signed| ids.insert(signed.id.clone())) {
-			return Ok(false);
-		}
-
-		// check all precommits are from authorities
-		if !commit.precommits.iter().all(|signed| voting_round.votes.is_voter(&signed.id)) {
-			return Ok(false);
-		}
-
-		// add all precommits to an empty vote graph with the commit target as the base
-		let mut vote_graph = VoteGraph::new(commit.target_hash.clone(), commit.target_number.clone());
-		for SignedPrecommit { precommit, id, .. } in commit.precommits.iter() {
-			let weight = voting_round.votes.weight(id)
-				.expect("returns None if id is not a voter; previously verified that all ids are voters; qed");
-			vote_graph.insert(precommit.target_hash.clone(), precommit.target_number.clone(), weight, env)?;
-		}
-
-		// find ghost using commit target as current best
-		let ghost = vote_graph.find_ghost(
-			Some((commit.target_hash.clone(), commit.target_number.clone())),
-			|w| *w >= voting_round.votes.threshold(),
-		);
-
-		// if a ghost is found then it must be equal or higher than the commit
-		// target, therefore the commit is valid
-		if ghost.is_none() {
-			return Ok(false);
-		}
-
-		// import all precommits into current round
+		// the commit is valid, import all precommits into current round
 		for SignedPrecommit { precommit, signature, id } in commit.precommits.clone() {
 			if let Some(e) = voting_round.votes.import_precommit(env, precommit, id, signature)? {
 				env.precommit_equivocation(voting_round.votes.number(), e);
@@ -563,7 +530,6 @@ impl<H, N, E: Environment<H, N>> RoundCommitter<H, N, E> where
 
 		let voting_round = self.voting_round.lock();
 		let commit = || -> Option<Commit<H, N, E::Signature, E::Id>> {
-			// TODO: vote based on `precommit_ghost`, limited to `prevote_ghost` chain
 			let (target_hash, target_number) = voting_round.votes.finalized().cloned()?;
 
 			let mut ids = HashSet::new();
@@ -852,6 +818,56 @@ impl<H, N, E: Environment<H, N>> Future for Voter<H, N, E> where
 		// round has been updated. so we need to re-poll.
 		self.poll()
 	}
+}
+
+fn validate_commit<H, N, E: Environment<H, N>>(
+	commit: &Commit<H, N, E::Signature, E::Id>,
+	voters: &HashMap<E::Id, u64>,
+	threshold: u64,
+	env: &E,
+) -> Result<Option<(H, N)>, E::Error>
+	where H: Hash + Clone + Eq + Ord + ::std::fmt::Debug,
+		  N: Copy + BlockNumberOps + ::std::fmt::Debug,
+{
+	// check that all precommits are for blocks higher than the target
+	// commit block, and that they're its descendents
+	if !commit.precommits.iter().all(|signed| {
+		signed.precommit.target_number >= commit.target_number &&
+			env.ancestry(
+				commit.target_hash.clone(),
+				signed.precommit.target_hash.clone(),
+			).is_ok()
+	}) {
+		return Ok(None);
+	}
+
+	// check that the precommits don't include equivocations
+	let mut ids = HashSet::new();
+	if !commit.precommits.iter().all(|signed| ids.insert(signed.id.clone())) {
+		return Ok(None);
+	}
+
+	// check all precommits are from authorities
+	if !commit.precommits.iter().all(|signed| voters.contains_key(&signed.id)) {
+		return Ok(None);
+	}
+
+	// add all precommits to an empty vote graph with the commit target as the base
+	let mut vote_graph = VoteGraph::new(commit.target_hash.clone(), commit.target_number.clone());
+	for SignedPrecommit { precommit, id, .. } in commit.precommits.iter() {
+		let weight = voters.get(id).expect("previously verified that all ids are voters; qed");
+		vote_graph.insert(precommit.target_hash.clone(), precommit.target_number.clone(), *weight, env)?;
+	}
+
+	// find ghost using commit target as current best
+	let ghost = vote_graph.find_ghost(
+		Some((commit.target_hash.clone(), commit.target_number.clone())),
+		|w| *w >= threshold,
+	);
+
+	// if a ghost is found then it must be equal or higher than the commit
+	// target, otherwise the commit is invalid
+	Ok(ghost)
 }
 
 #[cfg(test)]

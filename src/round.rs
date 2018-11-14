@@ -189,6 +189,7 @@ impl<Id: Hash + Eq + Clone, Vote: Clone + Eq, Signature: Clone + Eq> VoteTracker
 		}
 	}
 
+	// Returns all imported votes.
 	fn votes(&self) -> Vec<(Id, Vote, Signature)> {
 		let mut votes = Vec::new();
 
@@ -545,14 +546,12 @@ impl<Id, H, N, Signature> Round<Id, H, N, Signature> where
 		self.graph.base()
 	}
 
-	pub fn weight(&self, signer: &Id) -> Option<u64> {
-		self.voters.get(signer).cloned()
+	/// Return the round voters weights.
+	pub fn voters(&self) -> &HashMap<Id, u64> {
+		&self.voters
 	}
 
-	pub fn is_voter(&self, id: &Id) -> bool {
-		self.voters.contains_key(id)
-	}
-
+	/// Return all imported precommits.
 	pub fn precommits(&self) -> Vec<(Id, Precommit<H, N>, Signature)> {
 		self.precommit.votes()
 	}
