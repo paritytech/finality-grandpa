@@ -501,13 +501,16 @@ impl<H, N, E: Environment<H, N>> RoundCommitter<H, N, E> where
 		&mut self,
 		env: &E,
 		commit: Commit<H, N, E::Signature, E::Id>,
-	) -> Result<(), E::Error> {
+	) -> Result<bool, E::Error> {
 		let mut voting_round = self.voting_round.lock();
 
+		// ignore commits for a lower block than we already finalized
 		if commit.target_number < voting_round.votes.finalized().map(|(_, n)| *n).unwrap_or(N::zero()) {
-			return Ok(());
+			return Ok(true);
 		}
 
+		// check that all precommits are for blocks higher than the target
+		// commit block, and that they're its descendents
 		if !commit.justification.iter().all(|signed| {
 			signed.precommit.target_number >= commit.target_number &&
 				env.ancestry(
@@ -515,19 +518,19 @@ impl<H, N, E: Environment<H, N>> RoundCommitter<H, N, E> where
 					signed.precommit.target_hash.clone(),
 				).is_ok()
 		}) {
-			// FIXME: use proper error
-			return Err(::Error::NotDescendent.into());
+			return Ok(false);
 		}
 
+		// check that the total vote weight of all precommits is higher than the threshold
 		let commit_weight = commit.justification.iter().fold(0, |total_weight, signed| {
 			total_weight + voting_round.votes.weight(&signed.id).unwrap_or(0)
 		});
 
 		if commit_weight < voting_round.votes.threshold() {
-			// FIXME: use proper error
-			return Err(::Error::NotDescendent.into());
+			return Ok(false);
 		}
 
+		// import all precommits
 		for SignedPrecommit { precommit, signature, id } in commit.justification.clone() {
 			if let Some(e) = voting_round.votes.import_precommit(env, precommit, id, signature)? {
 				env.precommit_equivocation(voting_round.votes.number(), e);
@@ -542,7 +545,7 @@ impl<H, N, E: Environment<H, N>> RoundCommitter<H, N, E> where
 
 		self.last_commit = Some(commit);
 
-		Ok(())
+		Ok(true)
 	}
 
 	fn commit(&mut self) -> Poll<Option<Commit<H, N, E::Signature, E::Id>>, E::Error> {
@@ -600,14 +603,21 @@ impl<H, N, E: Environment<H, N>> Committer<H, N, E> where
 
 	fn process_incoming(&mut self) -> Result<(), E::Error> {
 		while let Async::Ready(Some(incoming)) = self.incoming.poll()? {
-			trace!(target: "afg", "Got commit message");
-
 			// NOTE: we assume the signature for the commit has been checked as
 			// well as all the internal signatures on each precommit
-			let (round_number, SignedCommit { commit, .. }) = incoming;
+			let (round_number, SignedCommit { commit, id, .. }) = incoming;
+
+			trace!(target: "afg", "Got commit for round_number: {:?}, from: {:?}, target_number: {:?}, target_hash: {:?}",
+				round_number,
+				id,
+				commit.target_number,
+				commit.target_hash,
+			);
 
 			if let Some(round) = self.rounds.get_mut(&round_number) {
-				round.import_commit(&*self.env, commit)?;
+				if !round.import_commit(&*self.env, commit)? {
+					trace!(target: "afg", "Ignoring invalid commit");
+				};
 			}
 		}
 
@@ -629,8 +639,13 @@ impl<H, N, E: Environment<H, N>> Committer<H, N, E> where
 			}
 		});
 
-		for commit in commits {
-			self.outgoing.push(commit);
+		for (round_number, commit) in commits {
+			debug!(target: "afg", "Committing: round_number = {}, target_number = {:?}, target_hash = {:?}",
+				round_number,
+				commit.target_number,
+				commit.target_hash,
+			);
+			self.outgoing.push((round_number, commit));
 		}
 
 		Ok(())
