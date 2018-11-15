@@ -93,7 +93,6 @@ pub trait Environment<H: Eq, N: BlockNumberOps>: Chain<H, N> {
 	fn completed(&self, round: u64, state: RoundState<H, N>) -> Result<(), Self::Error>;
 
 	/// Called when a block should be finalized.
-	/// May be called more than once with the same block.
 	// TODO: make this a future that resolves when it's e.g. written to disk?
 	fn finalize_block(&self, hash: H, number: N, commit: Commit<H, N, Self::Signature, Self::Id>) -> Result<(), Self::Error>;
 
@@ -580,18 +579,25 @@ struct Committer<H, N, E: Environment<H, N>> where
 	rounds: HashMap<u64, RoundCommitter<H, N, E>>,
 	incoming: E::CommitIn,
 	outgoing: Buffered<E::CommitOut>,
+	last_finalized_number: N,
 }
 
 impl<H, N, E: Environment<H, N>> Committer<H, N, E> where
 	H: Hash + Clone + Eq + Ord + ::std::fmt::Debug,
 	N: Copy + BlockNumberOps + ::std::fmt::Debug,
 {
-	fn new(env: Arc<E>, incoming: E::CommitIn, outgoing: E::CommitOut) -> Committer<H, N, E> {
+	fn new(
+		env: Arc<E>,
+		incoming: E::CommitIn,
+		outgoing: E::CommitOut,
+		last_finalized_number: N,
+	) -> Committer<H, N, E> {
 		Committer {
 			env,
 			rounds: HashMap::new(),
 			outgoing: Buffered::new(outgoing),
 			incoming,
+			last_finalized_number,
 		}
 	}
 
@@ -623,9 +629,11 @@ impl<H, N, E: Environment<H, N>> Committer<H, N, E> where
 					threshold,
 					&*self.env,
 				)? {
-					// TODO: should we check if > last finalized to avoid
-					// finalizing backwards?
-					self.env.finalize_block(finalized_hash, finalized_number, commit)?;
+					if finalized_number > self.last_finalized_number {
+						self.last_finalized_number = finalized_number;
+
+						self.env.finalize_block(finalized_hash, finalized_number, commit)?;
+					}
 				}
 			}
 		}
@@ -675,6 +683,12 @@ impl<H, N, E: Environment<H, N>> Committer<H, N, E> where
 		self.process_timers()?;
 		try_ready!(self.outgoing.poll());
 		Ok(Async::NotReady)
+	}
+
+	fn set_last_finalized_number(&mut self, last_finalized_number: N) {
+		if last_finalized_number > self.last_finalized_number {
+			self.last_finalized_number = last_finalized_number;
+		}
 	}
 }
 
@@ -736,7 +750,12 @@ impl<H, N, E: Environment<H, N>> Voter<H, N, E> where
 		};
 
 		let (committer_incoming, committer_outgoing) = env.committer_data();
-		let committer = Committer::new(env.clone(), committer_incoming, committer_outgoing);
+		let committer = Committer::new(
+			env.clone(),
+			committer_incoming,
+			committer_outgoing,
+			last_finalized.1.clone(),
+		);
 
 		// TODO: load last round (or more), re-process all votes from them,
 		// and background until irrelevant
@@ -770,6 +789,8 @@ impl<H, N, E: Environment<H, N>> Voter<H, N, E> where
 			if f_num > self.last_finalized.1 {
 				// TODO: handle safety violations and check ancestry.
 				self.last_finalized = (f_hash.clone(), f_num);
+				self.committer.set_last_finalized_number(f_num.clone());
+
 				self.env.finalize_block(f_hash, f_num, commit)?;
 			}
 		}

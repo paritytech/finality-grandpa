@@ -230,12 +230,7 @@ impl ::voter::Environment<&'static str, u32> for Environment {
 	fn finalize_block(&self, hash: &'static str, number: u32, commit: Commit<&'static str, u32, Signature, Id>) -> Result<(), Error> {
 		let mut chain = self.chain.lock();
 
-		if number as u32 <= chain.finalized.1 {
-			// ignore finalization lower than our best finalized
-			// may be triggered by the commit protocol
-			return Ok(());
-		}
-
+		if number as u32 <= chain.finalized.1 { panic!("Attempted to finalize backwards") }
 		assert!(chain.ancestry(chain.finalized.0, hash).is_ok(), "Safety violation: reverting finalized block.");
 		chain.finalized = (hash, number as _);
 		self.listeners.lock().retain(|s| s.unbounded_send((hash, number as _, commit.clone())).is_ok());
