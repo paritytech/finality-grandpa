@@ -133,7 +133,7 @@ impl<T> BlockNumberOps for T where
 {}
 
 /// Chain context necessary for implementation of the finality gadget.
-pub trait Chain<H, N: Copy + BlockNumberOps> {
+pub trait Chain<H: Eq, N: Copy + BlockNumberOps> {
 	/// Get the ancestry of a block up to but not including the base hash.
 	/// Should be in reverse order from `block`'s parent.
 	///
@@ -145,6 +145,19 @@ pub trait Chain<H, N: Copy + BlockNumberOps> {
 	///
 	/// If `base` is unknown, return `None`.
 	fn best_chain_containing(&self, base: H) -> Option<(H, N)>;
+
+	/// Returns true if `block` is a descendent of or equal to the given `base`.
+	fn is_equal_or_descendent_of(&self, base: H, block: H) -> bool {
+		if base == block { return true; }
+
+		// TODO: currently this function always succeeds since the only error
+		// variant is `Error::NotDescendent`, this may change in the future as
+		// other errors (e.g. IO) are not being exposed.
+		match self.ancestry(base, block) {
+			Ok(_) => true,
+			Err(Error::NotDescendent) => false,
+		}
+	}
 }
 
 /// An equivocation (double-vote) in a given round.
@@ -241,7 +254,7 @@ pub struct CompactCommit<H, N, S, Id> {
 
 // Authentication data for a commit, currently a set of precommit signatures but
 // in the future could be optimized with BLS signature aggregation.
-type CommitAuthData<S, Id> = Vec<(S, Id)>;
+pub type CommitAuthData<S, Id> = Vec<(S, Id)>;
 
 impl<H, N, S, Id> From<CompactCommit<H, N, S, Id>> for Commit<H, N, S, Id> {
 	fn from(commit: CompactCommit<H, N, S, Id>) -> Commit<H, N, S, Id> {

@@ -37,7 +37,7 @@ use ::{Chain, Commit, CompactCommit, Equivocation, Message, Prevote, Precommit, 
 /// Necessary environment for a voter.
 ///
 /// This encapsulates the database and networking layers of the chain.
-pub trait Environment<H, N: BlockNumberOps>: Chain<H, N> {
+pub trait Environment<H: Eq, N: BlockNumberOps>: Chain<H, N> {
 	type Timer: Future<Item=(),Error=Self::Error>;
 	type Id: Hash + Clone + Eq + ::std::fmt::Debug;
 	type Signature: Eq + Clone;
@@ -291,10 +291,7 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 					// the ancestor of the current round's p-Ghost before precommitting.
 					self.votes.state().prevote_ghost.as_ref().map_or(false, |p_g| {
 						p_g == &last_round_estimate ||
-							match self.env.ancestry(last_round_estimate.0, p_g.0.clone()) {
-								Ok(_) => true,
-								Err(::Error::NotDescendent) => false,
-							}
+							self.env.is_equal_or_descendent_of(last_round_estimate.0, p_g.0.clone())
 					})
 				} && match precommit_timer.poll() {
 					Err(e) => return Err(e),
@@ -548,10 +545,10 @@ impl<H, N, E: Environment<H, N>> RoundCommitter<H, N, E> where
 			let mut ids = HashSet::new();
 			let precommits =
 				voting_round.votes.precommits().into_iter().filter_map(|(id, precommit, signature)| {
-					match env.ancestry(target_hash.clone(), precommit.target_hash.clone()) {
-						// if an authority equivocated then only include one of its
-						// votes that justify the commit
-						Ok(_) => if ids.insert(id.clone()) {
+					if env.is_equal_or_descendent_of(target_hash.clone(), precommit.target_hash.clone()) &&
+						ids.insert(id.clone()) {
+							// if an authority equivocated then only include one of its
+							// votes that justify the commit
 							Some(SignedPrecommit {
 								precommit: precommit,
 								signature: signature,
@@ -559,9 +556,7 @@ impl<H, N, E: Environment<H, N>> RoundCommitter<H, N, E> where
 							})
 						} else {
 							None
-						},
-						Err(::Error::NotDescendent) => None,
-					}
+						}
 				}).collect();
 
 			Some(Commit {
@@ -605,8 +600,6 @@ impl<H, N, E: Environment<H, N>> Committer<H, N, E> where
 
 	fn process_incoming(&mut self) -> Result<(), E::Error> {
 		while let Async::Ready(Some(incoming)) = self.incoming.poll()? {
-			// NOTE: we assume the signature for the commit has been checked as
-			// well as all the internal signatures on each precommit
 			let (round_number, commit) = incoming;
 
 			trace!(target: "afg", "Got commit for round_number {:?}: target_number: {:?}, target_hash: {:?}",
@@ -861,10 +854,10 @@ fn validate_commit<H, N, E: Environment<H, N>>(
 	// commit block, and that they're its descendents
 	if !commit.precommits.iter().all(|signed| {
 		signed.precommit.target_number >= commit.target_number &&
-			env.ancestry(
+			env.is_equal_or_descendent_of(
 				commit.target_hash.clone(),
 				signed.precommit.target_hash.clone(),
-			).is_ok()
+			)
 	}) {
 		return Ok(None);
 	}
