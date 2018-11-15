@@ -575,6 +575,22 @@ impl<H, N, E: Environment<H, N>> RoundCommitter<H, N, E> where
 	}
 }
 
+/// Implements the commit protocol.
+///
+/// The commit protocol allows a node to broadcast a message that finalizes a
+/// given block and includes a set of precommits as proof.
+///
+/// - When a round is completable and we precommitted we start a commit timer
+/// and start accepting commit messages;
+/// - When we receive a commit message if it targets a block higher than what
+/// we've finalized we validate it and import its precommits if valid;
+/// - When our commit timer triggers we check if we've received any commit
+/// message for a block equal to what we've finalized, if we haven't then we
+/// broadcast a commit.
+///
+/// Additionally, we also listen to commit messages from rounds that aren't
+/// currently running, we validate the commit and dispatch a finalization
+/// notification (if any) to the environment.
 struct Committer<H, N, E: Environment<H, N>> where
 	H: Hash + Clone + Eq + Ord + ::std::fmt::Debug,
 	N: Copy + BlockNumberOps + ::std::fmt::Debug,
