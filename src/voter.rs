@@ -95,7 +95,7 @@ pub trait Environment<H: Eq, N: BlockNumberOps>: Chain<H, N> {
 	/// Called when a block should be finalized.
 	/// May be called more than once with the same block.
 	// TODO: make this a future that resolves when it's e.g. written to disk?
-	fn finalize_block(&self, hash: H, number: N) -> Result<(), Self::Error>;
+	fn finalize_block(&self, hash: H, number: N, commit: Commit<H, N, Self::Signature, Self::Id>) -> Result<(), Self::Error>;
 
 	// Note that an equivocation in prevotes has occurred.s
 	fn prevote_equivocation(&self, round: u64, equivocation: Equivocation<Self::Id, Prevote<H, N>, Self::Signature>);
@@ -199,7 +199,7 @@ pub struct VotingRound<H, N, E: Environment<H, N>> where
 	bridged_round_state: Option<::bridge_state::PriorView<H, N>>, // updates to later round
 	last_round_state: ::bridge_state::LatterView<H, N>, // updates from prior round
 	primary_block: Option<(H, N)>, // a block posted by primary as a hint. TODO: implement
-	finalized_sender: UnboundedSender<(H, N)>,
+	finalized_sender: UnboundedSender<(H, N, Commit<H, N, E::Signature, E::Id>)>,
 	//best_finalized: N,
 }
 
@@ -411,8 +411,9 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 			// a shutdown, we never re-create the same round with a base that was finalized
 			// in this round or after.
 			match (&self.state, new_state.finalized) {
-				(&Some(State::Precommitted), Some(ref f)) => {
-					let _ = self.finalized_sender.unbounded_send(f.clone());
+				(&Some(State::Precommitted), Some((ref f_hash, ref f_number))) => {
+					let commit = create_commit(f_hash.clone(), f_number.clone(), self.votes.precommits(), &*self.env);
+					let _ = self.finalized_sender.unbounded_send((f_hash.clone(), f_number.clone(), commit));
 				}
 				_ => {}
 			}
@@ -541,29 +542,7 @@ impl<H, N, E: Environment<H, N>> RoundCommitter<H, N, E> where
 		let voting_round = self.voting_round.lock();
 		let commit = || -> Option<Commit<H, N, E::Signature, E::Id>> {
 			let (target_hash, target_number) = voting_round.votes.finalized().cloned()?;
-
-			let mut ids = HashSet::new();
-			let precommits =
-				voting_round.votes.precommits().into_iter().filter_map(|(id, precommit, signature)| {
-					if env.is_equal_or_descendent_of(target_hash.clone(), precommit.target_hash.clone()) &&
-						ids.insert(id.clone()) {
-							// if an authority equivocated then only include one of its
-							// votes that justify the commit
-							Some(SignedPrecommit {
-								precommit: precommit,
-								signature: signature,
-								id: id,
-							})
-						} else {
-							None
-						}
-				}).collect();
-
-			Some(Commit {
-				target_hash,
-				target_number,
-				precommits,
-			})
+			Some(create_commit(target_hash, target_number, voting_round.votes.precommits(), env))
 		};
 
 		match (self.last_commit.take(), voting_round.votes.finalized()) {
@@ -635,15 +614,16 @@ impl<H, N, E: Environment<H, N>> Committer<H, N, E> where
 				let voters = self.env.voters(round_number);
 				let threshold = threshold(voters.values().sum());
 
+				let commit: Commit<_, _, _, _> = commit.into();
 				if let Some((finalized_hash, finalized_number)) = validate_commit(
-					&commit.into(),
+					&commit.clone(),
 					voters,
 					threshold,
 					&*self.env,
 				)? {
 					// TODO: should we check if > last finalized to avoid
 					// finalizing backwards?
-					self.env.finalize_block(finalized_hash, finalized_number)?;
+					self.env.finalize_block(finalized_hash, finalized_number, commit)?;
 				}
 			}
 		}
@@ -707,7 +687,7 @@ pub struct Voter<H, N, E: Environment<H, N>> where
 	best_round: VotingRound<H, N, E>,
 	past_rounds: FuturesUnordered<BackgroundRound<H, N, E>>,
 	committer: Committer<H, N, E>,
-	finalized_notifications: UnboundedReceiver<(H, N)>,
+	finalized_notifications: UnboundedReceiver<(H, N, Commit<H, N, E::Signature, E::Id>)>,
 	last_finalized: (H, N),
 }
 
@@ -776,7 +756,8 @@ impl<H, N, E: Environment<H, N>> Voter<H, N, E> where
 		while let Async::Ready(res) = self.finalized_notifications.poll()
 			.expect("unbounded receivers do not have spurious errors; qed")
 		{
-			let (f_hash, f_num) = res.expect("one sender always kept alive in self.best_round; qed");
+			let (f_hash, f_num, commit) =
+				res.expect("one sender always kept alive in self.best_round; qed");
 
 			// have the task check if it should be pruned.
 			// if so, this future will be re-polled
@@ -787,7 +768,7 @@ impl<H, N, E: Environment<H, N>> Voter<H, N, E> where
 			if f_num > self.last_finalized.1 {
 				// TODO: handle safety violations and check ancestry.
 				self.last_finalized = (f_hash.clone(), f_num);
-				self.env.finalize_block(f_hash, f_num)?;
+				self.env.finalize_block(f_hash, f_num, commit)?;
 			}
 		}
 
@@ -907,6 +888,38 @@ fn validate_commit<H, N, E: Environment<H, N>>(
 	Ok(ghost)
 }
 
+fn create_commit<H, N, E: Environment<H, N>>(
+	target_hash: H,
+	target_number: N,
+	precommits: Vec<(E::Id, Precommit<H, N>, E::Signature)>,
+	env: &E,
+) -> Commit<H, N, E::Signature, E::Id>
+	where H: Hash + Clone + Eq + Ord + ::std::fmt::Debug,
+		  N: Copy + BlockNumberOps + ::std::fmt::Debug,
+{
+	let mut ids = HashSet::new();
+	let precommits = precommits.into_iter().filter_map(|(id, precommit, signature)| {
+		if env.is_equal_or_descendent_of(target_hash.clone(), precommit.target_hash.clone()) &&
+			ids.insert(id.clone()) {
+				// if an authority equivocated then only include one of its
+				// votes that justify the commit
+				Some(SignedPrecommit {
+					precommit: precommit,
+					signature: signature,
+					id: id,
+					})
+			} else {
+				None
+			}
+	}).collect();
+
+	Commit {
+		target_hash,
+		target_number,
+		precommits,
+	}
+}
+
 #[cfg(test)]
 mod tests {
 	use super::*;
@@ -948,7 +961,7 @@ mod tests {
 
 			// wait for the best block to finalize.
 			finalized
-				.take_while(|&(_, n)| Ok(n < 6))
+				.take_while(|&(_, n, _)| Ok(n < 6))
 				.for_each(|_| Ok(()))
 				.map(|_| signal.fire())
 		})).unwrap();
@@ -991,7 +1004,7 @@ mod tests {
 
 				// wait for the best block to be finalized by all honest voters
 				finalized
-					.take_while(|&(_, n)| Ok(n < 6))
+					.take_while(|&(_, n, _)| Ok(n < 6))
 					.for_each(|_| Ok(()))
 			});
 
@@ -1173,7 +1186,7 @@ mod tests {
 
 			// wait for the commit message to be processed which finalized block 6
 			env.finalized_stream()
-				.take_while(|&(_, n)| Ok(n < 6))
+				.take_while(|&(_, n, _)| Ok(n < 6))
 				.for_each(|_| Ok(()))
 				.map(|_| signal.fire())
 		})).unwrap();

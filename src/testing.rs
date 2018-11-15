@@ -144,7 +144,7 @@ pub struct Environment {
 	voters: HashMap<Id, u64>,
 	local_id: Id,
 	network: Network,
-	listeners: Mutex<Vec<UnboundedSender<(&'static str, u32)>>>,
+	listeners: Mutex<Vec<UnboundedSender<(&'static str, u32, Commit<&'static str, u32, Signature, Id>)>>>,
 }
 
 impl Environment {
@@ -164,7 +164,7 @@ impl Environment {
 	}
 
 	/// Stream of finalized blocks.
-	pub fn finalized_stream(&self) -> UnboundedReceiver<(&'static str, u32)> {
+	pub fn finalized_stream(&self) -> UnboundedReceiver<(&'static str, u32, Commit<&'static str, u32, Signature, Id>)> {
 		let (tx, rx) = mpsc::unbounded();
 		self.listeners.lock().push(tx);
 		rx
@@ -227,7 +227,7 @@ impl ::voter::Environment<&'static str, u32> for Environment {
 		Ok(())
 	}
 
-	fn finalize_block(&self, hash: &'static str, number: u32) -> Result<(), Error> {
+	fn finalize_block(&self, hash: &'static str, number: u32, commit: Commit<&'static str, u32, Signature, Id>) -> Result<(), Error> {
 		let mut chain = self.chain.lock();
 
 		if number as u32 <= chain.finalized.1 {
@@ -238,7 +238,7 @@ impl ::voter::Environment<&'static str, u32> for Environment {
 
 		assert!(chain.ancestry(chain.finalized.0, hash).is_ok(), "Safety violation: reverting finalized block.");
 		chain.finalized = (hash, number as _);
-		self.listeners.lock().retain(|s| s.unbounded_send((hash, number as _)).is_ok());
+		self.listeners.lock().retain(|s| s.unbounded_send((hash, number as _, commit.clone())).is_ok());
 
 		Ok(())
 	}
