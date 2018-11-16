@@ -24,7 +24,7 @@ use std::ops::AddAssign;
 
 use bitfield::{Bitfield, Shared as BitfieldContext, LiveBitfield};
 
-use super::{Equivocation, Prevote, Precommit, Chain, BlockNumberOps};
+use super::{Equivocation, Prevote, Precommit, Chain, BlockNumberOps, threshold};
 
 #[derive(Hash, Eq, PartialEq)]
 struct Address;
@@ -73,7 +73,7 @@ enum VoteMultiplicity<Vote, Signature> {
 	EquivocatedMany(Vec<(Vote, Signature)>),
 }
 
-impl<Vote, Signature> VoteMultiplicity<Vote, Signature> {
+impl<Vote: Eq, Signature: Eq> VoteMultiplicity<Vote, Signature> {
 	fn update_graph<Id, F, G>(
 		&self,
 		weight: u64,
@@ -121,6 +121,20 @@ impl<Vote, Signature> VoteMultiplicity<Vote, Signature> {
 			}
 		}
 	}
+
+	fn contains(&self, vote: &Vote, signature: &Signature) -> bool {
+		match self {
+			VoteMultiplicity::Single(v, s) =>
+				v == vote && s == signature,
+			VoteMultiplicity::Equivocated((v1, s1), (v2, s2)) => {
+				v1 == vote && s1 == signature ||
+					v2 == vote && s2 == signature
+			},
+			VoteMultiplicity::EquivocatedMany(v) => {
+				v.iter().any(|(v, s)| v == vote && s == signature)
+			},
+		}
+	}
 }
 
 struct VoteTracker<Id: Hash + Eq, Vote, Signature> {
@@ -128,7 +142,7 @@ struct VoteTracker<Id: Hash + Eq, Vote, Signature> {
 	current_weight: u64,
 }
 
-impl<Id: Hash + Eq + Clone, Vote: Clone + Eq, Signature: Clone> VoteTracker<Id, Vote, Signature> {
+impl<Id: Hash + Eq + Clone, Vote: Clone + Eq, Signature: Clone + Eq> VoteTracker<Id, Vote, Signature> {
 	fn new() -> Self {
 		VoteTracker {
 			votes: HashMap::new(),
@@ -143,14 +157,18 @@ impl<Id: Hash + Eq + Clone, Vote: Clone + Eq, Signature: Clone> VoteTracker<Id, 
 	// since this struct doesn't track the round-number of votes, that must be set
 	// by the caller.
 	fn add_vote(&mut self, id: Id, vote: Vote, signature: Signature, weight: u64)
-		-> &VoteMultiplicity<Vote, Signature>
+		-> Option<&VoteMultiplicity<Vote, Signature>>
 	{
 		match self.votes.entry(id) {
 			Entry::Vacant(vacant) => {
 				self.current_weight += weight;
-				&*vacant.insert(VoteMultiplicity::Single(vote, signature))
+				return Some(&*vacant.insert(VoteMultiplicity::Single(vote, signature)));
 			}
 			Entry::Occupied(mut occupied) => {
+				if occupied.get().contains(&vote, &signature) {
+					return None;
+				}
+
 				let new_val = match *occupied.get_mut() {
 					VoteMultiplicity::Single(ref v, ref s) =>
 						Some(VoteMultiplicity::Equivocated((v.clone(), s.clone()), (vote, signature))),
@@ -166,9 +184,32 @@ impl<Id: Hash + Eq + Clone, Vote: Clone + Eq, Signature: Clone> VoteTracker<Id, 
 					*occupied.get_mut() = new_val;
 				}
 
-				&*occupied.into_mut()
+				Some(&*occupied.into_mut())
 			}
 		}
+	}
+
+	// Returns all imported votes.
+	fn votes(&self) -> Vec<(Id, Vote, Signature)> {
+		let mut votes = Vec::new();
+
+		for (id, vote) in self.votes.iter() {
+			match vote {
+				VoteMultiplicity::Single(v, s) => {
+					votes.push((id.clone(), v.clone(), s.clone()))
+				},
+				VoteMultiplicity::Equivocated((v1, s1), (v2, s2)) => {
+					votes.push((id.clone(), v1.clone(), s1.clone()));
+					votes.push((id.clone(), v2.clone(), s2.clone()));
+				},
+				VoteMultiplicity::EquivocatedMany(vs) => {
+					votes.extend(
+						vs.iter().map(|(v, s)| (id.clone(), v.clone(), s.clone())));
+				},
+			}
+		}
+
+		votes
 	}
 }
 
@@ -261,7 +302,7 @@ impl<Id, H, N, Signature> Round<Id, H, N, Signature> where
 
 	/// Import a prevote. Returns an equivocation proof if the vote is an equivocation.
 	///
-	/// Should not import the same prevote more than once.
+	/// Ignores duplicate prevotes (not equivocations).
 	pub fn import_prevote<C: Chain<H, N>>(
 		&mut self,
 		chain: &C,
@@ -277,7 +318,10 @@ impl<Id, H, N, Signature> Round<Id, H, N, Signature> where
 		let equivocation = {
 			let graph = &mut self.graph;
 			let bitfield_context = &self.bitfield_context;
-			let multiplicity = self.prevote.add_vote(signer.clone(), vote, signature, weight);
+			let multiplicity = match self.prevote.add_vote(signer.clone(), vote, signature, weight) {
+				Some(m) => m,
+				_ => return Ok(None),
+			};
 			let round_number = self.round_number;
 
 			multiplicity.update_graph(
@@ -325,7 +369,7 @@ impl<Id, H, N, Signature> Round<Id, H, N, Signature> where
 	/// Import a precommit. Returns an equivocation proof if the vote is an
 	/// equivocation.
 	///
-	/// Should not import the same precommit more than once.
+	/// Ignores duplicate precommits (not equivocations).
 	pub fn import_precommit<C: Chain<H, N>>(
 		&mut self,
 		chain: &C,
@@ -341,7 +385,10 @@ impl<Id, H, N, Signature> Round<Id, H, N, Signature> where
 		let equivocation = {
 			let graph = &mut self.graph;
 			let bitfield_context = &self.bitfield_context;
-			let multiplicity = self.precommit.add_vote(signer.clone(), vote, signature, weight);
+			let multiplicity = match self.precommit.add_vote(signer.clone(), vote, signature, weight) {
+				Some(m) => m,
+				_ => return Ok(None),
+			};
 			let round_number = self.round_number;
 
 			multiplicity.update_graph(
@@ -498,11 +545,16 @@ impl<Id, H, N, Signature> Round<Id, H, N, Signature> where
 	pub fn base(&self) -> (H, N) {
 		self.graph.base()
 	}
-}
 
-fn threshold(total_weight: u64) -> u64 {
-	let faulty = total_weight.saturating_sub(1) / 3;
-	total_weight - faulty
+	/// Return the round voters and weights.
+	pub fn voters(&self) -> &HashMap<Id, u64> {
+		&self.voters
+	}
+
+	/// Return all imported precommits.
+	pub fn precommits(&self) -> Vec<(Id, Precommit<H, N>, Signature)> {
+		self.precommit.votes()
+	}
 }
 
 #[cfg(test)]

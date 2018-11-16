@@ -133,7 +133,7 @@ impl<T> BlockNumberOps for T where
 {}
 
 /// Chain context necessary for implementation of the finality gadget.
-pub trait Chain<H, N: Copy + BlockNumberOps> {
+pub trait Chain<H: Eq, N: Copy + BlockNumberOps> {
 	/// Get the ancestry of a block up to but not including the base hash.
 	/// Should be in reverse order from `block`'s parent.
 	///
@@ -145,6 +145,19 @@ pub trait Chain<H, N: Copy + BlockNumberOps> {
 	///
 	/// If `base` is unknown, return `None`.
 	fn best_chain_containing(&self, base: H) -> Option<(H, N)>;
+
+	/// Returns true if `block` is a descendent of or equal to the given `base`.
+	fn is_equal_or_descendent_of(&self, base: H, block: H) -> bool {
+		if base == block { return true; }
+
+		// TODO: currently this function always succeeds since the only error
+		// variant is `Error::NotDescendent`, this may change in the future as
+		// other errors (e.g. IO) are not being exposed.
+		match self.ancestry(base, block) {
+			Ok(_) => true,
+			Err(Error::NotDescendent) => false,
+		}
+	}
 }
 
 /// An equivocation (double-vote) in a given round.
@@ -199,6 +212,77 @@ impl<H, N: Copy, S, Id> SignedMessage<H, N, S, Id> {
 	pub fn target(&self) -> (&H, N) {
 		self.message.target()
 	}
+}
+
+/// A commit message which is an aggregate of precommits.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "derive-codec", derive(Encode, Decode))]
+pub struct Commit<H, N, S, Id> {
+	/// The target block's hash.
+	pub target_hash: H,
+	/// The target block's number.
+	pub target_number: N,
+	/// Precommits for target block or any block after it that justify this commit.
+	pub precommits: Vec<SignedPrecommit<H, N, S, Id>>,
+}
+
+/// A signed precommit message.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "derive-codec", derive(Encode, Decode))]
+pub struct SignedPrecommit<H, N, S, Id> {
+	/// The precommit message which has been signed.
+	pub precommit: Precommit<H, N>,
+	/// The signature on the message.
+	pub signature: S,
+	/// The Id of the signer.
+	pub id: Id,
+}
+
+/// A commit message with compact representation of authentication data.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "derive-codec", derive(Encode, Decode))]
+pub struct CompactCommit<H, N, S, Id> {
+	/// The target block's hash.
+	pub target_hash: H,
+	/// The target block's number.
+	pub target_number: N,
+	/// Precommits for target block or any block after it that justify this commit.
+	pub precommits: Vec<Precommit<H, N>>,
+	/// Authentication data for the commit.
+	pub auth_data: CommitAuthData<S, Id>,
+}
+
+// Authentication data for a commit, currently a set of precommit signatures but
+// in the future could be optimized with BLS signature aggregation.
+pub type CommitAuthData<S, Id> = Vec<(S, Id)>;
+
+impl<H, N, S, Id> From<CompactCommit<H, N, S, Id>> for Commit<H, N, S, Id> {
+	fn from(commit: CompactCommit<H, N, S, Id>) -> Commit<H, N, S, Id> {
+		Commit {
+			target_hash: commit.target_hash,
+			target_number: commit.target_number,
+			precommits: commit.precommits.into_iter()
+				.zip(commit.auth_data.into_iter())
+				.map(|(precommit, (signature, id))| SignedPrecommit { precommit, signature, id })
+				.collect()
+		}
+	}
+}
+
+impl<H: Clone, N: Clone, S, Id> From<Commit<H, N, S, Id>> for CompactCommit<H, N, S, Id> {
+	fn from(commit: Commit<H, N, S, Id>) -> CompactCommit<H, N, S, Id> {
+		CompactCommit {
+			target_hash: commit.target_hash,
+			target_number: commit.target_number,
+			precommits: commit.precommits.iter().map(|signed| signed.precommit.clone()).collect(),
+			auth_data: commit.precommits.into_iter().map(|signed| (signed.signature, signed.id)).collect(),
+		}
+	}
+}
+
+fn threshold(total_weight: u64) -> u64 {
+	let faulty = total_weight.saturating_sub(1) / 3;
+	total_weight - faulty
 }
 
 #[cfg(test)]
