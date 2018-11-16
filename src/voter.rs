@@ -579,7 +579,7 @@ struct Committer<H, N, E: Environment<H, N>> where
 	rounds: HashMap<u64, RoundCommitter<H, N, E>>,
 	incoming: E::CommitIn,
 	outgoing: Buffered<E::CommitOut>,
-	last_finalized_number: N,
+	last_finalized: Arc<Mutex<(H, N)>>,
 }
 
 impl<H, N, E: Environment<H, N>> Committer<H, N, E> where
@@ -590,14 +590,14 @@ impl<H, N, E: Environment<H, N>> Committer<H, N, E> where
 		env: Arc<E>,
 		incoming: E::CommitIn,
 		outgoing: E::CommitOut,
-		last_finalized_number: N,
+		last_finalized: Arc<Mutex<(H, N)>>,
 	) -> Committer<H, N, E> {
 		Committer {
 			env,
 			rounds: HashMap::new(),
 			outgoing: Buffered::new(outgoing),
 			incoming,
-			last_finalized_number,
+			last_finalized,
 		}
 	}
 
@@ -629,9 +629,13 @@ impl<H, N, E: Environment<H, N>> Committer<H, N, E> where
 					threshold,
 					&*self.env,
 				)? {
-					if finalized_number > self.last_finalized_number {
-						self.last_finalized_number = finalized_number;
+					// this can't be moved to a function because the compiler
+					// will complain about getting two mutable borrows to self
+					// (due to the call to `self.rounds.get_mut`).
+					let mut last_finalized = self.last_finalized.lock();
 
+					if finalized_number > last_finalized.1 {
+						*last_finalized = (finalized_hash.clone(), finalized_number.clone());
 						self.env.finalize_block(finalized_hash, finalized_number, commit)?;
 					}
 				}
@@ -684,12 +688,6 @@ impl<H, N, E: Environment<H, N>> Committer<H, N, E> where
 		try_ready!(self.outgoing.poll());
 		Ok(Async::NotReady)
 	}
-
-	fn set_last_finalized_number(&mut self, last_finalized_number: N) {
-		if last_finalized_number > self.last_finalized_number {
-			self.last_finalized_number = last_finalized_number;
-		}
-	}
 }
 
 /// A future that maintains and multiplexes between different rounds,
@@ -703,7 +701,7 @@ pub struct Voter<H, N, E: Environment<H, N>> where
 	past_rounds: FuturesUnordered<BackgroundRound<H, N, E>>,
 	committer: Committer<H, N, E>,
 	finalized_notifications: UnboundedReceiver<(H, N, Commit<H, N, E::Signature, E::Id>)>,
-	last_finalized: (H, N),
+	last_finalized: Arc<Mutex<(H, N)>>,
 }
 
 impl<H, N, E: Environment<H, N>> Voter<H, N, E> where
@@ -749,12 +747,14 @@ impl<H, N, E: Environment<H, N>> Voter<H, N, E> where
 			best_finalized: None,
 		};
 
+		let last_finalized = Arc::new(Mutex::new(last_finalized));
+
 		let (committer_incoming, committer_outgoing) = env.committer_data();
 		let committer = Committer::new(
 			env.clone(),
 			committer_incoming,
 			committer_outgoing,
-			last_finalized.1.clone(),
+			last_finalized.clone(),
 		);
 
 		// TODO: load last round (or more), re-process all votes from them,
@@ -786,16 +786,22 @@ impl<H, N, E: Environment<H, N>> Voter<H, N, E> where
 				bg.update_finalized(f_num);
 			}
 
-			if f_num > self.last_finalized.1 {
-				// TODO: handle safety violations and check ancestry.
-				self.last_finalized = (f_hash.clone(), f_num);
-				self.committer.set_last_finalized_number(f_num.clone());
-
+			// TODO: handle safety violations and check ancestry.
+			if self.set_last_finalized(f_hash.clone(), f_num.clone()) {
 				self.env.finalize_block(f_hash, f_num, commit)?;
 			}
 		}
 
 		Ok(())
+	}
+
+	fn set_last_finalized(&self, finalized_hash: H, finalized_number: N) -> bool {
+		let mut last_finalized = self.last_finalized.lock();
+		if finalized_number > last_finalized.1 {
+			*last_finalized = (finalized_hash, finalized_number);
+			return true;
+		}
+		false
 	}
 }
 
@@ -829,7 +835,7 @@ impl<H, N, E: Environment<H, N>> Future for Voter<H, N, E> where
 		let round_params = ::round::RoundParams {
 			round_number: next_number,
 			voters: next_round_data.voters,
-			base: self.last_finalized.clone(),
+			base: self.last_finalized.lock().clone(),
 		};
 
 		let next_round = VotingRound {
