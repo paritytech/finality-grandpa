@@ -206,6 +206,36 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 	H: Hash + Clone + Eq + Ord + ::std::fmt::Debug,
 	N: Copy + BlockNumberOps + ::std::fmt::Debug,
 {
+	fn new(
+		round_number: u64,
+		base: (H, N),
+		last_round_state: ::bridge_state::LatterView<H, N>,
+		finalized_sender: UnboundedSender<(H, N, Commit<H, N, E::Signature, E::Id>)>,
+		env: Arc<E>,
+	) -> VotingRound<H, N, E> {
+		let round_data = env.round_data(round_number);
+		let round_params = ::round::RoundParams {
+			voters: round_data.voters,
+			base,
+			round_number,
+		};
+
+		VotingRound {
+			votes: Round::new(round_params),
+			incoming: round_data.incoming,
+			outgoing: Buffered::new(round_data.outgoing),
+			state: Some(
+				State::Start(round_data.prevote_timer, round_data.precommit_timer)
+			),
+			bridged_round_state: None,
+			primary_block: None,
+			best_finalized: None,
+			env,
+			last_round_state,
+			finalized_sender,
+		}
+	}
+
 	// Poll the round. When the round is completable and messages have been flushed, it will return `Async::Ready` but
 	// can continue to be polled.
 	fn poll(&mut self) -> Poll<(), E::Error> {
@@ -720,38 +750,21 @@ impl<H, N, E: Environment<H, N>> Voter<H, N, E> where
 	/// should be provided.
 	pub fn new(
 		env: Arc<E>,
-		last_round: u64,
+		last_round_number: u64,
 		last_round_state: RoundState<H, N>,
 		last_finalized: (H, N),
 	) -> Self {
 		let (finalized_sender, finalized_notifications) = mpsc::unbounded();
-
-		let next_number = last_round + 1;
-		let round_data = env.round_data(next_number);
-
-		let round_params = ::round::RoundParams {
-			round_number: next_number,
-			voters: round_data.voters,
-			base: last_finalized.clone(),
-		};
-
-		let (_, last_round_state) = ::bridge_state::bridge_state(last_round_state);
-		let best_round = VotingRound {
-			env: env.clone(),
-			votes: Round::new(round_params),
-			incoming: round_data.incoming,
-			outgoing: Buffered::new(round_data.outgoing),
-			state: Some(
-				State::Start(round_data.prevote_timer, round_data.precommit_timer)
-			),
-			bridged_round_state: None,
-			last_round_state,
-			primary_block: None,
-			finalized_sender,
-			best_finalized: None,
-		};
-
 		let last_finalized_number = Arc::new(Mutex::new(last_finalized.1.clone()));
+		let (_, last_round_state) = ::bridge_state::bridge_state(last_round_state);
+
+		let best_round = VotingRound::new(
+			last_round_number + 1,
+			last_finalized.clone(),
+			last_round_state,
+			finalized_sender,
+			env.clone(),
+		);
 
 		let (committer_incoming, committer_outgoing) = env.committer_data();
 		let committer = Committer::new(
@@ -836,30 +849,16 @@ impl<H, N, E: Environment<H, N>> Future for Voter<H, N, E> where
 
 		self.env.completed(self.best_round.votes.number(), self.best_round.votes.state())?;
 
-		let old_number = self.best_round.votes.number();
-		let next_number = old_number + 1;
-		let next_round_data = self.env.round_data(next_number);
+		let old_round_number = self.best_round.votes.number();
+		let next_round_number = old_round_number + 1;
 
-		let round_params = ::round::RoundParams {
-			round_number: next_number,
-			voters: next_round_data.voters,
-			base: self.last_finalized_in_rounds.clone(),
-		};
-
-		let next_round = VotingRound {
-			env: self.env.clone(),
-			votes: Round::new(round_params),
-			incoming: next_round_data.incoming,
-			outgoing: Buffered::new(next_round_data.outgoing),
-			state: Some(
-				State::Start(next_round_data.prevote_timer, next_round_data.precommit_timer)
-			),
-			bridged_round_state: None,
-			last_round_state: self.best_round.bridge_state(),
-			primary_block: None,
-			finalized_sender: self.best_round.finalized_sender.clone(),
-			best_finalized: None,
-		};
+		let next_round = VotingRound::new(
+			next_round_number,
+			self.last_finalized_in_rounds.clone(),
+			self.best_round.bridge_state(),
+			self.best_round.finalized_sender.clone(),
+			self.env.clone(),
+		);
 
 		let old_round = Arc::new(Mutex::new(::std::mem::replace(&mut self.best_round, next_round)));
 		let background = BackgroundRound {
@@ -869,7 +868,7 @@ impl<H, N, E: Environment<H, N>> Future for Voter<H, N, E> where
 		};
 
 		self.past_rounds.push(background);
-		self.committer.push(old_number, old_round.clone());
+		self.committer.push(old_round_number, old_round.clone());
 
 		// round has been updated. so we need to re-poll.
 		self.poll()
