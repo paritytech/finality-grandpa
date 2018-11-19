@@ -196,7 +196,7 @@ pub struct VotingRound<H, N, E: Environment<H, N>> where
 	outgoing: Buffered<E::Out>,
 	state: Option<State<E::Timer>>, // state machine driving votes.
 	bridged_round_state: Option<::bridge_state::PriorView<H, N>>, // updates to later round
-	last_round_state: ::bridge_state::LatterView<H, N>, // updates from prior round
+	last_round_state: Option<::bridge_state::LatterView<H, N>>, // updates from prior round
 	primary_block: Option<(H, N)>, // a block posted by primary as a hint. TODO: implement
 	finalized_sender: UnboundedSender<(H, N, Commit<H, N, E::Signature, E::Id>)>,
 	best_finalized: Option<(H, N, Commit<H, N, E::Signature, E::Id>)>,
@@ -209,7 +209,7 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 	fn new(
 		round_number: u64,
 		base: (H, N),
-		last_round_state: ::bridge_state::LatterView<H, N>,
+		last_round_state: Option<::bridge_state::LatterView<H, N>>,
 		finalized_sender: UnboundedSender<(H, N, Commit<H, N, E::Signature, E::Id>)>,
 		env: Arc<E>,
 	) -> VotingRound<H, N, E> {
@@ -244,9 +244,14 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 		let pre_state = self.votes.state();
 
 		self.process_incoming()?;
-		let last_round_state = self.last_round_state.get().clone();
-		self.prevote(&last_round_state)?;
-		self.precommit(&last_round_state)?;
+
+		// we only cast votes when we have access to the previous round state.
+		// we might have started this round as a prospect "future" round to
+		// check whether the voter is lagging behind the current round.
+		if let Some(last_round_state) = self.last_round_state.as_ref().map(|s| s.get().clone()) {
+			self.prevote(&last_round_state)?;
+			self.precommit(&last_round_state)?;
+		}
 
 		try_ready!(self.outgoing.poll());
 		self.process_incoming()?; // in case we got a new message signed locally.
@@ -761,7 +766,7 @@ impl<H, N, E: Environment<H, N>> Voter<H, N, E> where
 		let best_round = VotingRound::new(
 			last_round_number + 1,
 			last_finalized.clone(),
-			last_round_state,
+			Some(last_round_state),
 			finalized_sender,
 			env.clone(),
 		);
@@ -855,7 +860,7 @@ impl<H, N, E: Environment<H, N>> Future for Voter<H, N, E> where
 		let next_round = VotingRound::new(
 			next_round_number,
 			self.last_finalized_in_rounds.clone(),
-			self.best_round.bridge_state(),
+			Some(self.best_round.bridge_state()),
 			self.best_round.finalized_sender.clone(),
 			self.env.clone(),
 		);

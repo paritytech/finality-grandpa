@@ -182,7 +182,7 @@ pub enum Message<H, N> {
 	Prevote(Prevote<H, N>),
 	/// A precommit message.
 	Precommit(Precommit<H, N>),
-	// TODO: liveness-propose and commit messages.
+	// TODO: liveness - primary propose.
 }
 
 impl<H, N: Copy> Message<H, N> {
