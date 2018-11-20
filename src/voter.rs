@@ -831,26 +831,7 @@ impl<H, N, E: Environment<H, N>> Voter<H, N, E> where
 		Ok(())
 	}
 
-	fn set_last_finalized_number(&self, finalized_number: N) -> bool {
-		let mut last_finalized_number = self.last_finalized_number.lock();
-		if finalized_number > *last_finalized_number {
-			*last_finalized_number = finalized_number;
-			return true;
-		}
-		false
-	}
-}
-
-impl<H, N, E: Environment<H, N>> Future for Voter<H, N, E> where
-	H: Hash + Clone + Eq + Ord + ::std::fmt::Debug,
-	N: Copy + BlockNumberOps + ::std::fmt::Debug,
-{
-	type Item = ();
-	type Error = E::Error;
-
-	fn poll(&mut self) -> Poll<(), E::Error> {
-		self.prune_background()?;
-
+	fn process_commits(&mut self) -> Result<(), E::Error> {
 		if let Async::Ready((round_number, commit)) = self.committer.poll()? {
 			let prospective_round_number =
 				self.prospective_round.as_ref().map(|r| r.votes.number());
@@ -873,6 +854,31 @@ impl<H, N, E: Environment<H, N>> Future for Voter<H, N, E> where
 					));
 				}
 		}
+
+		Ok(())
+	}
+
+	fn set_last_finalized_number(&self, finalized_number: N) -> bool {
+		let mut last_finalized_number = self.last_finalized_number.lock();
+		if finalized_number > *last_finalized_number {
+			*last_finalized_number = finalized_number;
+			return true;
+		}
+		false
+	}
+
+}
+
+impl<H, N, E: Environment<H, N>> Future for Voter<H, N, E> where
+	H: Hash + Clone + Eq + Ord + ::std::fmt::Debug,
+	N: Copy + BlockNumberOps + ::std::fmt::Debug,
+{
+	type Item = ();
+	type Error = E::Error;
+
+	fn poll(&mut self) -> Poll<(), E::Error> {
+		self.prune_background()?;
+		self.process_commits()?;
 
 		let mut best_round_completable = None;
 
@@ -1395,15 +1401,13 @@ mod tests {
 			};
 
 			// poll the unsynced voter until it reaches a round higher than 5
-			::tokio::spawn(
-				::futures::future::poll_fn(move || {
-					if unsynced_voter.best_round.votes.number() > 5 {
-						return Ok(Async::Ready(()));
-					}
+			::tokio::spawn(::futures::future::poll_fn(move || {
+				if unsynced_voter.best_round.votes.number() > 5 {
+					Ok(Async::Ready(()))
+				} else {
 					unsynced_voter.poll().map_err(|_| ())
-				})
-				.map(|_| signal.fire())
-			);
+				}
+			}).map(|_| signal.fire()));
 
 			// initialize all remaining voters at round 5
 			let synced_voters = (0..3).map(move |i| {
