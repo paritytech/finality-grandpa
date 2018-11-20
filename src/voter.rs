@@ -1361,4 +1361,73 @@ mod tests {
 				.map(|_| signal.fire())
 		})).unwrap();
 	}
+
+	#[test]
+	fn skips_to_latest_round() {
+		// 3 voters
+		let voters = {
+			let mut map = HashMap::new();
+			for i in 0..3 {
+				map.insert(Id(i), 1);
+			}
+			map
+		};
+
+		let (network, routing_task) = testing::make_network();
+		let (signal, exit) = ::exit_future::signal();
+
+		current_thread::block_on_all(::futures::future::lazy(move || {
+			::tokio::spawn(exit.clone().until(routing_task).map(|_| ()));
+
+			// initialize unsynced voter at round 0
+			let mut unsynced_voter = {
+				let local_id = Id(4);
+
+				let env = Arc::new(Environment::new(voters.clone(), network.clone(), local_id));
+				let last_finalized = env.with_chain(|chain| {
+					chain.push_blocks(GENESIS_HASH, &["A", "B", "C", "D", "E"]);
+					chain.last_finalized()
+				});
+
+				let last_round_state = RoundState::genesis((GENESIS_HASH, 1));
+
+				Voter::new(env.clone(), 0, last_round_state, last_finalized)
+			};
+
+			// poll the unsynced voter until it reaches a round higher than 5
+			::tokio::spawn(
+				::futures::future::poll_fn(move || {
+					if unsynced_voter.best_round.votes.number() > 5 {
+						return Ok(Async::Ready(()));
+					}
+					unsynced_voter.poll().map_err(|_| ())
+				})
+				.map(|_| signal.fire())
+			);
+
+			// initialize all remaining voters at round 5
+			let synced_voters = (0..3).map(move |i| {
+				let local_id = Id(i);
+
+				// initialize chain
+				let env = Arc::new(Environment::new(voters.clone(), network.clone(), local_id));
+				let last_finalized = env.with_chain(|chain| {
+					chain.push_blocks(GENESIS_HASH, &["A", "B", "C", "D", "E"]);
+					chain.last_finalized()
+				});
+
+				let last_round_state = RoundState::genesis((GENESIS_HASH, 1));
+
+				// run voter in background starting at round 5. scheduling it to shut down when signalled.
+				let voter = Voter::new(env.clone(), 5, last_round_state, last_finalized);
+
+				exit.clone()
+					.until(voter.map_err(|_| panic!("Error voting")))
+					.map(|_| ())
+					.map_err(|_| ())
+			});
+
+			::futures::future::join_all(synced_voters)
+		})).unwrap();
+	}
 }
