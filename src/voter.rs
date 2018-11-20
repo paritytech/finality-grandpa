@@ -867,6 +867,33 @@ impl<H, N, E: Environment<H, N>> Voter<H, N, E> where
 		false
 	}
 
+	fn completed_round(&mut self, next_round: Option<VotingRound<H, N, E>>) -> Result<(), E::Error> {
+		self.env.completed(self.best_round.votes.number(), self.best_round.votes.state())?;
+
+		let old_round_number = self.best_round.votes.number();
+
+		let next_round = next_round.unwrap_or_else(||
+			VotingRound::new(
+				old_round_number + 1,
+				self.last_finalized_in_rounds.clone(),
+				Some(self.best_round.bridge_state()),
+				self.best_round.finalized_sender.clone(),
+				self.env.clone(),
+			)
+		);
+
+		let old_round = Arc::new(Mutex::new(::std::mem::replace(&mut self.best_round, next_round)));
+		let background = BackgroundRound {
+			inner: old_round.clone(),
+			task: None,
+			finalized_number: N::zero(), // TODO: do that right.
+		};
+
+		self.past_rounds.push(background);
+		self.committer.push(old_round_number, old_round);
+
+		Ok(())
+	}
 }
 
 impl<H, N, E: Environment<H, N>> Future for Voter<H, N, E> where
@@ -927,23 +954,8 @@ impl<H, N, E: Environment<H, N>> Future for Voter<H, N, E> where
 							   self.best_round.votes.number(),
 							   prospective_round.votes.number());
 
-						self.env.completed(self.best_round.votes.number(), self.best_round.votes.state())?;
-
-						let last_round_state = self.best_round.bridge_state();
-						let old_round_number = self.best_round.votes.number();
-						let old_round = Arc::new(Mutex::new(
-							::std::mem::replace(&mut self.best_round, prospective_round)));
-
-						self.best_round.last_round_state = Some(last_round_state);
-
-						let background = BackgroundRound {
-							inner: old_round.clone(),
-							task: None,
-							finalized_number: N::zero(), // FIXME
-						};
-
-						self.past_rounds.push(background);
-						self.committer.push(old_round_number, old_round);
+						prospective_round.last_round_state = Some(self.best_round.bridge_state());
+						self.completed_round(Some(prospective_round))?;
 
 						// round has been updated, so we re-poll.
 						return self.poll();
@@ -981,33 +993,12 @@ impl<H, N, E: Environment<H, N>> Future for Voter<H, N, E> where
 
 		if !should_start_next { return Ok(Async::NotReady) }
 
-		self.env.completed(self.best_round.votes.number(), self.best_round.votes.state())?;
-
-		let old_round_number = self.best_round.votes.number();
-		let next_round_number = old_round_number + 1;
-
 		trace!(target: "afg", "Best round at {} has become completable. Starting new best round at {}",
-			old_round_number,
-			next_round_number,
+			self.best_round.votes.number(),
+			self.best_round.votes.number() + 1,
 		);
 
-		let next_round = VotingRound::new(
-			next_round_number,
-			self.last_finalized_in_rounds.clone(),
-			Some(self.best_round.bridge_state()),
-			self.best_round.finalized_sender.clone(),
-			self.env.clone(),
-		);
-
-		let old_round = Arc::new(Mutex::new(::std::mem::replace(&mut self.best_round, next_round)));
-		let background = BackgroundRound {
-			inner: old_round.clone(),
-			task: None,
-			finalized_number: N::zero(), // TODO: do that right.
-		};
-
-		self.past_rounds.push(background);
-		self.committer.push(old_round_number, old_round);
+		self.completed_round(None)?;
 
 		// round has been updated. so we need to re-poll.
 		self.poll()
