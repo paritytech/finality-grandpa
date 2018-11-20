@@ -36,9 +36,11 @@ extern crate futures;
 extern crate log;
 
 #[cfg(test)]
-extern crate tokio;
-#[cfg(test)]
 extern crate exit_future;
+#[cfg(test)]
+extern crate rand;
+#[cfg(test)]
+extern crate tokio;
 
 #[cfg(feature = "derive-codec")]
 #[macro_use]

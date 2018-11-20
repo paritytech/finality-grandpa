@@ -212,10 +212,15 @@ impl ::voter::Environment<&'static str, u32> for Environment {
 	}
 
 	fn round_commit_timer(&self) -> Self::Timer {
-		const COMMIT_DELAY: Duration = Duration::from_millis(100);
+		use rand::Rng;
+
+		const COMMIT_DELAY_MILLIS: u64 = 100;
+
+		let delay = Duration::from_millis(
+			rand::thread_rng().gen_range(0, COMMIT_DELAY_MILLIS));
 
 		let now = Instant::now();
-		Box::new(Delay::new(now + COMMIT_DELAY).map_err(|_| panic!("Timer failed")))
+		Box::new(Delay::new(now + delay).map_err(|_| panic!("Timer failed")))
 	}
 
 	fn committer_data(&self) -> (Self::CommitIn, Self::CommitOut) {
