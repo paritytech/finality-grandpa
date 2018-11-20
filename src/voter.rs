@@ -867,7 +867,7 @@ impl<H, N, E: Environment<H, N>> Voter<H, N, E> where
 		false
 	}
 
-	fn completed_round(&mut self, next_round: Option<VotingRound<H, N, E>>) -> Result<(), E::Error> {
+	fn completed_best_round(&mut self, next_round: Option<VotingRound<H, N, E>>) -> Result<(), E::Error> {
 		self.env.completed(self.best_round.votes.number(), self.best_round.votes.state())?;
 
 		let old_round_number = self.best_round.votes.number();
@@ -891,6 +891,33 @@ impl<H, N, E: Environment<H, N>> Voter<H, N, E> where
 
 		self.past_rounds.push(background);
 		self.committer.push(old_round_number, old_round);
+
+		Ok(())
+	}
+
+	fn completed_prospective_round(&mut self, mut prospective_round: VotingRound<H, N, E>)
+		-> Result<(), E::Error>
+	{
+		self.env.completed(prospective_round.votes.number(), prospective_round.votes.state())?;
+
+		self.best_round = VotingRound::new(
+			prospective_round.votes.number() + 1,
+			// FIXME: this may be behind, the `prospective_round` won't issue
+			// finalization notifications (since it doesn't vote)
+			self.last_finalized_in_rounds.clone(),
+			Some(prospective_round.bridge_state()),
+			self.best_round.finalized_sender.clone(),
+			self.env.clone(),
+		);
+
+		let background = BackgroundRound {
+			inner: Arc::new(Mutex::new(prospective_round)),
+			task: None,
+			finalized_number: N::zero(), // TODO: do that right.
+		};
+
+		// TODO: should we clear `past_rounds`?
+		self.past_rounds.push(background);
 
 		Ok(())
 	}
@@ -918,26 +945,7 @@ impl<H, N, E: Environment<H, N>> Future for Voter<H, N, E> where
 					   prospective_round.votes.number(),
 					   prospective_round.votes.number() + 1);
 
-				self.env.completed(prospective_round.votes.number(), prospective_round.votes.state())?;
-
-				self.best_round = VotingRound::new(
-					prospective_round.votes.number() + 1,
-					// FIXME: this may be behind, the `prospective_round` won't issue
-					// finalization notifications (since it doesn't vote)
-					self.last_finalized_in_rounds.clone(),
-					Some(prospective_round.bridge_state()),
-					self.best_round.finalized_sender.clone(),
-					self.env.clone(),
-				);
-
-				let background = BackgroundRound {
-					inner: Arc::new(Mutex::new(prospective_round)),
-					task: None,
-					finalized_number: N::zero(), // FIXME
-				};
-
-				// TODO: should we clear `past_rounds`?
-				self.past_rounds.push(background);
+				self.completed_prospective_round(prospective_round)?;
 
 				// round has been updated, so we re-poll.
 				return self.poll();
@@ -955,7 +963,7 @@ impl<H, N, E: Environment<H, N>> Future for Voter<H, N, E> where
 							   prospective_round.votes.number());
 
 						prospective_round.last_round_state = Some(self.best_round.bridge_state());
-						self.completed_round(Some(prospective_round))?;
+						self.completed_best_round(Some(prospective_round))?;
 
 						// round has been updated, so we re-poll.
 						return self.poll();
@@ -998,7 +1006,7 @@ impl<H, N, E: Environment<H, N>> Future for Voter<H, N, E> where
 			self.best_round.votes.number() + 1,
 		);
 
-		self.completed_round(None)?;
+		self.completed_best_round(None)?;
 
 		// round has been updated. so we need to re-poll.
 		self.poll()
