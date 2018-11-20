@@ -803,7 +803,7 @@ impl<H, N, E: Environment<H, N>> Voter<H, N, E> where
 		}
 	}
 
-	fn prune_background(&mut self) -> Result<(), E::Error> {
+	fn prune_background_rounds(&mut self) -> Result<(), E::Error> {
 		// Do work on all rounds, pumping out any that are complete.
 		while let Async::Ready(Some(_)) = self.past_rounds.poll()? { }
 
@@ -858,13 +858,89 @@ impl<H, N, E: Environment<H, N>> Voter<H, N, E> where
 		Ok(())
 	}
 
-	fn set_last_finalized_number(&self, finalized_number: N) -> bool {
-		let mut last_finalized_number = self.last_finalized_number.lock();
-		if finalized_number > *last_finalized_number {
-			*last_finalized_number = finalized_number;
-			return true;
+	// Processes the current prospective round, returns `Async::NotReady` when
+	// the `best_round` has been updated and the caller should re-poll.
+	fn process_prospective_round(&mut self) -> Poll<Option<bool>, E::Error> {
+		let mut best_round_completable = None;
+
+		// poll the prospective round (if any),
+		if let Some(mut prospective_round) = self.prospective_round.take() {
+			// if it is completable then we background it and start the new
+			// `best_round` at `prospective_round.number + 1`.
+			if let Async::Ready(()) = prospective_round.poll()? {
+				trace!(target: "afg", "Prospective round at {} has become completable. Starting best round at {}",
+					   prospective_round.votes.number(),
+					   prospective_round.votes.number() + 1);
+
+				self.completed_prospective_round(prospective_round)?;
+
+				// round has been updated, so we return `NotReady` to trigger a re-poll.
+				return Ok(Async::NotReady);
+
+			} else {
+				assert!(self.best_round.votes.number() < prospective_round.votes.number());
+				if let Async::Ready(()) = self.best_round.poll()? {
+					// if `best_round` is completable and we've caught up with prospective round,
+					// then we background the current `best_round` and set the `best_round`
+					// to `prospective_round`.
+					if self.best_round.votes.number() == prospective_round.votes.number() - 1 {
+						trace!(target: "afg", "Best round at {} has caught up with prospective round at {}. \
+											   Setting best round to prospective round.",
+							   self.best_round.votes.number(),
+							   prospective_round.votes.number());
+
+						prospective_round.last_round_state = Some(self.best_round.bridge_state());
+						self.completed_best_round(Some(prospective_round))?;
+
+						// round has been updated, so we return `NotReady` to trigger a re-poll.
+						return Ok(Async::NotReady);
+					}
+
+					best_round_completable = Some(true);
+
+				} else {
+					// otherwise we keep the current `prospective_round` running.
+					self.prospective_round = Some(prospective_round);
+					best_round_completable = Some(false);
+				}
+			}
 		}
-		false
+
+		Ok(Async::Ready(best_round_completable))
+	}
+
+	fn process_best_round(&mut self, best_round_completable: Option<bool>) -> Poll<(), E::Error> {
+		// If the current `best_round` is completable and we've already precommitted,
+		// we start a new round at `best_round + 1`.
+		let should_start_next = {
+			let completable = match best_round_completable {
+				Some(true) => true,
+				Some(false) => false,
+				None => match self.best_round.poll()? {
+					Async::Ready(()) => true,
+					Async::NotReady => false,
+				},
+			};
+
+			let precommitted = match self.best_round.state {
+				Some(State::Precommitted) => true, // start when we've cast all votes.
+				_ => false,
+			};
+
+			completable && precommitted
+		};
+
+		if !should_start_next { return Ok(Async::NotReady) }
+
+		trace!(target: "afg", "Best round at {} has become completable. Starting new best round at {}",
+			self.best_round.votes.number(),
+			self.best_round.votes.number() + 1,
+		);
+
+		self.completed_best_round(None)?;
+
+		// round has been updated. so we need to re-poll.
+		self.poll()
 	}
 
 	fn completed_best_round(&mut self, next_round: Option<VotingRound<H, N, E>>) -> Result<(), E::Error> {
@@ -921,6 +997,15 @@ impl<H, N, E: Environment<H, N>> Voter<H, N, E> where
 
 		Ok(())
 	}
+
+	fn set_last_finalized_number(&self, finalized_number: N) -> bool {
+		let mut last_finalized_number = self.last_finalized_number.lock();
+		if finalized_number > *last_finalized_number {
+			*last_finalized_number = finalized_number;
+			return true;
+		}
+		false
+	}
 }
 
 impl<H, N, E: Environment<H, N>> Future for Voter<H, N, E> where
@@ -931,85 +1016,14 @@ impl<H, N, E: Environment<H, N>> Future for Voter<H, N, E> where
 	type Error = E::Error;
 
 	fn poll(&mut self) -> Poll<(), E::Error> {
-		self.prune_background()?;
+		self.prune_background_rounds()?;
 		self.process_commits()?;
 
-		let mut best_round_completable = None;
-
-		// poll the prospective round (if any),
-		if let Some(mut prospective_round) = self.prospective_round.take() {
-			// if it is completable then we background it and start the new
-			// `best_round` at `prospective_round.number + 1`.
-			if let Async::Ready(()) = prospective_round.poll()? {
-				trace!(target: "afg", "Prospective round at {} has become completable. Starting best round at {}",
-					   prospective_round.votes.number(),
-					   prospective_round.votes.number() + 1);
-
-				self.completed_prospective_round(prospective_round)?;
-
-				// round has been updated, so we re-poll.
-				return self.poll();
-
-			} else {
-				assert!(self.best_round.votes.number() < prospective_round.votes.number());
-				if let Async::Ready(()) = self.best_round.poll()? {
-					// if `best_round` is completable and we've caught up with prospective round,
-					// then we background the current `best_round` and set the `best_round`
-					// to `prospective_round`.
-					if self.best_round.votes.number() == prospective_round.votes.number() - 1 {
-						trace!(target: "afg", "Best round at {} has caught up with prospective round at {}. \
-											   Setting best round to prospective round.",
-							   self.best_round.votes.number(),
-							   prospective_round.votes.number());
-
-						prospective_round.last_round_state = Some(self.best_round.bridge_state());
-						self.completed_best_round(Some(prospective_round))?;
-
-						// round has been updated, so we re-poll.
-						return self.poll();
-					}
-
-					best_round_completable = Some(true);
-
-				} else {
-					// otherwise we keep the current `prospective_round` running.
-					self.prospective_round = Some(prospective_round);
-					best_round_completable = Some(false);
-				}
-			}
+		// this returns `Async::NotReady` when the `best_round` is updated and we should re-poll.
+		match self.process_prospective_round()? {
+			Async::Ready(best_round_completable) => self.process_best_round(best_round_completable),
+			Async::NotReady => self.poll(),
 		}
-
-		// If the current `best_round` is completable and we've already precommitted,
-		// we start a new round at `best_round + 1`.
-		let should_start_next = {
-			let completable = match best_round_completable {
-				Some(true) => true,
-				Some(false) => false,
-				None => match self.best_round.poll()? {
-					Async::Ready(()) => true,
-					Async::NotReady => false,
-				},
-			};
-
-			let precommitted = match self.best_round.state {
-				Some(State::Precommitted) => true, // start when we've cast all votes.
-				_ => false,
-			};
-
-			completable && precommitted
-		};
-
-		if !should_start_next { return Ok(Async::NotReady) }
-
-		trace!(target: "afg", "Best round at {} has become completable. Starting new best round at {}",
-			self.best_round.votes.number(),
-			self.best_round.votes.number() + 1,
-		);
-
-		self.completed_best_round(None)?;
-
-		// round has been updated. so we need to re-poll.
-		self.poll()
 	}
 }
 
