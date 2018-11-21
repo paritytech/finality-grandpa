@@ -272,6 +272,14 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 			trace!(target: "afg", "Got incoming message");
 			let SignedMessage { message, signature, id } = incoming;
 
+			if !self.env.is_equal_or_descendent_of(self.votes.base().0, message.target().0.clone()) {
+				trace!(target: "afg", "Ignoring message targeting {:?} lower than round base {:?}",
+					   message.target(),
+					   self.votes.base(),
+				);
+				continue;
+			}
+
 			match message {
 				Message::Prevote(prevote) => {
 					if let Some(e) = self.votes.import_prevote(&*self.env, prevote, id, signature)? {
