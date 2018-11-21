@@ -36,9 +36,11 @@ extern crate futures;
 extern crate log;
 
 #[cfg(test)]
-extern crate tokio;
-#[cfg(test)]
 extern crate exit_future;
+#[cfg(test)]
+extern crate rand;
+#[cfg(test)]
+extern crate tokio;
 
 #[cfg(feature = "derive-codec")]
 #[macro_use]
@@ -182,7 +184,7 @@ pub enum Message<H, N> {
 	Prevote(Prevote<H, N>),
 	/// A precommit message.
 	Precommit(Precommit<H, N>),
-	// TODO: liveness-propose and commit messages.
+	// TODO: liveness - primary propose.
 }
 
 impl<H, N: Copy> Message<H, N> {
