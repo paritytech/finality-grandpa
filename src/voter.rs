@@ -871,7 +871,7 @@ impl<H, N, E: Environment<H, N>> Voter<H, N, E> where
 	fn process_prospective_round(&mut self) -> Poll<Option<bool>, E::Error> {
 		let mut best_round_completable = None;
 
-			// poll the prospective round (if any).
+		// poll the prospective round (if any).
 		if let Some(mut prospective_round) = self.prospective_round.take() {
 			match prospective_round.poll() {
 				// if it is completable then we background it and start the new
