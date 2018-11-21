@@ -863,6 +863,7 @@ impl<H, N, E: Environment<H, N>> Voter<H, N, E> where
 					//   - a finalized block in the active round, or
 					//   - the last finalized in prior rounds
 					let ghost_base = self.prospective_round.as_ref()
+						.filter(|r| r.votes.number() + 1 < round_number)
 						.and_then(|r| r.votes.state().finalized.clone())
 						.or_else(|| self.best_round.votes.state().finalized.clone())
 						.unwrap_or_else(|| self.last_finalized_in_rounds.clone());
