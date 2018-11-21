@@ -836,10 +836,10 @@ impl<H, N, E: Environment<H, N>> Voter<H, N, E> where
 			let prospective_round_number =
 				self.prospective_round.as_ref().map(|r| r.votes.number());
 
-			// we saw a commit for a round `r` that is higher than our current best
-			// round so we start a prospective round at `r + 1`
+			// we saw a commit for a round `r` that is at least 2 higher than
+			// our current best round so we start a prospective round at `r + 1`
 			if round_number > self.best_round.votes.number() + 1 &&
-				prospective_round_number.iter().all(|n| round_number > *n) {
+				prospective_round_number.map_or(true, |n| round_number > n) {
 					trace!(target: "afg", "Imported commit for later round than current best {}, starting prospective round at {}",
 						   self.best_round.votes.number(),
 						   round_number + 1);
@@ -978,9 +978,9 @@ impl<H, N, E: Environment<H, N>> Voter<H, N, E> where
 
 		self.best_round = VotingRound::new(
 			prospective_round.votes.number() + 1,
-			// FIXME: this may be behind, the `prospective_round` won't issue
-			// finalization notifications (since it doesn't vote)
-			self.last_finalized_in_rounds.clone(),
+			// the finalized commit target that triggered
+			// the prospective round was used as base.
+			prospective_round.votes.base(),
 			Some(prospective_round.bridge_state()),
 			self.best_round.finalized_sender.clone(),
 			self.env.clone(),
