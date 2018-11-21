@@ -840,22 +840,37 @@ impl<H, N, E: Environment<H, N>> Voter<H, N, E> where
 	}
 
 	fn process_commits(&mut self) -> Result<(), E::Error> {
-		if let Async::Ready((round_number, commit)) = self.committer.poll()? {
+		if let Async::Ready((round_number, _)) = self.committer.poll()? {
 			let prospective_round_number =
 				self.prospective_round.as_ref().map(|r| r.votes.number());
 
 			// we saw a commit for a round `r` that is at least 2 higher than
 			// our current best round so we start a prospective round at `r + 1`
-			if round_number > self.best_round.votes.number() + 1 &&
-				prospective_round_number.map_or(true, |n| round_number > n) {
+			let should_start_prospective = round_number > self.best_round.votes.number() + 1 &&
+				prospective_round_number.map_or(true, |n| round_number > n);
+
+			if should_start_prospective {
 					trace!(target: "afg", "Imported commit for later round than current best {}, starting prospective round at {}",
 						   self.best_round.votes.number(),
 						   round_number + 1);
 
+					// the GHOST-base in general for a round r is the best finalized
+					// block in r-2 or earlier. We can't use the commit's base, since
+					// it's only r-1 relative to the new prospective.
+					//
+					// We use, in this order:
+					//   - a finalized a block in the current prospective round or
+					//   - a finalized block in the active round, or
+					//   - the last finalized in prior rounds
+					let ghost_base = self.prospective_round.as_ref()
+						.and_then(|r| r.votes.state().finalized.clone())
+						.or_else(|| self.best_round.votes.state().finalized.clone())
+						.unwrap_or_else(|| self.last_finalized_in_rounds.clone());
+
 					// we set `last_round_state` to `None` so that no votes are cast
 					self.prospective_round = Some(VotingRound::new(
 						round_number + 1,
-						(commit.target_hash.clone(), commit.target_number.clone()),
+						ghost_base,
 						None,
 						self.best_round.finalized_sender.clone(),
 						self.env.clone(),
