@@ -45,7 +45,7 @@ pub trait Environment<H: Eq, N: BlockNumberOps>: Chain<H, N> {
 	type Out: Sink<SinkItem=Message<H, N>,SinkError=Self::Error>;
 	type CommitIn: Stream<Item=(u64, CompactCommit<H, N, Self::Signature, Self::Id>), Error=Self::Error>;
 	type CommitOut: Sink<SinkItem=(u64, Commit<H, N, Self::Signature, Self::Id>), SinkError=Self::Error>;
-	type Error: From<::Error>;
+	type Error: From<::Error> + ::std::error::Error;
 
 	/// Produce data necessary to start a round of voting.
 	///
@@ -863,45 +863,58 @@ impl<H, N, E: Environment<H, N>> Voter<H, N, E> where
 	fn process_prospective_round(&mut self) -> Poll<Option<bool>, E::Error> {
 		let mut best_round_completable = None;
 
-		// poll the prospective round (if any),
+			// poll the prospective round (if any).
 		if let Some(mut prospective_round) = self.prospective_round.take() {
-			// if it is completable then we background it and start the new
-			// `best_round` at `prospective_round.number + 1`.
-			if let Async::Ready(()) = prospective_round.poll()? {
-				trace!(target: "afg", "Prospective round at {} has become completable. Starting best round at {}",
-					   prospective_round.votes.number(),
-					   prospective_round.votes.number() + 1);
+			match prospective_round.poll() {
+				// if it is completable then we background it and start the new
+				// `best_round` at `prospective_round.number + 1`.
+				Ok(Async::Ready(())) => {
+					trace!(target: "afg", "Prospective round at {} has become completable. Starting best round at {}",
+						   prospective_round.votes.number(),
+						   prospective_round.votes.number() + 1);
 
-				self.completed_prospective_round(prospective_round)?;
+					self.completed_prospective_round(prospective_round)?;
 
-				// round has been updated, so we return `NotReady` to trigger a re-poll.
-				return Ok(Async::NotReady);
+					// round has been updated, so we return `NotReady` to trigger a re-poll.
+					return Ok(Async::NotReady);
+				},
+				Ok(_) => {
+					assert!(self.best_round.votes.number() < prospective_round.votes.number());
+					if let Async::Ready(()) = self.best_round.poll()? {
+						// if `best_round` is completable and we've caught up with prospective round,
+						// then we background the current `best_round` and set the `best_round`
+						// to `prospective_round`.
+						if self.best_round.votes.number() == prospective_round.votes.number() - 1 {
+							trace!(target: "afg", "Best round at {} has caught up with prospective round at {}. \
+												   Setting best round to prospective round.",
+								   self.best_round.votes.number(),
+								   prospective_round.votes.number());
 
-			} else {
-				assert!(self.best_round.votes.number() < prospective_round.votes.number());
-				if let Async::Ready(()) = self.best_round.poll()? {
-					// if `best_round` is completable and we've caught up with prospective round,
-					// then we background the current `best_round` and set the `best_round`
-					// to `prospective_round`.
-					if self.best_round.votes.number() == prospective_round.votes.number() - 1 {
-						trace!(target: "afg", "Best round at {} has caught up with prospective round at {}. \
-											   Setting best round to prospective round.",
-							   self.best_round.votes.number(),
-							   prospective_round.votes.number());
+							prospective_round.last_round_state = Some(self.best_round.bridge_state());
+							self.completed_best_round(Some(prospective_round))?;
 
-						prospective_round.last_round_state = Some(self.best_round.bridge_state());
-						self.completed_best_round(Some(prospective_round))?;
+							// round has been updated, so we return `NotReady` to trigger a re-poll.
+							return Ok(Async::NotReady);
+						}
 
-						// round has been updated, so we return `NotReady` to trigger a re-poll.
-						return Ok(Async::NotReady);
+						best_round_completable = Some(true);
+
+					} else {
+						// otherwise we keep the current `prospective_round` running.
+						self.prospective_round = Some(prospective_round);
+						best_round_completable = Some(false);
 					}
-
-					best_round_completable = Some(true);
-
-				} else {
-					// otherwise we keep the current `prospective_round` running.
-					self.prospective_round = Some(prospective_round);
-					best_round_completable = Some(false);
+				},
+				Err(e) => {
+					// the `prospective_round` may fail because the commit votes
+					// haven't been validated against typical voting rules,
+					// e.g. we could start the round with a base that is too
+					// high compared to other honest voters and would fail to
+					// import their votes.
+					trace!(target: "afg", "Prospective round at {} has failed with: {}.",
+						   prospective_round.votes.number(),
+						   e,
+					);
 				}
 			}
 		}
