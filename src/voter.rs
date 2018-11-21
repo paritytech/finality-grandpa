@@ -846,6 +846,11 @@ impl<H, N, E: Environment<H, N>> Voter<H, N, E> where
 
 			// we saw a commit for a round `r` that is at least 2 higher than
 			// our current best round so we start a prospective round at `r + 1`
+			//
+			// we also start a prospective round only if our last prospective round is before
+			// the given commit message. we could technically restart if they are the same,
+			// but if commit messages at the round are live then other messages are likely to be
+			// as well. Not restarting gives the best chance of completing the round faster.
 			let should_start_prospective = round_number > self.best_round.votes.number() + 1 &&
 				prospective_round_number.map_or(true, |n| round_number > n);
 
@@ -863,7 +868,6 @@ impl<H, N, E: Environment<H, N>> Voter<H, N, E> where
 					//   - a finalized block in the active round, or
 					//   - the last finalized in prior rounds
 					let ghost_base = self.prospective_round.as_ref()
-						.filter(|r| r.votes.number() + 1 < round_number)
 						.and_then(|r| r.votes.state().finalized.clone())
 						.or_else(|| self.best_round.votes.state().finalized.clone())
 						.unwrap_or_else(|| self.last_finalized_in_rounds.clone());
