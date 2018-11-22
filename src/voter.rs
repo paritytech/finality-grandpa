@@ -66,7 +66,6 @@ pub trait Environment<H: Eq, N: BlockNumberOps>: Chain<H, N> {
 	/// signatures is flexible and can be maintained outside this crate.
 	fn round_data(&self, round: u64) -> RoundData<
 		Self::Timer,
-		Self::Id,
 		Self::In,
 		Self::Out
 	>;
@@ -85,9 +84,6 @@ pub trait Environment<H: Eq, N: BlockNumberOps>: Chain<H, N> {
 	/// commit messages that are sent (e.g. random value in [0, 1] seconds).
 	fn round_commit_timer(&self) -> Self::Timer;
 
-	/// Return the voters and respective weights for a given round.
-	fn voters(&self, round: u64) -> &HashMap<Self::Id, u64>;
-
 	/// Note that a round was completed. This is called when a round has been
 	/// voted in. Should return an error when something fatal occurs.
 	fn completed(&self, round: u64, state: RoundState<H, N>) -> Result<(), Self::Error>;
@@ -103,14 +99,12 @@ pub trait Environment<H: Eq, N: BlockNumberOps>: Chain<H, N> {
 }
 
 /// Data necessary to participate in a round.
-pub struct RoundData<Timer, Id, Input, Output> {
+pub struct RoundData<Timer, Input, Output> {
 	/// Timer before prevotes can be cast. This should be Start + 2T
 	/// where T is the gossip time estimate.
 	pub prevote_timer: Timer,
 	/// Timer before precommits can be cast. This should be Start + 4T
 	pub precommit_timer: Timer,
-	/// All voters in this round.
-	pub voters: HashMap<Id, u64>,
 	/// Incoming messages.
 	pub incoming: Input,
 	/// Outgoing messages.
@@ -208,6 +202,7 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 {
 	fn new(
 		round_number: u64,
+		voters: HashMap<E::Id, u64>,
 		base: (H, N),
 		last_round_state: Option<::bridge_state::LatterView<H, N>>,
 		finalized_sender: UnboundedSender<(H, N, Commit<H, N, E::Signature, E::Id>)>,
@@ -215,7 +210,7 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 	) -> VotingRound<H, N, E> {
 		let round_data = env.round_data(round_number);
 		let round_params = ::round::RoundParams {
-			voters: round_data.voters,
+			voters,
 			base,
 			round_number,
 		};
@@ -619,6 +614,8 @@ struct Committer<H, N, E: Environment<H, N>> where
 	N: Copy + BlockNumberOps + ::std::fmt::Debug,
 {
 	env: Arc<E>,
+	voters: HashMap<E::Id, u64>,
+	threshold: u64,
 	rounds: HashMap<u64, RoundCommitter<H, N, E>>,
 	incoming: E::CommitIn,
 	outgoing: Buffered<E::CommitOut>,
@@ -631,12 +628,16 @@ impl<H, N, E: Environment<H, N>> Committer<H, N, E> where
 {
 	fn new(
 		env: Arc<E>,
+		voters: HashMap<E::Id, u64>,
 		incoming: E::CommitIn,
 		outgoing: E::CommitOut,
 		last_finalized_number: Arc<Mutex<N>>,
 	) -> Committer<H, N, E> {
+		let threshold = threshold(voters.values().sum());
 		Committer {
 			env,
+			voters,
+			threshold,
 			rounds: HashMap::new(),
 			outgoing: Buffered::new(outgoing),
 			incoming,
@@ -664,14 +665,11 @@ impl<H, N, E: Environment<H, N>> Committer<H, N, E> where
 			} else {
 				// otherwise validate the commit and signal the finalized block
 				// (if any) to the environment
-				let voters = self.env.voters(round_number);
-				let threshold = threshold(voters.values().sum());
-
 				let commit: Commit<_, _, _, _> = commit.into();
 				if let Some((finalized_hash, finalized_number)) = validate_commit(
 					&commit.clone(),
-					voters,
-					threshold,
+					&self.voters,
+					self.threshold,
 					&*self.env,
 				)? {
 					match highest_incoming_foreign_commit {
@@ -748,6 +746,7 @@ pub struct Voter<H, N, E: Environment<H, N>> where
 	N: Copy + BlockNumberOps + ::std::fmt::Debug,
 {
 	env: Arc<E>,
+	voters: HashMap<E::Id, u64>,
 	best_round: VotingRound<H, N, E>,
 	past_rounds: FuturesUnordered<BackgroundRound<H, N, E>>,
 	committer: Committer<H, N, E>,
@@ -772,6 +771,7 @@ impl<H, N, E: Environment<H, N>> Voter<H, N, E> where
 	/// should be provided.
 	pub fn new(
 		env: Arc<E>,
+		voters: HashMap<E::Id, u64>,
 		last_round_number: u64,
 		last_round_state: RoundState<H, N>,
 		last_finalized: (H, N),
@@ -782,6 +782,7 @@ impl<H, N, E: Environment<H, N>> Voter<H, N, E> where
 
 		let best_round = VotingRound::new(
 			last_round_number + 1,
+			voters.clone(),
 			last_finalized.clone(),
 			Some(last_round_state),
 			finalized_sender,
@@ -791,6 +792,7 @@ impl<H, N, E: Environment<H, N>> Voter<H, N, E> where
 		let (committer_incoming, committer_outgoing) = env.committer_data();
 		let committer = Committer::new(
 			env.clone(),
+			voters.clone(),
 			committer_incoming,
 			committer_outgoing,
 			last_finalized_number.clone(),
@@ -801,6 +803,7 @@ impl<H, N, E: Environment<H, N>> Voter<H, N, E> where
 
 		Voter {
 			env,
+			voters,
 			best_round,
 			past_rounds: FuturesUnordered::new(),
 			prospective_round: None,
@@ -875,6 +878,7 @@ impl<H, N, E: Environment<H, N>> Voter<H, N, E> where
 					// we set `last_round_state` to `None` so that no votes are cast
 					self.prospective_round = Some(VotingRound::new(
 						round_number + 1,
+						self.voters.clone(),
 						ghost_base,
 						None,
 						self.best_round.finalized_sender.clone(),
@@ -992,6 +996,7 @@ impl<H, N, E: Environment<H, N>> Voter<H, N, E> where
 		let next_round = next_round.unwrap_or_else(||
 			VotingRound::new(
 				old_round_number + 1,
+				self.voters.clone(),
 				self.last_finalized_in_rounds.clone(),
 				Some(self.best_round.bridge_state()),
 				self.best_round.finalized_sender.clone(),
@@ -1019,6 +1024,7 @@ impl<H, N, E: Environment<H, N>> Voter<H, N, E> where
 
 		self.best_round = VotingRound::new(
 			prospective_round.votes.number() + 1,
+			self.voters.clone(),
 			// the finalized commit target that triggered
 			// the prospective round was used as base.
 			prospective_round.votes.base(),
@@ -1171,7 +1177,7 @@ mod tests {
 		let (network, routing_task) = testing::make_network();
 		let (signal, exit) = ::exit_future::signal();
 
-		let env = Arc::new(Environment::new(voters, network, local_id));
+		let env = Arc::new(Environment::new(network, local_id));
 		current_thread::block_on_all(::futures::future::lazy(move || {
 			// initialize chain
 			let last_finalized = env.with_chain(|chain| {
@@ -1183,7 +1189,7 @@ mod tests {
 
 			// run voter in background. scheduling it to shut down at the end.
 			let finalized = env.finalized_stream();
-			let voter = Voter::new(env.clone(), 0, last_round_state, last_finalized);
+			let voter = Voter::new(env.clone(), voters, 0, last_round_state, last_finalized);
 			::tokio::spawn(exit.clone()
 				.until(voter.map_err(|_| panic!("Error voting"))).map(|_| ()));
 
@@ -1218,7 +1224,7 @@ mod tests {
 			let finalized_streams = (0..7).map(move |i| {
 				let local_id = Id(i);
 				// initialize chain
-				let env = Arc::new(Environment::new(voters.clone(), network.clone(), local_id));
+				let env = Arc::new(Environment::new(network.clone(), local_id));
 				let last_finalized = env.with_chain(|chain| {
 					chain.push_blocks(GENESIS_HASH, &["A", "B", "C", "D", "E"]);
 					chain.last_finalized()
@@ -1228,7 +1234,7 @@ mod tests {
 
 				// run voter in background. scheduling it to shut down at the end.
 				let finalized = env.finalized_stream();
-				let voter = Voter::new(env.clone(), 0, last_round_state, last_finalized);
+				let voter = Voter::new(env.clone(), voters.clone(), 0, last_round_state, last_finalized);
 				::tokio::spawn(exit.clone()
 					.until(voter.map_err(|_| panic!("Error voting"))).map(|_| ()));
 
@@ -1256,7 +1262,7 @@ mod tests {
 
 		let (signal, exit) = ::exit_future::signal();
 
-		let env = Arc::new(Environment::new(voters, network, local_id));
+		let env = Arc::new(Environment::new(network, local_id));
 		current_thread::block_on_all(::futures::future::lazy(move || {
 			// initialize chain
 			let last_finalized = env.with_chain(|chain| {
@@ -1267,7 +1273,7 @@ mod tests {
 			let last_round_state = RoundState::genesis((GENESIS_HASH, 1));
 
 			// run voter in background. scheduling it to shut down at the end.
-			let voter = Voter::new(env.clone(), 0, last_round_state, last_finalized);
+			let voter = Voter::new(env.clone(), voters.clone(), 0, last_round_state, last_finalized);
 			::tokio::spawn(exit.clone()
 				.until(voter.map_err(|_| panic!("Error voting"))).map(|_| ()));
 
@@ -1315,7 +1321,7 @@ mod tests {
 
 		let (signal, exit) = ::exit_future::signal();
 
-		let env = Arc::new(Environment::new(voters, network, local_id));
+		let env = Arc::new(Environment::new(network, local_id));
 		current_thread::block_on_all(::futures::future::lazy(move || {
 			// initialize chain
 			let last_finalized = env.with_chain(|chain| {
@@ -1326,7 +1332,7 @@ mod tests {
 			let last_round_state = RoundState::genesis((GENESIS_HASH, 1));
 
 			// run voter in background. scheduling it to shut down at the end.
-			let voter = Voter::new(env.clone(), 0, last_round_state, last_finalized);
+			let voter = Voter::new(env.clone(), voters.clone(), 0, last_round_state, last_finalized);
 			::tokio::spawn(exit.clone()
 				.until(voter.map_err(|e| panic!("Error voting: {:?}", e))).map(|_| ()));
 
@@ -1395,7 +1401,7 @@ mod tests {
 			}],
 		});
 
-		let env = Arc::new(Environment::new(voters, network, local_id));
+		let env = Arc::new(Environment::new(network, local_id));
 		current_thread::block_on_all(::futures::future::lazy(move || {
 			// initialize chain
 			let last_finalized = env.with_chain(|chain| {
@@ -1406,7 +1412,7 @@ mod tests {
 			let last_round_state = RoundState::genesis((GENESIS_HASH, 1));
 
 			// run voter in background. scheduling it to shut down at the end.
-			let voter = Voter::new(env.clone(), 1, last_round_state, last_finalized);
+			let voter = Voter::new(env.clone(), voters.clone(), 1, last_round_state, last_finalized);
 			::tokio::spawn(exit.clone()
 				.until(voter.map_err(|_| panic!("Error voting"))).map(|_| ()));
 
@@ -1443,7 +1449,7 @@ mod tests {
 			let mut unsynced_voter = {
 				let local_id = Id(4);
 
-				let env = Arc::new(Environment::new(voters.clone(), network.clone(), local_id));
+				let env = Arc::new(Environment::new(network.clone(), local_id));
 				let last_finalized = env.with_chain(|chain| {
 					chain.push_blocks(GENESIS_HASH, &["A", "B", "C", "D", "E"]);
 					chain.last_finalized()
@@ -1451,7 +1457,7 @@ mod tests {
 
 				let last_round_state = RoundState::genesis((GENESIS_HASH, 1));
 
-				Voter::new(env.clone(), 0, last_round_state, last_finalized)
+				Voter::new(env.clone(), voters.clone(), 0, last_round_state, last_finalized)
 			};
 
 			// poll the unsynced voter until it reaches a round higher than 5
@@ -1468,7 +1474,7 @@ mod tests {
 				let local_id = Id(i);
 
 				// initialize chain
-				let env = Arc::new(Environment::new(voters.clone(), network.clone(), local_id));
+				let env = Arc::new(Environment::new(network.clone(), local_id));
 				let last_finalized = env.with_chain(|chain| {
 					chain.push_blocks(GENESIS_HASH, &["A", "B", "C", "D", "E"]);
 					chain.last_finalized()
@@ -1477,7 +1483,7 @@ mod tests {
 				let last_round_state = RoundState::genesis((GENESIS_HASH, 1));
 
 				// run voter in background starting at round 5. scheduling it to shut down when signalled.
-				let voter = Voter::new(env.clone(), 5, last_round_state, last_finalized);
+				let voter = Voter::new(env.clone(), voters.clone(), 5, last_round_state, last_finalized);
 
 				exit.clone()
 					.until(voter.map_err(|_| panic!("Error voting")))

@@ -141,17 +141,15 @@ pub struct Signature(pub u32);
 
 pub struct Environment {
 	chain: Mutex<DummyChain>,
-	voters: HashMap<Id, u64>,
 	local_id: Id,
 	network: Network,
 	listeners: Mutex<Vec<UnboundedSender<(&'static str, u32, Commit<&'static str, u32, Signature, Id>)>>>,
 }
 
 impl Environment {
-	pub fn new(voters: HashMap<Id, u64>, network: Network, local_id: Id) -> Self {
+	pub fn new(network: Network, local_id: Id) -> Self {
 		Environment {
 			chain: Mutex::new(DummyChain::new()),
-			voters,
 			local_id,
 			network,
 			listeners: Mutex::new(Vec::new()),
@@ -191,7 +189,7 @@ impl ::voter::Environment<&'static str, u32> for Environment {
 	type CommitOut = Box<Sink<SinkItem=(u64, Commit<&'static str, u32, Signature, Id>), SinkError=Error> + Send + 'static>;
 	type Error = Error;
 
-	fn round_data(&self, round: u64) -> RoundData<Self::Timer, Self::Id, Self::In, Self::Out> {
+	fn round_data(&self, round: u64) -> RoundData<Self::Timer, Self::In, Self::Out> {
 		const GOSSIP_DURATION: Duration = Duration::from_millis(500);
 
 		let now = Instant::now();
@@ -201,14 +199,9 @@ impl ::voter::Environment<&'static str, u32> for Environment {
 				.map_err(|_| panic!("Timer failed"))),
 			precommit_timer: Box::new(Delay::new(now + GOSSIP_DURATION + GOSSIP_DURATION)
 				.map_err(|_| panic!("Timer failed"))),
-			voters: self.voters.clone(),
 			incoming: Box::new(incoming),
 			outgoing: Box::new(outgoing),
 		}
-	}
-
-	fn voters(&self, _round: u64) -> &HashMap<Self::Id, u64> {
-		&self.voters
 	}
 
 	fn round_commit_timer(&self) -> Self::Timer {
