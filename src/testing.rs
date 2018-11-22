@@ -185,8 +185,6 @@ impl ::voter::Environment<&'static str, u32> for Environment {
 	type Signature = Signature;
 	type In = Box<Stream<Item=SignedMessage<&'static str, u32, Signature, Id>,Error=Error> + Send + 'static>;
 	type Out = Box<Sink<SinkItem=Message<&'static str, u32>,SinkError=Error> + Send + 'static>;
-	type CommitIn = Box<Stream<Item=(u64, CompactCommit<&'static str, u32, Signature, Id>), Error=Error> + Send + 'static>;
-	type CommitOut = Box<Sink<SinkItem=(u64, Commit<&'static str, u32, Signature, Id>), SinkError=Error> + Send + 'static>;
 	type Error = Error;
 
 	fn round_data(&self, round: u64) -> RoundData<Self::Timer, Self::In, Self::Out> {
@@ -214,11 +212,6 @@ impl ::voter::Environment<&'static str, u32> for Environment {
 
 		let now = Instant::now();
 		Box::new(Delay::new(now + delay).map_err(|_| panic!("Timer failed")))
-	}
-
-	fn committer_data(&self) -> (Self::CommitIn, Self::CommitOut) {
-		let (incoming, outgoing) = self.network.make_commits_comms();
-		(Box::new(incoming), Box::new(outgoing))
 	}
 
 	fn completed(&self, _round: u64, _state: RoundState<&'static str, u32>) -> Result<(), Error> {

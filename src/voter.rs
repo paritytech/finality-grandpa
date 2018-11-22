@@ -43,8 +43,6 @@ pub trait Environment<H: Eq, N: BlockNumberOps>: Chain<H, N> {
 	type Signature: Eq + Clone;
 	type In: Stream<Item=SignedMessage<H, N, Self::Signature, Self::Id>,Error=Self::Error>;
 	type Out: Sink<SinkItem=Message<H, N>,SinkError=Self::Error>;
-	type CommitIn: Stream<Item=(u64, CompactCommit<H, N, Self::Signature, Self::Id>), Error=Self::Error>;
-	type CommitOut: Sink<SinkItem=(u64, Commit<H, N, Self::Signature, Self::Id>), SinkError=Self::Error>;
 	type Error: From<::Error> + ::std::error::Error;
 
 	/// Produce data necessary to start a round of voting.
@@ -69,15 +67,6 @@ pub trait Environment<H: Eq, N: BlockNumberOps>: Chain<H, N> {
 		Self::In,
 		Self::Out
 	>;
-
-	/// Produce the input and output streams used for the commit protocol.
-	///
-	/// The input stream should provide commits which correspond to known blocks
-	/// only (including all its precommits).
-	///
-	/// The input stream is also responsible for validating the signature data
-	/// in commit messages.
-	fn committer_data(&self) -> (Self::CommitIn, Self::CommitOut);
 
 	/// Return a timer that will be used to delay the broadcast of a commit
 	/// message. This delay should not be static to minimize the amount of
@@ -609,30 +598,34 @@ impl<H, N, E: Environment<H, N>> RoundCommitter<H, N, E> where
 /// Additionally, we also listen to commit messages from rounds that aren't
 /// currently running, we validate the commit and dispatch a finalization
 /// notification (if any) to the environment.
-struct Committer<H, N, E: Environment<H, N>> where
+struct Committer<H, N, E: Environment<H, N>, In, Out> where
 	H: Hash + Clone + Eq + Ord + ::std::fmt::Debug,
 	N: Copy + BlockNumberOps + ::std::fmt::Debug,
+	In: Stream<Item=(u64, CompactCommit<H, N, E::Signature, E::Id>), Error=E::Error>,
+	Out: Sink<SinkItem=(u64, Commit<H, N, E::Signature, E::Id>), SinkError=E::Error>,
 {
 	env: Arc<E>,
 	voters: HashMap<E::Id, u64>,
 	threshold: u64,
 	rounds: HashMap<u64, RoundCommitter<H, N, E>>,
-	incoming: E::CommitIn,
-	outgoing: Buffered<E::CommitOut>,
+	incoming: In,
+	outgoing: Buffered<Out>,
 	last_finalized_number: Arc<Mutex<N>>,
 }
 
-impl<H, N, E: Environment<H, N>> Committer<H, N, E> where
+impl<H, N, E: Environment<H, N>, In, Out> Committer<H, N, E, In, Out> where
 	H: Hash + Clone + Eq + Ord + ::std::fmt::Debug,
 	N: Copy + BlockNumberOps + ::std::fmt::Debug,
+	In: Stream<Item=(u64, CompactCommit<H, N, E::Signature, E::Id>), Error=E::Error>,
+	Out: Sink<SinkItem=(u64, Commit<H, N, E::Signature, E::Id>), SinkError=E::Error>,
 {
 	fn new(
 		env: Arc<E>,
 		voters: HashMap<E::Id, u64>,
-		incoming: E::CommitIn,
-		outgoing: E::CommitOut,
+		incoming: In,
+		outgoing: Out,
 		last_finalized_number: Arc<Mutex<N>>,
-	) -> Committer<H, N, E> {
+	) -> Committer<H, N, E, In, Out> {
 		let threshold = threshold(voters.values().sum());
 		Committer {
 			env,
@@ -741,15 +734,17 @@ impl<H, N, E: Environment<H, N>> Committer<H, N, E> where
 
 /// A future that maintains and multiplexes between different rounds,
 /// and caches votes.
-pub struct Voter<H, N, E: Environment<H, N>> where
+pub struct Voter<H, N, E: Environment<H, N>, CommitIn, CommitOut> where
 	H: Hash + Clone + Eq + Ord + ::std::fmt::Debug,
 	N: Copy + BlockNumberOps + ::std::fmt::Debug,
+	CommitIn: Stream<Item=(u64, CompactCommit<H, N, E::Signature, E::Id>), Error=E::Error>,
+	CommitOut: Sink<SinkItem=(u64, Commit<H, N, E::Signature, E::Id>), SinkError=E::Error>,
 {
 	env: Arc<E>,
 	voters: HashMap<E::Id, u64>,
 	best_round: VotingRound<H, N, E>,
 	past_rounds: FuturesUnordered<BackgroundRound<H, N, E>>,
-	committer: Committer<H, N, E>,
+	committer: Committer<H, N, E, CommitIn, CommitOut>,
 	finalized_notifications: UnboundedReceiver<(H, N, Commit<H, N, E::Signature, E::Id>)>,
 	last_finalized_number: Arc<Mutex<N>>,
 	prospective_round: Option<VotingRound<H, N, E>>,
@@ -759,10 +754,11 @@ pub struct Voter<H, N, E: Environment<H, N>> where
 	last_finalized_in_rounds: (H, N),
 }
 
-impl<H, N, E: Environment<H, N>> Voter<H, N, E> where
+impl<H, N, E: Environment<H, N>, CommitIn, CommitOut> Voter<H, N, E, CommitIn, CommitOut> where
 	H: Hash + Clone + Eq + Ord + ::std::fmt::Debug,
 	N: Copy + BlockNumberOps + ::std::fmt::Debug,
-
+	CommitIn: Stream<Item=(u64, CompactCommit<H, N, E::Signature, E::Id>), Error=E::Error>,
+	CommitOut: Sink<SinkItem=(u64, Commit<H, N, E::Signature, E::Id>), SinkError=E::Error>,
 {
 	/// Create new `Voter` tracker with given round number and base block.
 	///
@@ -772,6 +768,7 @@ impl<H, N, E: Environment<H, N>> Voter<H, N, E> where
 	pub fn new(
 		env: Arc<E>,
 		voters: HashMap<E::Id, u64>,
+		committer_data: (CommitIn, CommitOut),
 		last_round_number: u64,
 		last_round_state: RoundState<H, N>,
 		last_finalized: (H, N),
@@ -789,7 +786,7 @@ impl<H, N, E: Environment<H, N>> Voter<H, N, E> where
 			env.clone(),
 		);
 
-		let (committer_incoming, committer_outgoing) = env.committer_data();
+		let (committer_incoming, committer_outgoing) = committer_data;
 		let committer = Committer::new(
 			env.clone(),
 			voters.clone(),
@@ -1055,9 +1052,11 @@ impl<H, N, E: Environment<H, N>> Voter<H, N, E> where
 	}
 }
 
-impl<H, N, E: Environment<H, N>> Future for Voter<H, N, E> where
+impl<H, N, E: Environment<H, N>, CommitIn, CommitOut> Future for Voter<H, N, E, CommitIn, CommitOut> where
 	H: Hash + Clone + Eq + Ord + ::std::fmt::Debug,
 	N: Copy + BlockNumberOps + ::std::fmt::Debug,
+	CommitIn: Stream<Item=(u64, CompactCommit<H, N, E::Signature, E::Id>), Error=E::Error>,
+	CommitOut: Sink<SinkItem=(u64, Commit<H, N, E::Signature, E::Id>), SinkError=E::Error>,
 {
 	type Item = ();
 	type Error = E::Error;
@@ -1177,6 +1176,7 @@ mod tests {
 		let (network, routing_task) = testing::make_network();
 		let (signal, exit) = ::exit_future::signal();
 
+		let committer_data = network.make_commits_comms();
 		let env = Arc::new(Environment::new(network, local_id));
 		current_thread::block_on_all(::futures::future::lazy(move || {
 			// initialize chain
@@ -1189,7 +1189,14 @@ mod tests {
 
 			// run voter in background. scheduling it to shut down at the end.
 			let finalized = env.finalized_stream();
-			let voter = Voter::new(env.clone(), voters, 0, last_round_state, last_finalized);
+			let voter = Voter::new(
+				env.clone(),
+				voters,
+				committer_data,
+				0,
+				last_round_state,
+				last_finalized,
+			);
 			::tokio::spawn(exit.clone()
 				.until(voter.map_err(|_| panic!("Error voting"))).map(|_| ()));
 
@@ -1234,7 +1241,14 @@ mod tests {
 
 				// run voter in background. scheduling it to shut down at the end.
 				let finalized = env.finalized_stream();
-				let voter = Voter::new(env.clone(), voters.clone(), 0, last_round_state, last_finalized);
+				let voter = Voter::new(
+					env.clone(),
+					voters.clone(),
+					network.make_commits_comms(),
+					0,
+					last_round_state,
+					last_finalized,
+				);
 				::tokio::spawn(exit.clone()
 					.until(voter.map_err(|_| panic!("Error voting"))).map(|_| ()));
 
@@ -1262,6 +1276,7 @@ mod tests {
 
 		let (signal, exit) = ::exit_future::signal();
 
+		let committer_data = network.make_commits_comms();
 		let env = Arc::new(Environment::new(network, local_id));
 		current_thread::block_on_all(::futures::future::lazy(move || {
 			// initialize chain
@@ -1273,7 +1288,14 @@ mod tests {
 			let last_round_state = RoundState::genesis((GENESIS_HASH, 1));
 
 			// run voter in background. scheduling it to shut down at the end.
-			let voter = Voter::new(env.clone(), voters.clone(), 0, last_round_state, last_finalized);
+			let voter = Voter::new(
+				env.clone(),
+				voters.clone(),
+				committer_data,
+				0,
+				last_round_state,
+				last_finalized,
+			);
 			::tokio::spawn(exit.clone()
 				.until(voter.map_err(|_| panic!("Error voting"))).map(|_| ()));
 
@@ -1321,6 +1343,7 @@ mod tests {
 
 		let (signal, exit) = ::exit_future::signal();
 
+		let committer_data = network.make_commits_comms();
 		let env = Arc::new(Environment::new(network, local_id));
 		current_thread::block_on_all(::futures::future::lazy(move || {
 			// initialize chain
@@ -1332,7 +1355,14 @@ mod tests {
 			let last_round_state = RoundState::genesis((GENESIS_HASH, 1));
 
 			// run voter in background. scheduling it to shut down at the end.
-			let voter = Voter::new(env.clone(), voters.clone(), 0, last_round_state, last_finalized);
+			let voter = Voter::new(
+				env.clone(),
+				voters.clone(),
+				committer_data,
+				0,
+				last_round_state,
+				last_finalized,
+			);
 			::tokio::spawn(exit.clone()
 				.until(voter.map_err(|e| panic!("Error voting: {:?}", e))).map(|_| ()));
 
@@ -1401,6 +1431,7 @@ mod tests {
 			}],
 		});
 
+		let committer_data = network.make_commits_comms();
 		let env = Arc::new(Environment::new(network, local_id));
 		current_thread::block_on_all(::futures::future::lazy(move || {
 			// initialize chain
@@ -1412,7 +1443,14 @@ mod tests {
 			let last_round_state = RoundState::genesis((GENESIS_HASH, 1));
 
 			// run voter in background. scheduling it to shut down at the end.
-			let voter = Voter::new(env.clone(), voters.clone(), 1, last_round_state, last_finalized);
+			let voter = Voter::new(
+				env.clone(),
+				voters.clone(),
+				committer_data,
+				1,
+				last_round_state,
+				last_finalized,
+			);
 			::tokio::spawn(exit.clone()
 				.until(voter.map_err(|_| panic!("Error voting"))).map(|_| ()));
 
@@ -1457,7 +1495,14 @@ mod tests {
 
 				let last_round_state = RoundState::genesis((GENESIS_HASH, 1));
 
-				Voter::new(env.clone(), voters.clone(), 0, last_round_state, last_finalized)
+				Voter::new(
+					env.clone(),
+					voters.clone(),
+					network.make_commits_comms(),
+					0,
+					last_round_state,
+					last_finalized,
+				)
 			};
 
 			// poll the unsynced voter until it reaches a round higher than 5
@@ -1483,7 +1528,14 @@ mod tests {
 				let last_round_state = RoundState::genesis((GENESIS_HASH, 1));
 
 				// run voter in background starting at round 5. scheduling it to shut down when signalled.
-				let voter = Voter::new(env.clone(), voters.clone(), 5, last_round_state, last_finalized);
+				let voter = Voter::new(
+					env.clone(),
+					voters.clone(),
+					network.make_commits_comms(),
+					5,
+					last_round_state,
+					last_finalized,
+				);
 
 				exit.clone()
 					.until(voter.map_err(|_| panic!("Error voting")))
