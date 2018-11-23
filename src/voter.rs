@@ -765,6 +765,11 @@ impl<H, N, E: Environment<H, N>, CommitIn, CommitOut> Voter<H, N, E, CommitIn, C
 	/// Provide data about the last completed round. If there is no
 	/// known last completed round, the genesis state (round number 0),
 	/// should be provided.
+	///
+	/// The input stream for commit messages should provide commits which
+	/// correspond to known blocks only (including all its precommits). It
+	/// is also responsible for validating the signature data in commit
+	/// messages.
 	pub fn new(
 		env: Arc<E>,
 		voters: HashMap<E::Id, u64>,
