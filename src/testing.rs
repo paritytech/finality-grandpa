@@ -218,7 +218,7 @@ impl ::voter::Environment<&'static str, u32> for Environment {
 		Ok(())
 	}
 
-	fn finalize_block(&self, hash: &'static str, number: u32, commit: Commit<&'static str, u32, Signature, Id>) -> Result<(), Error> {
+	fn finalize_block(&self, hash: &'static str, number: u32, _round: u64, commit: Commit<&'static str, u32, Signature, Id>) -> Result<(), Error> {
 		let mut chain = self.chain.lock();
 
 		if number as u32 <= chain.finalized.1 { panic!("Attempted to finalize backwards") }
