@@ -182,7 +182,7 @@ pub struct VotingRound<H, N, E: Environment<H, N>> where
 	last_round_state: Option<::bridge_state::LatterView<H, N>>, // updates from prior round
 	primary_block: Option<(H, N)>, // a block posted by primary as a hint. TODO: implement
 	finalized_sender: UnboundedSender<(H, N, Commit<H, N, E::Signature, E::Id>)>,
-	best_finalized: Option<(H, N, Commit<H, N, E::Signature, E::Id>)>,
+	best_finalized: Option<Commit<H, N, E::Signature, E::Id>>,
 }
 
 impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
@@ -439,10 +439,10 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 			match (&self.state, new_state.finalized) {
 				(&Some(State::Precommitted), Some((ref f_hash, ref f_number))) => {
 					let commit = create_commit(f_hash.clone(), f_number.clone(), self.votes.precommits(), &*self.env);
-					let finalized = (f_hash.clone(), f_number.clone(), commit);
+					let finalized = (f_hash.clone(), f_number.clone(), commit.clone());
 
-					let _ = self.finalized_sender.unbounded_send(finalized.clone());
-					self.best_finalized = Some(finalized);
+					let _ = self.finalized_sender.unbounded_send(finalized);
+					self.best_finalized = Some(commit);
 				}
 				_ => {}
 			}
@@ -569,15 +569,16 @@ impl<H, N, E: Environment<H, N>> RoundCommitter<H, N, E> where
 		try_ready!(self.commit_timer.poll());
 
 		let voting_round = self.voting_round.lock();
-		let commit = || -> Option<Commit<H, N, E::Signature, E::Id>> {
-			voting_round.best_finalized.as_ref().map(|(_, _, commit)| commit).cloned()
-		};
-
 		match (self.last_commit.take(), voting_round.votes.finalized()) {
-			(None, Some(_)) => Ok(Async::Ready(commit())),
-			(Some(Commit { target_number, .. }), Some((_, finalized_number)))
-				if target_number < *finalized_number => Ok(Async::Ready(commit())),
-			_ => Ok(Async::Ready(None))
+			(None, Some(_)) => {
+				Ok(Async::Ready(voting_round.best_finalized.clone()))
+			},
+			(Some(Commit { target_number, .. }), Some((_, finalized_number))) if target_number < *finalized_number => {
+				Ok(Async::Ready(voting_round.best_finalized.clone()))
+			},
+			_ => {
+				Ok(Async::Ready(None))
+			},
 		}
 	}
 }
