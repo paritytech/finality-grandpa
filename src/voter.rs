@@ -79,7 +79,7 @@ pub trait Environment<H: Eq, N: BlockNumberOps>: Chain<H, N> {
 
 	/// Called when a block should be finalized.
 	// TODO: make this a future that resolves when it's e.g. written to disk?
-	fn finalize_block(&self, hash: H, number: N, commit: Commit<H, N, Self::Signature, Self::Id>) -> Result<(), Self::Error>;
+	fn finalize_block(&self, hash: H, number: N, round: u64, commit: Commit<H, N, Self::Signature, Self::Id>) -> Result<(), Self::Error>;
 
 	// Note that an equivocation in prevotes has occurred.s
 	fn prevote_equivocation(&self, round: u64, equivocation: Equivocation<Self::Id, Prevote<H, N>, Self::Signature>);
@@ -181,8 +181,8 @@ pub struct VotingRound<H, N, E: Environment<H, N>> where
 	bridged_round_state: Option<::bridge_state::PriorView<H, N>>, // updates to later round
 	last_round_state: Option<::bridge_state::LatterView<H, N>>, // updates from prior round
 	primary_block: Option<(H, N)>, // a block posted by primary as a hint. TODO: implement
-	finalized_sender: UnboundedSender<(H, N, Commit<H, N, E::Signature, E::Id>)>,
-	best_finalized: Option<(H, N, Commit<H, N, E::Signature, E::Id>)>,
+	finalized_sender: UnboundedSender<(H, N, u64, Commit<H, N, E::Signature, E::Id>)>,
+	best_finalized: Option<Commit<H, N, E::Signature, E::Id>>,
 }
 
 impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
@@ -194,7 +194,7 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 		voters: HashMap<E::Id, u64>,
 		base: (H, N),
 		last_round_state: Option<::bridge_state::LatterView<H, N>>,
-		finalized_sender: UnboundedSender<(H, N, Commit<H, N, E::Signature, E::Id>)>,
+		finalized_sender: UnboundedSender<(H, N, u64, Commit<H, N, E::Signature, E::Id>)>,
 		env: Arc<E>,
 	) -> VotingRound<H, N, E> {
 		let round_data = env.round_data(round_number);
@@ -439,10 +439,10 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 			match (&self.state, new_state.finalized) {
 				(&Some(State::Precommitted), Some((ref f_hash, ref f_number))) => {
 					let commit = create_commit(f_hash.clone(), f_number.clone(), self.votes.precommits(), &*self.env);
-					let finalized = (f_hash.clone(), f_number.clone(), commit);
+					let finalized = (f_hash.clone(), f_number.clone(), self.votes.number(), commit.clone());
 
-					let _ = self.finalized_sender.unbounded_send(finalized.clone());
-					self.best_finalized = Some(finalized);
+					let _ = self.finalized_sender.unbounded_send(finalized);
+					self.best_finalized = Some(commit);
 				}
 				_ => {}
 			}
@@ -569,15 +569,16 @@ impl<H, N, E: Environment<H, N>> RoundCommitter<H, N, E> where
 		try_ready!(self.commit_timer.poll());
 
 		let voting_round = self.voting_round.lock();
-		let commit = || -> Option<Commit<H, N, E::Signature, E::Id>> {
-			voting_round.best_finalized.as_ref().map(|(_, _, commit)| commit).cloned()
-		};
-
 		match (self.last_commit.take(), voting_round.votes.finalized()) {
-			(None, Some(_)) => Ok(Async::Ready(commit())),
-			(Some(Commit { target_number, .. }), Some((_, finalized_number)))
-				if target_number < *finalized_number => Ok(Async::Ready(commit())),
-			_ => Ok(Async::Ready(None))
+			(None, Some(_)) => {
+				Ok(Async::Ready(voting_round.best_finalized.clone()))
+			},
+			(Some(Commit { target_number, .. }), Some((_, finalized_number))) if target_number < *finalized_number => {
+				Ok(Async::Ready(voting_round.best_finalized.clone()))
+			},
+			_ => {
+				Ok(Async::Ready(None))
+			},
 		}
 	}
 }
@@ -677,7 +678,7 @@ impl<H, N, E: Environment<H, N>, In, Out> Committer<H, N, E, In, Out> where
 
 					if finalized_number > *last_finalized_number {
 						*last_finalized_number = finalized_number.clone();
-						self.env.finalize_block(finalized_hash, finalized_number, commit)?;
+						self.env.finalize_block(finalized_hash, finalized_number, round_number, commit)?;
 					}
 				}
 			}
@@ -745,7 +746,7 @@ pub struct Voter<H, N, E: Environment<H, N>, CommitIn, CommitOut> where
 	best_round: VotingRound<H, N, E>,
 	past_rounds: FuturesUnordered<BackgroundRound<H, N, E>>,
 	committer: Committer<H, N, E, CommitIn, CommitOut>,
-	finalized_notifications: UnboundedReceiver<(H, N, Commit<H, N, E::Signature, E::Id>)>,
+	finalized_notifications: UnboundedReceiver<(H, N, u64, Commit<H, N, E::Signature, E::Id>)>,
 	last_finalized_number: Arc<Mutex<N>>,
 	prospective_round: Option<VotingRound<H, N, E>>,
 	// the commit protocol might finalize further than the current round (if we're
@@ -823,7 +824,7 @@ impl<H, N, E: Environment<H, N>, CommitIn, CommitOut> Voter<H, N, E, CommitIn, C
 		while let Async::Ready(res) = self.finalized_notifications.poll()
 			.expect("unbounded receivers do not have spurious errors; qed")
 		{
-			let (f_hash, f_num, commit) =
+			let (f_hash, f_num, round, commit) =
 				res.expect("one sender always kept alive in self.best_round; qed");
 
 			// have the task check if it should be pruned.
@@ -833,7 +834,7 @@ impl<H, N, E: Environment<H, N>, CommitIn, CommitOut> Voter<H, N, E, CommitIn, C
 			}
 
 			if self.set_last_finalized_number(f_num.clone()) {
-				self.env.finalize_block(f_hash.clone(), f_num.clone(), commit)?;
+				self.env.finalize_block(f_hash.clone(), f_num.clone(), round, commit)?;
 			}
 
 			if f_num > self.last_finalized_in_rounds.1 {
