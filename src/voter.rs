@@ -547,7 +547,7 @@ impl<H, N, E: Environment<H, N>> RoundCommitter<H, N, E> where
 		if validate_commit(
 			&commit,
 			voting_round.votes.voters(),
-			voting_round.votes.threshold(),
+			Some(voting_round.votes.threshold()),
 			env,
 		)?.is_none() {
 			return Ok(false);
@@ -663,7 +663,7 @@ impl<H, N, E: Environment<H, N>, In, Out> Committer<H, N, E, In, Out> where
 				if let Some((finalized_hash, finalized_number)) = validate_commit(
 					&commit.clone(),
 					&self.voters,
-					self.threshold,
+					Some(self.threshold),
 					&*self.env,
 				)? {
 					match highest_incoming_foreign_commit {
@@ -1079,20 +1079,27 @@ impl<H, N, E: Environment<H, N>, CommitIn, CommitOut> Future for Voter<H, N, E, 
 	}
 }
 
-fn validate_commit<H, N, E: Environment<H, N>>(
-	commit: &Commit<H, N, E::Signature, E::Id>,
-	voters: &HashMap<E::Id, u64>,
-	threshold: u64,
-	env: &E,
-) -> Result<Option<(H, N)>, E::Error>
+/// Validates a GRANDPA commit message and returns the ghost calculated using
+/// the precommits in the commit message and using the commit target as a
+/// base. If no threshold is given it is calculated using `::threshold` and the
+/// provided voters.
+pub fn validate_commit<H, N, S, I, C: Chain<H, N>>(
+	commit: &Commit<H, N, S, I>,
+	voters: &HashMap<I, u64>,
+	threshold: Option<u64>,
+	chain: &C,
+) -> Result<Option<(H, N)>, ::Error>
 	where H: Hash + Clone + Eq + Ord + ::std::fmt::Debug,
 		  N: Copy + BlockNumberOps + ::std::fmt::Debug,
+		  I: Clone + ::std::hash::Hash + ::std::cmp::Eq,
 {
+	let threshold = threshold.unwrap_or_else(|| ::threshold(voters.values().sum()));
+
 	// check that all precommits are for blocks higher than the target
 	// commit block, and that they're its descendents
 	if !commit.precommits.iter().all(|signed| {
 		signed.precommit.target_number >= commit.target_number &&
-			env.is_equal_or_descendent_of(
+			chain.is_equal_or_descendent_of(
 				commit.target_hash.clone(),
 				signed.precommit.target_hash.clone(),
 			)
@@ -1115,7 +1122,7 @@ fn validate_commit<H, N, E: Environment<H, N>>(
 	let mut vote_graph = VoteGraph::new(commit.target_hash.clone(), commit.target_number.clone());
 	for SignedPrecommit { precommit, id, .. } in commit.precommits.iter() {
 		let weight = voters.get(id).expect("previously verified that all ids are voters; qed");
-		vote_graph.insert(precommit.target_hash.clone(), precommit.target_number.clone(), *weight, env)?;
+		vote_graph.insert(precommit.target_hash.clone(), precommit.target_number.clone(), *weight, chain)?;
 	}
 
 	// find ghost using commit target as current best
