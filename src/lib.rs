@@ -322,6 +322,16 @@ pub fn validate_commit<H, N, S, I, C: Chain<H, N>>(
 		return Ok(None);
 	}
 
+	// make sure weight of all precommits surpasses threshold
+	// (this is needed to avoid a possible DoS vector)
+	let commit_weight = commit.precommits.iter().fold(0, |total_weight, precommit| {
+		total_weight + voters.get(&precommit.id).unwrap_or(&0)
+	});
+
+	if commit_weight < threshold {
+		return Ok(None);
+	}
+
 	// add all precommits to an empty vote graph with the commit target as the base
 	let mut vote_graph = vote_graph::VoteGraph::new(commit.target_hash.clone(), commit.target_number.clone());
 	for SignedPrecommit { precommit, id, .. } in commit.precommits.iter() {
