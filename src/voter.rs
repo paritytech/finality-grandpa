@@ -31,8 +31,7 @@ use std::sync::Arc;
 use parking_lot::Mutex;
 
 use round::{Round, State as RoundState};
-use vote_graph::VoteGraph;
-use ::{Chain, Commit, CompactCommit, Equivocation, Message, Prevote, Precommit, SignedMessage, SignedPrecommit, BlockNumberOps, threshold};
+use ::{Chain, Commit, CompactCommit, Equivocation, Message, Prevote, Precommit, SignedMessage, SignedPrecommit, BlockNumberOps, threshold, validate_commit};
 
 /// Necessary environment for a voter.
 ///
@@ -547,7 +546,7 @@ impl<H, N, E: Environment<H, N>> RoundCommitter<H, N, E> where
 		if validate_commit(
 			&commit,
 			voting_round.votes.voters(),
-			voting_round.votes.threshold(),
+			Some(voting_round.votes.threshold()),
 			env,
 		)?.is_none() {
 			return Ok(false);
@@ -663,7 +662,7 @@ impl<H, N, E: Environment<H, N>, In, Out> Committer<H, N, E, In, Out> where
 				if let Some((finalized_hash, finalized_number)) = validate_commit(
 					&commit.clone(),
 					&self.voters,
-					self.threshold,
+					Some(self.threshold),
 					&*self.env,
 				)? {
 					match highest_incoming_foreign_commit {
@@ -1077,56 +1076,6 @@ impl<H, N, E: Environment<H, N>, CommitIn, CommitOut> Future for Voter<H, N, E, 
 			Async::NotReady => self.poll(),
 		}
 	}
-}
-
-fn validate_commit<H, N, E: Environment<H, N>>(
-	commit: &Commit<H, N, E::Signature, E::Id>,
-	voters: &HashMap<E::Id, u64>,
-	threshold: u64,
-	env: &E,
-) -> Result<Option<(H, N)>, E::Error>
-	where H: Hash + Clone + Eq + Ord + ::std::fmt::Debug,
-		  N: Copy + BlockNumberOps + ::std::fmt::Debug,
-{
-	// check that all precommits are for blocks higher than the target
-	// commit block, and that they're its descendents
-	if !commit.precommits.iter().all(|signed| {
-		signed.precommit.target_number >= commit.target_number &&
-			env.is_equal_or_descendent_of(
-				commit.target_hash.clone(),
-				signed.precommit.target_hash.clone(),
-			)
-	}) {
-		return Ok(None);
-	}
-
-	// check that the precommits don't include equivocations
-	let mut ids = HashSet::new();
-	if !commit.precommits.iter().all(|signed| ids.insert(signed.id.clone())) {
-		return Ok(None);
-	}
-
-	// check all precommits are from authorities
-	if !commit.precommits.iter().all(|signed| voters.contains_key(&signed.id)) {
-		return Ok(None);
-	}
-
-	// add all precommits to an empty vote graph with the commit target as the base
-	let mut vote_graph = VoteGraph::new(commit.target_hash.clone(), commit.target_number.clone());
-	for SignedPrecommit { precommit, id, .. } in commit.precommits.iter() {
-		let weight = voters.get(id).expect("previously verified that all ids are voters; qed");
-		vote_graph.insert(precommit.target_hash.clone(), precommit.target_number.clone(), *weight, env)?;
-	}
-
-	// find ghost using commit target as current best
-	let ghost = vote_graph.find_ghost(
-		Some((commit.target_hash.clone(), commit.target_number.clone())),
-		|w| *w >= threshold,
-	);
-
-	// if a ghost is found then it must be equal or higher than the commit
-	// target, otherwise the commit is invalid
-	Ok(ghost)
 }
 
 fn create_commit<H, N, E: Environment<H, N>>(

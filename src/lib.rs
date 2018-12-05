@@ -60,6 +60,7 @@ mod bridge_state;
 mod testing;
 
 use std::fmt;
+
 /// A prevote for a block and its ancestors.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "derive-codec", derive(Encode, Decode))]
@@ -280,6 +281,73 @@ impl<H: Clone, N: Clone, S, Id> From<Commit<H, N, S, Id>> for CompactCommit<H, N
 			auth_data: commit.precommits.into_iter().map(|signed| (signed.signature, signed.id)).collect(),
 		}
 	}
+}
+
+/// Validates a GRANDPA commit message and returns the ghost calculated using
+/// the precommits in the commit message and using the commit target as a
+/// base. If no threshold is given it is calculated using `::threshold` and the
+/// provided voters.
+pub fn validate_commit<H, N, S, I, C: Chain<H, N>>(
+	commit: &Commit<H, N, S, I>,
+	voters: &::std::collections::HashMap<I, u64>,
+	threshold: Option<u64>,
+	chain: &C,
+) -> Result<Option<(H, N)>, ::Error>
+	where H: ::std::hash::Hash + Clone + Eq + Ord + ::std::fmt::Debug,
+		  N: Copy + BlockNumberOps + ::std::fmt::Debug,
+		  I: Clone + ::std::hash::Hash + ::std::cmp::Eq,
+{
+	let threshold = threshold.unwrap_or_else(|| ::threshold(voters.values().sum()));
+
+	// check that all precommits are for blocks higher than the target
+	// commit block, and that they're its descendents
+	if !commit.precommits.iter().all(|signed| {
+		signed.precommit.target_number >= commit.target_number &&
+			chain.is_equal_or_descendent_of(
+				commit.target_hash.clone(),
+				signed.precommit.target_hash.clone(),
+			)
+	}) {
+		return Ok(None);
+	}
+
+	// check that the precommits don't include equivocations
+	let mut ids = ::std::collections::HashSet::new();
+	if !commit.precommits.iter().all(|signed| ids.insert(signed.id.clone())) {
+		return Ok(None);
+	}
+
+	// check all precommits are from authorities
+	if !commit.precommits.iter().all(|signed| voters.contains_key(&signed.id)) {
+		return Ok(None);
+	}
+
+	// make sure weight of all precommits surpasses threshold
+	// (this is needed to avoid a possible DoS vector)
+	let commit_weight = commit.precommits.iter().fold(0, |total_weight, precommit| {
+		total_weight + voters.get(&precommit.id).unwrap_or(&0)
+	});
+
+	if commit_weight < threshold {
+		return Ok(None);
+	}
+
+	// add all precommits to an empty vote graph with the commit target as the base
+	let mut vote_graph = vote_graph::VoteGraph::new(commit.target_hash.clone(), commit.target_number.clone());
+	for SignedPrecommit { precommit, id, .. } in commit.precommits.iter() {
+		let weight = voters.get(id).expect("previously verified that all ids are voters; qed");
+		vote_graph.insert(precommit.target_hash.clone(), precommit.target_number.clone(), *weight, chain)?;
+	}
+
+	// find ghost using commit target as current best
+	let ghost = vote_graph.find_ghost(
+		Some((commit.target_hash.clone(), commit.target_number.clone())),
+		|w| *w >= threshold,
+	);
+
+	// if a ghost is found then it must be equal or higher than the commit
+	// target, otherwise the commit is invalid
+	Ok(ghost)
 }
 
 fn threshold(total_weight: u64) -> u64 {
