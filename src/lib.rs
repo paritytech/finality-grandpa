@@ -120,9 +120,9 @@ pub trait BlockNumberOps:
 	::std::cmp::Ord +
 	::std::ops::Add<Output=Self> +
 	::std::ops::Sub<Output=Self> +
-	::num::One +
-	::num::Zero +
-	::num::AsPrimitive<usize>
+	crate::num::One +
+	crate::num::Zero +
+	crate::num::AsPrimitive<usize>
 {}
 
 impl<T> BlockNumberOps for T where
@@ -130,9 +130,9 @@ impl<T> BlockNumberOps for T where
 	T: ::std::cmp::Ord,
 	T: ::std::ops::Add<Output=Self>,
 	T: ::std::ops::Sub<Output=Self>,
-	T: ::num::One,
-	T: ::num::Zero,
-	T: ::num::AsPrimitive<usize>,
+	T: crate::num::One,
+	T: crate::num::Zero,
+	T: crate::num::AsPrimitive<usize>,
 {}
 
 /// Chain context necessary for implementation of the finality gadget.
@@ -292,12 +292,12 @@ pub fn validate_commit<H, N, S, I, C: Chain<H, N>>(
 	voters: &::std::collections::HashMap<I, u64>,
 	threshold: Option<u64>,
 	chain: &C,
-) -> Result<Option<(H, N)>, ::Error>
+) -> Result<Option<(H, N)>, crate::Error>
 	where H: ::std::hash::Hash + Clone + Eq + Ord + ::std::fmt::Debug,
 		  N: Copy + BlockNumberOps + ::std::fmt::Debug,
 		  I: Clone + ::std::hash::Hash + ::std::cmp::Eq,
 {
-	let threshold = threshold.unwrap_or_else(|| ::threshold(voters.values().sum()));
+	let threshold = threshold.unwrap_or_else(|| crate::threshold(voters.values().sum()));
 
 	// check that all precommits are for blocks higher than the target
 	// commit block, and that they're its descendents

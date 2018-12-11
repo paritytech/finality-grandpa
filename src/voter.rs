@@ -30,8 +30,8 @@ use std::hash::Hash;
 use std::sync::Arc;
 use parking_lot::Mutex;
 
-use round::{Round, State as RoundState};
-use ::{Chain, Commit, CompactCommit, Equivocation, Message, Prevote, Precommit, SignedMessage, SignedPrecommit, BlockNumberOps, threshold, validate_commit};
+use crate::round::{Round, State as RoundState};
+use crate::{Chain, Commit, CompactCommit, Equivocation, Message, Prevote, Precommit, SignedMessage, SignedPrecommit, BlockNumberOps, threshold, validate_commit};
 
 /// Necessary environment for a voter.
 ///
@@ -42,7 +42,7 @@ pub trait Environment<H: Eq, N: BlockNumberOps>: Chain<H, N> {
 	type Signature: Eq + Clone;
 	type In: Stream<Item=SignedMessage<H, N, Self::Signature, Self::Id>,Error=Self::Error>;
 	type Out: Sink<SinkItem=Message<H, N>,SinkError=Self::Error>;
-	type Error: From<::Error> + ::std::error::Error;
+	type Error: From<crate::Error> + ::std::error::Error;
 
 	/// Produce data necessary to start a round of voting.
 	///
@@ -177,8 +177,8 @@ pub struct VotingRound<H, N, E: Environment<H, N>> where
 	incoming: E::In,
 	outgoing: Buffered<E::Out>,
 	state: Option<State<E::Timer>>, // state machine driving votes.
-	bridged_round_state: Option<::bridge_state::PriorView<H, N>>, // updates to later round
-	last_round_state: Option<::bridge_state::LatterView<H, N>>, // updates from prior round
+	bridged_round_state: Option<crate::bridge_state::PriorView<H, N>>, // updates to later round
+	last_round_state: Option<crate::bridge_state::LatterView<H, N>>, // updates from prior round
 	primary_block: Option<(H, N)>, // a block posted by primary as a hint. TODO: implement
 	finalized_sender: UnboundedSender<(H, N, u64, Commit<H, N, E::Signature, E::Id>)>,
 	best_finalized: Option<Commit<H, N, E::Signature, E::Id>>,
@@ -192,12 +192,12 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 		round_number: u64,
 		voters: HashMap<E::Id, u64>,
 		base: (H, N),
-		last_round_state: Option<::bridge_state::LatterView<H, N>>,
+		last_round_state: Option<crate::bridge_state::LatterView<H, N>>,
 		finalized_sender: UnboundedSender<(H, N, u64, Commit<H, N, E::Signature, E::Id>)>,
 		env: Arc<E>,
 	) -> VotingRound<H, N, E> {
 		let round_data = env.round_data(round_number);
-		let round_params = ::round::RoundParams {
+		let round_params = crate::round::RoundParams {
 			voters,
 			base,
 			round_number,
@@ -384,7 +384,7 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 								last_round_estimate.0
 							}
 						}
-						Err(::Error::NotDescendent) => last_round_estimate.0,
+						Err(crate::Error::NotDescendent) => last_round_estimate.0,
 					}
 				}
 			}
@@ -450,8 +450,8 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 
 	// call this when we build on top of a given round in order to get a handle
 	// to updates to the latest round-state.
-	fn bridge_state(&mut self) -> ::bridge_state::LatterView<H, N> {
-		let (prior_view, latter_view) = ::bridge_state::bridge_state(self.votes.state());
+	fn bridge_state(&mut self) -> crate::bridge_state::LatterView<H, N> {
+		let (prior_view, latter_view) = crate::bridge_state::bridge_state(self.votes.state());
 		if self.bridged_round_state.is_some() {
 			warn!(target: "afg", "Bridged state from round {} more than once.",
 				self.votes.number());
@@ -780,7 +780,7 @@ impl<H, N, E: Environment<H, N>, CommitIn, CommitOut> Voter<H, N, E, CommitIn, C
 	) -> Self {
 		let (finalized_sender, finalized_notifications) = mpsc::unbounded();
 		let last_finalized_number = Arc::new(Mutex::new(last_finalized.1.clone()));
-		let (_, last_round_state) = ::bridge_state::bridge_state(last_round_state);
+		let (_, last_round_state) = crate::bridge_state::bridge_state(last_round_state);
 
 		let best_round = VotingRound::new(
 			last_round_number + 1,
@@ -1115,7 +1115,7 @@ mod tests {
 	use super::*;
 	use tokio::prelude::FutureExt;
 	use tokio::runtime::current_thread;
-	use testing::{self, GENESIS_HASH, Environment, Id};
+	use crate::testing::{self, GENESIS_HASH, Environment, Id};
 	use std::collections::HashMap;
 	use std::time::Duration;
 

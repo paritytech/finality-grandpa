@@ -20,8 +20,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Instant, Duration};
 
-use round::State as RoundState;
-use voter::RoundData;
+use crate::round::State as RoundState;
+use crate::voter::RoundData;
 use tokio::timer::Delay;
 use parking_lot::Mutex;
 use futures::prelude::*;
@@ -179,7 +179,7 @@ impl Chain<&'static str, u32> for Environment {
 	}
 }
 
-impl ::voter::Environment<&'static str, u32> for Environment {
+impl crate::voter::Environment<&'static str, u32> for Environment {
 	type Timer = Box<Future<Item=(),Error=Error> + Send + 'static>;
 	type Id = Id;
 	type Signature = Signature;

@@ -450,7 +450,7 @@ impl<H, N, V> VoteGraph<H, N, V> where
 
 		if let Some((new_entry, prev_ancestor)) = produced_entry {
 			if let Some(prev_ancestor) = prev_ancestor {
-				let mut prev_ancestor_node = self.entries.get_mut(&prev_ancestor)
+				let prev_ancestor_node = self.entries.get_mut(&prev_ancestor)
 					.expect("Prior ancestor is referenced from a node; qed");
 
 				prev_ancestor_node.descendents.retain(|h| !new_entry.descendents.contains(&h));
@@ -502,7 +502,7 @@ impl<H, N, V> VoteGraph<H, N, V> where
 #[cfg(test)]
 mod tests {
 	use super::*;
-	use testing::{GENESIS_HASH, DummyChain};
+	use crate::testing::{GENESIS_HASH, DummyChain};
 
 	#[test]
 	fn graph_fork_not_at_node() {
