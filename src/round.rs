@@ -16,13 +16,13 @@
 
 //! Logic for a single round of GRANDPA.
 
-use vote_graph::VoteGraph;
+use crate::vote_graph::VoteGraph;
 
 use std::collections::hash_map::{HashMap, Entry};
 use std::hash::Hash;
 use std::ops::AddAssign;
 
-use bitfield::{Bitfield, Shared as BitfieldContext, LiveBitfield};
+use crate::bitfield::{Bitfield, Shared as BitfieldContext, LiveBitfield};
 
 use super::{Equivocation, Prevote, Precommit, Chain, BlockNumberOps, threshold};
 
@@ -79,8 +79,8 @@ impl<Vote: Eq, Signature: Eq> VoteMultiplicity<Vote, Signature> {
 		weight: u64,
 		mut import: F,
 		make_bitfield: G,
-	) -> Result<(), ::Error> where
-		F: FnMut(&Vote, u64, Bitfield<Id>) -> Result<(), ::Error>,
+	) -> Result<(), crate::Error> where
+		F: FnMut(&Vote, u64, Bitfield<Id>) -> Result<(), crate::Error>,
 		G: Fn() -> Bitfield<Id>,
 	{
 		match *self {
@@ -309,7 +309,7 @@ impl<Id, H, N, Signature> Round<Id, H, N, Signature> where
 		vote: Prevote<H, N>,
 		signer: Id,
 		signature: Signature,
-	) -> Result<Option<Equivocation<Id, Prevote<H, N>, Signature>>, ::Error> {
+	) -> Result<Option<Equivocation<Id, Prevote<H, N>, Signature>>, crate::Error> {
 		let weight = match self.voters.get(&signer) {
 			Some(weight) => *weight,
 			None => return Ok(None),
@@ -376,7 +376,7 @@ impl<Id, H, N, Signature> Round<Id, H, N, Signature> where
 		vote: Precommit<H, N>,
 		signer: Id,
 		signature: Signature,
-	) -> Result<Option<Equivocation<Id, Precommit<H, N>, Signature>>, ::Error> {
+	) -> Result<Option<Equivocation<Id, Precommit<H, N>, Signature>>, crate::Error> {
 		let weight = match self.voters.get(&signer) {
 			Some(weight) => *weight,
 			None => return Ok(None),
@@ -560,7 +560,7 @@ impl<Id, H, N, Signature> Round<Id, H, N, Signature> where
 #[cfg(test)]
 mod tests {
 	use super::*;
-	use testing::{GENESIS_HASH, DummyChain};
+	use crate::testing::{GENESIS_HASH, DummyChain};
 
 	fn voters() -> HashMap<&'static str, u64> {
 		[
