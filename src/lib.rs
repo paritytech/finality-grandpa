@@ -59,7 +59,9 @@ mod bridge_state;
 #[cfg(test)]
 mod testing;
 
+use std::collections::HashMap;
 use std::fmt;
+use std::hash::Hash;
 
 /// A prevote for a block and its ancestors.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -255,8 +257,8 @@ pub struct CompactCommit<H, N, S, Id> {
 	pub auth_data: CommitAuthData<S, Id>,
 }
 
-// Authentication data for a commit, currently a set of precommit signatures but
-// in the future could be optimized with BLS signature aggregation.
+/// Authentication data for a commit, currently a set of precommit signatures but
+/// in the future could be optimized with BLS signature aggregation.
 pub type CommitAuthData<S, Id> = Vec<(S, Id)>;
 
 impl<H, N, S, Id> From<CompactCommit<H, N, S, Id>> for Commit<H, N, S, Id> {
@@ -283,21 +285,90 @@ impl<H: Clone, N: Clone, S, Id> From<Commit<H, N, S, Id>> for CompactCommit<H, N
 	}
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VoterInfo {
+	canon_idx: usize,
+	weight: u64,
+}
+
+impl VoterInfo {
+	/// Get the canonical index of the voter.
+	pub fn canon_idx(&self) -> usize { self.canon_idx }
+
+	/// Get the weight of the voter.
+	pub fn weight(&self) -> u64 { self.weight }
+}
+
+/// A voter set, with accompanying indices.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VoterSet<Id: Hash + Eq> {
+	weights: HashMap<Id, VoterInfo>,
+	voters: Vec<(Id, u64)>,
+	threshold: u64,
+}
+
+impl<Id: Hash + Eq> VoterSet<Id> {
+	/// Get the voter info for a voter.
+	pub fn info<'a>(&'a self, id: &Id) -> Option<&'a VoterInfo> {
+		self.weights.get(id)
+	}
+
+	/// Get the length of the set.
+	pub fn len(&self) -> usize { self.voters.len() }
+
+	/// Whether the set contains the key.
+	pub fn contains_key(&self, id: &Id) -> bool {
+		self.weights.contains_key(id)
+	}
+
+	/// Get voter info by index.
+	pub fn weight_by_index<'a>(&'a self, idx: usize) -> Option<u64> {
+		self.voters.get(idx).map(|&(_, weight)| weight)
+	}
+
+	/// Get the threshold weight.
+	pub fn threshold(&self) -> u64 { self.threshold }
+
+	/// Get the total weight.
+	pub fn total_weight(&self) -> u64 {
+		self.voters.iter().map(|&(_, weight)| weight).sum()
+	}
+}
+
+impl<Id: Hash + Eq + Clone> std::iter::FromIterator<(Id, u64)> for VoterSet<Id> {
+	fn from_iter<I: IntoIterator<Item = (Id, u64)>>(iterable: I) -> Self {
+		let iter = iterable.into_iter();
+		let (lower, _) = iter.size_hint();
+
+		let mut voters = Vec::with_capacity(lower);
+		let mut weights = HashMap::with_capacity(lower);
+
+		let mut total_weight = 0;
+		for (idx, (id, weight)) in iter.enumerate() {
+			voters.push((id.clone(), weight));
+			weights.insert(id, VoterInfo { canon_idx: idx, weight });
+			total_weight += weight;
+		}
+
+		let threshold = threshold(total_weight);
+		VoterSet { weights, voters, threshold }
+	}
+}
+
 /// Validates a GRANDPA commit message and returns the ghost calculated using
 /// the precommits in the commit message and using the commit target as a
 /// base. If no threshold is given it is calculated using `::threshold` and the
 /// provided voters.
 pub fn validate_commit<H, N, S, I, C: Chain<H, N>>(
 	commit: &Commit<H, N, S, I>,
-	voters: &::std::collections::HashMap<I, u64>,
-	threshold: Option<u64>,
+	voters: &VoterSet<I>,
 	chain: &C,
 ) -> Result<Option<(H, N)>, crate::Error>
 	where H: ::std::hash::Hash + Clone + Eq + Ord + ::std::fmt::Debug,
 		  N: Copy + BlockNumberOps + ::std::fmt::Debug,
 		  I: Clone + ::std::hash::Hash + ::std::cmp::Eq,
 {
-	let threshold = threshold.unwrap_or_else(|| crate::threshold(voters.values().sum()));
+	let threshold = voters.threshold();
 
 	// check that all precommits are for blocks higher than the target
 	// commit block, and that they're its descendents
@@ -325,7 +396,7 @@ pub fn validate_commit<H, N, S, I, C: Chain<H, N>>(
 	// make sure weight of all precommits surpasses threshold
 	// (this is needed to avoid a possible DoS vector)
 	let commit_weight = commit.precommits.iter().fold(0, |total_weight, precommit| {
-		total_weight + voters.get(&precommit.id).unwrap_or(&0)
+		total_weight + voters.info(&precommit.id).map(|info| info.weight()).unwrap_or(0)
 	});
 
 	if commit_weight < threshold {
@@ -335,8 +406,10 @@ pub fn validate_commit<H, N, S, I, C: Chain<H, N>>(
 	// add all precommits to an empty vote graph with the commit target as the base
 	let mut vote_graph = vote_graph::VoteGraph::new(commit.target_hash.clone(), commit.target_number.clone());
 	for SignedPrecommit { precommit, id, .. } in commit.precommits.iter() {
-		let weight = voters.get(id).expect("previously verified that all ids are voters; qed");
-		vote_graph.insert(precommit.target_hash.clone(), precommit.target_number.clone(), *weight, chain)?;
+		let weight = voters.info(id)
+			.expect("previously verified that all ids are voters; qed")
+			.weight();
+		vote_graph.insert(precommit.target_hash.clone(), precommit.target_number.clone(), weight, chain)?;
 	}
 
 	// find ghost using commit target as current best
@@ -357,6 +430,22 @@ fn threshold(total_weight: u64) -> u64 {
 
 #[cfg(test)]
 mod tests {
+	use super::threshold;
+
+	#[test]
+	fn threshold_is_right() {
+		assert_eq!(threshold(3), 3);
+		assert_eq!(threshold(4), 3);
+		assert_eq!(threshold(5), 4);
+		assert_eq!(threshold(6), 5);
+		assert_eq!(threshold(7), 5);
+		assert_eq!(threshold(10), 7);
+		assert_eq!(threshold(100), 67);
+		assert_eq!(threshold(101), 68);
+		assert_eq!(threshold(102), 69);
+		assert_eq!(threshold(103), 69);
+	}
+
 	#[cfg(feature = "derive-codec")]
 	#[test]
 	fn codec_was_derived() {
