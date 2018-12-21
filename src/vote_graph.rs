@@ -119,6 +119,49 @@ impl<H, N, V> VoteGraph<H, N, V> where
 		(self.base.clone(), self.base_number)
 	}
 
+	/// Adjust the base of the graph. The new base must be an ancestor of the
+	/// old base.
+	///
+	/// Provide an ancestry proof from the old base to the new. The proof
+	/// should be in reverse order from the old base's parent.
+	pub fn adjust_base(&mut self, ancestry_proof: &[H]) {
+		let new_hash = match ancestry_proof.last() {
+			None => return, // empty -- nothing to do.
+			Some(h) => h,
+		};
+
+		// not a valid ancestry proof. TODO: error?
+		if ancestry_proof.len() > self.base_number.as_() { return }
+
+		// hack because we can't convert usize -> N, only vice-versa.
+		// hopefully LLVM can optimize.
+		let new_number = {
+			let mut new_number = self.base_number;
+			for _ in 0..ancestry_proof.len() {
+				new_number = new_number - N::one();
+			}
+			new_number
+		};
+
+		let entry = {
+			let old_entry = self.entries.get_mut(&self.base)
+				.expect("base hash entry always exists; qed");
+
+			old_entry.ancestors.extend(ancestry_proof.iter().cloned());
+
+			Entry {
+				number: new_number,
+				ancestors: Vec::new(),
+				descendents: vec![self.base.clone()],
+				cumulative_vote: old_entry.cumulative_vote.clone(),
+			}
+		};
+
+		self.entries.insert(new_hash.clone(), entry);
+		self.base = new_hash.clone();
+		self.base_number = new_number;
+	}
+
 	/// Insert a vote with given value into the graph at given hash and number.
 	pub fn insert<C: Chain<H, N>>(&mut self, hash: H, number: N, vote: V, chain: &C) -> Result<(), Error> {
 		match self.find_containing_nodes(hash.clone(), number) {
@@ -728,5 +771,35 @@ mod tests {
 			let number = chain.number(block);
 			assert_eq!(tracker.find_ancestor(block, number, |&x| x >= 20).unwrap(), ("C", 4));
 		}
+	}
+
+	#[test]
+	fn adjust_base() {
+		let mut chain = DummyChain::new();
+		let mut tracker = VoteGraph::new("E", 6);
+
+		chain.push_blocks(GENESIS_HASH, &["A", "B", "C", "D", "E", "F"]);
+		chain.push_blocks("E", &["EA", "EB", "EC", "ED"]);
+		chain.push_blocks("F", &["FA", "FB", "FC"]);
+
+		tracker.insert("FC", 10, 5u32, &chain).unwrap();
+		tracker.insert("ED", 10, 7, &chain).unwrap();
+
+		assert_eq!(tracker.base(), ("E", 6));
+
+		tracker.adjust_base(&["D", "C", "B", "A"]);
+
+		assert_eq!(tracker.base(), ("A", 2));
+
+		chain.push_blocks("A", &["3", "4", "5"]);
+
+		tracker.adjust_base(&[GENESIS_HASH]);
+		assert_eq!(tracker.base(), (GENESIS_HASH, 1));
+
+		assert_eq!(tracker.entries.get(GENESIS_HASH).unwrap().cumulative_vote, 12);
+
+		tracker.insert("5", 5, 3, &chain).unwrap();
+
+		assert_eq!(tracker.entries.get(GENESIS_HASH).unwrap().cumulative_vote, 15);
 	}
 }
