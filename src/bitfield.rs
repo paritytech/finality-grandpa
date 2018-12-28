@@ -39,7 +39,7 @@ use crate::VoterInfo;
 /// Errors that can occur when using the equivocation weighting tools.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Error {
-	/// Too many voter registered in bitfield. (index, n_voters).
+	/// Attempted to index bitfield past its length.
 	IndexOutOfBounds(usize, usize),
 	/// Mismatch in bitfield length when merging bitfields.
 	LengthMismatch(usize, usize),
