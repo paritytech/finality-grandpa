@@ -80,7 +80,7 @@ impl AddAssign for VoteWeight {
 enum VoteMultiplicity<Vote, Signature> {
 	// validator voted once.
 	Single(Vote, Signature),
-	// validator equivocated once.
+ 	// validator equivocated at least once.
 	Equivocated((Vote, Signature), (Vote, Signature)),
 }
 
