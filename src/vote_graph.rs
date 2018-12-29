@@ -135,6 +135,8 @@ impl<H, N, V> VoteGraph<H, N, V> where
 
 		// hack because we can't convert usize -> N, only vice-versa.
 		// hopefully LLVM can optimize.
+		//
+		// TODO: Add TryFrom to `BlockNumberOps`.
 		let new_number = {
 			let mut new_number = self.base_number;
 			for _ in 0..ancestry_proof.len() {
