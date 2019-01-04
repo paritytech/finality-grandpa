@@ -31,7 +31,10 @@ use std::sync::Arc;
 use parking_lot::Mutex;
 
 use crate::round::{Round, State as RoundState};
-use crate::{Chain, Commit, CompactCommit, Equivocation, Message, Prevote, Precommit, SignedMessage, SignedPrecommit, BlockNumberOps, threshold, validate_commit};
+use crate::{
+	Chain, Commit, CompactCommit, Equivocation, Message, Prevote, Precommit, SignedMessage,
+	SignedPrecommit, BlockNumberOps, VoterSet, validate_commit
+};
 
 /// Necessary environment for a voter.
 ///
@@ -190,7 +193,7 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 {
 	fn new(
 		round_number: u64,
-		voters: HashMap<E::Id, u64>,
+		voters: VoterSet<E::Id>,
 		base: (H, N),
 		last_round_state: Option<crate::bridge_state::LatterView<H, N>>,
 		finalized_sender: UnboundedSender<(H, N, u64, Commit<H, N, E::Signature, E::Id>)>,
@@ -546,7 +549,6 @@ impl<H, N, E: Environment<H, N>> RoundCommitter<H, N, E> where
 		if validate_commit(
 			&commit,
 			voting_round.votes.voters(),
-			Some(voting_round.votes.threshold()),
 			env,
 		)?.is_none() {
 			return Ok(false);
@@ -605,8 +607,7 @@ struct Committer<H, N, E: Environment<H, N>, In, Out> where
 	Out: Sink<SinkItem=(u64, Commit<H, N, E::Signature, E::Id>), SinkError=E::Error>,
 {
 	env: Arc<E>,
-	voters: HashMap<E::Id, u64>,
-	threshold: u64,
+	voters: VoterSet<E::Id>,
 	rounds: HashMap<u64, RoundCommitter<H, N, E>>,
 	incoming: In,
 	outgoing: Buffered<Out>,
@@ -621,16 +622,14 @@ impl<H, N, E: Environment<H, N>, In, Out> Committer<H, N, E, In, Out> where
 {
 	fn new(
 		env: Arc<E>,
-		voters: HashMap<E::Id, u64>,
+		voters: VoterSet<E::Id>,
 		incoming: In,
 		outgoing: Out,
 		last_finalized_number: Arc<Mutex<N>>,
 	) -> Committer<H, N, E, In, Out> {
-		let threshold = threshold(voters.values().sum());
 		Committer {
 			env,
 			voters,
-			threshold,
 			rounds: HashMap::new(),
 			outgoing: Buffered::new(outgoing),
 			incoming,
@@ -662,7 +661,6 @@ impl<H, N, E: Environment<H, N>, In, Out> Committer<H, N, E, In, Out> where
 				if let Some((finalized_hash, finalized_number)) = validate_commit(
 					&commit.clone(),
 					&self.voters,
-					Some(self.threshold),
 					&*self.env,
 				)? {
 					match highest_incoming_foreign_commit {
@@ -741,7 +739,7 @@ pub struct Voter<H, N, E: Environment<H, N>, CommitIn, CommitOut> where
 	CommitOut: Sink<SinkItem=(u64, Commit<H, N, E::Signature, E::Id>), SinkError=E::Error>,
 {
 	env: Arc<E>,
-	voters: HashMap<E::Id, u64>,
+	voters: VoterSet<E::Id>,
 	best_round: VotingRound<H, N, E>,
 	past_rounds: FuturesUnordered<BackgroundRound<H, N, E>>,
 	committer: Committer<H, N, E, CommitIn, CommitOut>,
@@ -772,7 +770,7 @@ impl<H, N, E: Environment<H, N>, CommitIn, CommitOut> Voter<H, N, E, CommitIn, C
 	/// messages.
 	pub fn new(
 		env: Arc<E>,
-		voters: HashMap<E::Id, u64>,
+		voters: VoterSet<E::Id>,
 		committer_data: (CommitIn, CommitOut),
 		last_round_number: u64,
 		last_round_state: RoundState<H, N>,
@@ -1116,17 +1114,12 @@ mod tests {
 	use tokio::prelude::FutureExt;
 	use tokio::runtime::current_thread;
 	use crate::testing::{self, GENESIS_HASH, Environment, Id};
-	use std::collections::HashMap;
 	use std::time::Duration;
 
 	#[test]
 	fn talking_to_myself() {
 		let local_id = Id(5);
-		let voters = {
-			let mut map = HashMap::new();
-			map.insert(local_id, 100);
-			map
-		};
+		let voters = std::iter::once((local_id, 100)).collect();
 
 		let (network, routing_task) = testing::make_network();
 		let (signal, exit) = ::exit_future::signal();
@@ -1168,13 +1161,7 @@ mod tests {
 	#[test]
 	fn finalizing_at_fault_threshold() {
 		// 10 voters
-		let voters = {
-			let mut map = HashMap::new();
-			for i in 0..10 {
-				map.insert(Id(i), 1);
-			}
-			map
-		};
+		let voters: VoterSet<_> = (0..10).map(|i| (Id(i), 1)).collect();
 
 		let (network, routing_task) = testing::make_network();
 		let (signal, exit) = ::exit_future::signal();
@@ -1220,11 +1207,7 @@ mod tests {
 	#[test]
 	fn broadcast_commit() {
 		let local_id = Id(5);
-		let voters = {
-			let mut map = HashMap::new();
-			map.insert(local_id, 100);
-			map
-		};
+		let voters: VoterSet<_> = std::iter::once((local_id, 100)).collect();
 
 		let (network, routing_task) = testing::make_network();
 		let (commits, _) = network.make_commits_comms();
@@ -1265,12 +1248,10 @@ mod tests {
 	fn broadcast_commit_only_if_newer() {
 		let local_id = Id(5);
 		let test_id = Id(42);
-		let voters = {
-			let mut map = HashMap::new();
-			map.insert(local_id, 100);
-			map.insert(test_id, 201);
-			map
-		};
+		let voters: VoterSet<_> = [
+			(local_id, 100),
+			(test_id, 201),
+		].iter().cloned().collect();
 
 		let (network, routing_task) = testing::make_network();
 		let (commits_stream, commits_sink) = network.make_commits_comms();
@@ -1363,12 +1344,10 @@ mod tests {
 	fn import_commit_for_any_round() {
 		let local_id = Id(5);
 		let test_id = Id(42);
-		let voters = {
-			let mut map = HashMap::new();
-			map.insert(local_id, 100);
-			map.insert(test_id, 201);
-			map
-		};
+		let voters: VoterSet<_> = [
+			(local_id, 100),
+			(test_id, 201),
+		].iter().cloned().collect();
 
 		let (network, routing_task) = testing::make_network();
 		let (_, commits_sink) = network.make_commits_comms();
@@ -1424,13 +1403,7 @@ mod tests {
 	#[test]
 	fn skips_to_latest_round() {
 		// 3 voters
-		let voters = {
-			let mut map = HashMap::new();
-			for i in 0..3 {
-				map.insert(Id(i), 1);
-			}
-			map
-		};
+		let voters: VoterSet<_> = (0..3).map(|i| (Id(i), 1)).collect();
 
 		let (network, routing_task) = testing::make_network();
 		let (signal, exit) = ::exit_future::signal();

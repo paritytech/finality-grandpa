@@ -22,44 +22,57 @@ use std::collections::hash_map::{HashMap, Entry};
 use std::hash::Hash;
 use std::ops::AddAssign;
 
-use crate::bitfield::{Bitfield, Shared as BitfieldContext, LiveBitfield};
+use crate::bitfield::{Shared as BitfieldContext, Bitfield};
 
-use super::{Equivocation, Prevote, Precommit, Chain, BlockNumberOps, threshold};
+use super::{Equivocation, Prevote, Precommit, Chain, BlockNumberOps, VoterSet};
 
 #[derive(Hash, Eq, PartialEq)]
 struct Address;
 
-#[derive(Debug, Clone)]
-struct VoteWeight<Id> {
+#[derive(Debug, PartialEq, Eq)]
+struct TotalWeight {
 	prevote: u64,
 	precommit: u64,
-	bitfield: Bitfield<Id>,
 }
 
-impl<Id> Default for VoteWeight<Id> {
+#[derive(Debug, Clone)]
+struct VoteWeight {
+	bitfield: Bitfield,
+}
+
+impl Default for VoteWeight {
 	fn default() -> Self {
 		VoteWeight {
-			prevote: 0,
-			precommit: 0,
 			bitfield: Bitfield::Blank,
 		}
 	}
 }
 
-impl<Id: Eq> AddAssign for VoteWeight<Id> {
-	fn add_assign(&mut self, rhs: VoteWeight<Id>) {
-		self.prevote += rhs.prevote;
-		self.precommit += rhs.precommit;
+impl VoteWeight {
+	// compute the total weight of all votes on this node.
+	// equivocators are counted as voting for everything, and must be provided.
+	fn total_weight<Id: Hash + Eq>(
+		&self,
+		equivocators: &Bitfield,
+		voter_set: &VoterSet<Id>,
+	) -> TotalWeight {
+		let with_equivocators = self.bitfield.merge(equivocators)
+			.expect("this function is never invoked with \
+				equivocators of different canonicality; qed");
 
-		// if any votes are counted in both weights, undo the double-counting.
-		let (o_v, o_c) = self.bitfield.overlap(&rhs.bitfield)
-			.expect("vote-weights with different contexts are never compared in this module; qed");
+		// the unwrap-or is defensive only: there should be registered weights for
+		// all known indices.
+		let (prevote, precommit) = with_equivocators
+			.total_weight(|idx| voter_set.weight_by_index(idx).unwrap_or(0));
 
-		self.prevote -= o_v;
-		self.precommit -= o_c;
+		TotalWeight { prevote, precommit }
+	}
+}
 
+impl AddAssign for VoteWeight {
+	fn add_assign(&mut self, rhs: VoteWeight) {
 		self.bitfield = self.bitfield.merge(&rhs.bitfield)
-			.expect("vote-weights with different contexts are never compared in this module; qed");
+			.expect("both bitfields set to same length; qed");
 	}
 }
 
@@ -67,61 +80,11 @@ impl<Id: Eq> AddAssign for VoteWeight<Id> {
 enum VoteMultiplicity<Vote, Signature> {
 	// validator voted once.
 	Single(Vote, Signature),
-	// validator equivocated once.
+ 	// validator equivocated at least once.
 	Equivocated((Vote, Signature), (Vote, Signature)),
-	// validator equivocated many times.
-	EquivocatedMany(Vec<(Vote, Signature)>),
 }
 
 impl<Vote: Eq, Signature: Eq> VoteMultiplicity<Vote, Signature> {
-	fn update_graph<Id, F, G>(
-		&self,
-		weight: u64,
-		mut import: F,
-		make_bitfield: G,
-	) -> Result<(), crate::Error> where
-		F: FnMut(&Vote, u64, Bitfield<Id>) -> Result<(), crate::Error>,
-		G: Fn() -> Bitfield<Id>,
-	{
-		match *self {
-			VoteMultiplicity::Single(ref v, _) => {
-				import(v, weight, Bitfield::Blank)
-			}
-			VoteMultiplicity::Equivocated((ref v_a, _), (ref v_b, _)) => {
-				let bitfield = make_bitfield();
-
-				// import the second vote. some of the weight may have been double-counted.
-				import(v_b, weight, bitfield.clone())?;
-
-				// re-import the first vote (but with zero weight) to undo double-counting
-				// and initialize bitfields on non-overlapping sections of the path.
-				import(v_a, 0, bitfield)
-					.expect("all vote-nodes present in graph already; no chain lookup necessary; qed");
-
-				Ok(())
-			}
-			VoteMultiplicity::EquivocatedMany(ref votes) => {
-				let v = votes.last().expect("many equivocations means there is always a last vote; qed");
-				import(&v.0, weight, make_bitfield())
-			}
-		}
-	}
-
-	fn equivocation(&self) -> Option<(&(Vote, Signature), &(Vote, Signature))> {
-		match *self {
-			VoteMultiplicity::Single(_, _) => None,
-			VoteMultiplicity::Equivocated(ref a, ref b) => Some((a, b)),
-			VoteMultiplicity::EquivocatedMany(ref v) => {
-				assert!(v.len() >= 2, "Multi-equivocations variant always has at least two distinct members; qed");
-
-				match (v.first(), v.last()) {
-					(Some(ref a), Some(ref b)) => Some((a, b)),
-					_ => panic!("length checked above; qed"),
-				}
-			}
-		}
-	}
-
 	fn contains(&self, vote: &Vote, signature: &Signature) -> bool {
 		match self {
 			VoteMultiplicity::Single(v, s) =>
@@ -129,9 +92,6 @@ impl<Vote: Eq, Signature: Eq> VoteMultiplicity<Vote, Signature> {
 			VoteMultiplicity::Equivocated((v1, s1), (v2, s2)) => {
 				v1 == vote && s1 == signature ||
 					v2 == vote && s2 == signature
-			},
-			VoteMultiplicity::EquivocatedMany(v) => {
-				v.iter().any(|(v, s)| v == vote && s == signature)
 			},
 		}
 	}
@@ -151,8 +111,11 @@ impl<Id: Hash + Eq + Clone, Vote: Clone + Eq, Signature: Clone + Eq> VoteTracker
 	}
 
 	// track a vote, returning a value containing the multiplicity of all votes from this ID.
-	// if the vote is an equivocation, returns a value indicating
+	// if the vote is the first equivocation, returns a value indicating
 	// it as such (the new vote is always the last in the multiplicity).
+	//
+	// if the vote is a further equivocation, it is ignored and there is nothing
+	// to do.
 	//
 	// since this struct doesn't track the round-number of votes, that must be set
 	// by the caller.
@@ -169,15 +132,11 @@ impl<Id: Hash + Eq + Clone, Vote: Clone + Eq, Signature: Clone + Eq> VoteTracker
 					return None;
 				}
 
+				// import, but ignore further equivocations.
 				let new_val = match *occupied.get_mut() {
 					VoteMultiplicity::Single(ref v, ref s) =>
 						Some(VoteMultiplicity::Equivocated((v.clone(), s.clone()), (vote, signature))),
-					VoteMultiplicity::Equivocated(ref a, ref b) =>
-						Some(VoteMultiplicity::EquivocatedMany(vec![a.clone(), b.clone(), (vote, signature)])),
-					VoteMultiplicity::EquivocatedMany(ref mut v) => {
-						v.push((vote, signature));
-						None
-					}
+					VoteMultiplicity::Equivocated(_, _) => return None,
 				};
 
 				if let Some(new_val) = new_val {
@@ -201,10 +160,6 @@ impl<Id: Hash + Eq + Clone, Vote: Clone + Eq, Signature: Clone + Eq> VoteTracker
 				VoteMultiplicity::Equivocated((v1, s1), (v2, s2)) => {
 					votes.push((id.clone(), v1.clone(), s1.clone()));
 					votes.push((id.clone(), v2.clone(), s2.clone()));
-				},
-				VoteMultiplicity::EquivocatedMany(vs) => {
-					votes.extend(
-						vs.iter().map(|(v, s)| (id.clone(), v.clone(), s.clone())));
 				},
 			}
 		}
@@ -244,21 +199,20 @@ pub struct RoundParams<Id: Hash + Eq, H, N> {
 	/// The round number for votes.
 	pub round_number: u64,
 	/// Actors and weights in the round.
-	pub voters: HashMap<Id, u64>,
+	pub voters: VoterSet<Id>,
 	/// The base block to build on.
 	pub base: (H, N),
 }
 
 /// Stores data for a round.
 pub struct Round<Id: Hash + Eq, H: Hash + Eq, N, Signature> {
-	graph: VoteGraph<H, N, VoteWeight<Id>>, // DAG of blocks which have been voted on.
+	graph: VoteGraph<H, N, VoteWeight>, // DAG of blocks which have been voted on.
 	prevote: VoteTracker<Id, Prevote<H, N>, Signature>, // tracks prevotes that have been counted
 	precommit: VoteTracker<Id, Precommit<H, N>, Signature>, // tracks precommits
 	round_number: u64,
-	voters: HashMap<Id, u64>,
-	threshold_weight: u64,
+	voters: VoterSet<Id>,
 	total_weight: u64,
-	bitfield_context: BitfieldContext<Id>,
+	bitfield_context: BitfieldContext,
 	prevote_ghost: Option<(H, N)>, // current memoized prevote-GHOST block
 	finalized: Option<(H, N)>, // best finalized block in this round.
 	estimate: Option<(H, N)>, // current memoized round-estimate
@@ -275,14 +229,12 @@ impl<Id, H, N, Signature> Round<Id, H, N, Signature> where
 	/// Not guaranteed to work correctly unless total_weight more than 3x larger than faulty_weight
 	pub fn new(round_params: RoundParams<Id, H, N>) -> Self {
 		let (base_hash, base_number) = round_params.base;
-		let total_weight: u64 = round_params.voters.values().cloned().sum();
-		let threshold_weight = threshold(total_weight);
+		let total_weight = round_params.voters.total_weight();
 		let n_validators = round_params.voters.len();
 
 		Round {
 			round_number: round_params.round_number,
-			threshold_weight,
-			total_weight: total_weight,
+			total_weight,
 			voters: round_params.voters,
 			graph: VoteGraph::new(base_hash, base_number),
 			prevote: VoteTracker::new(),
@@ -310,56 +262,59 @@ impl<Id, H, N, Signature> Round<Id, H, N, Signature> where
 		signer: Id,
 		signature: Signature,
 	) -> Result<Option<Equivocation<Id, Prevote<H, N>, Signature>>, crate::Error> {
-		let weight = match self.voters.get(&signer) {
-			Some(weight) => *weight,
+		let info = match self.voters.info(&signer) {
+			Some(info) => info,
 			None => return Ok(None),
 		};
+		let weight = info.weight();
 
 		let equivocation = {
-			let graph = &mut self.graph;
-			let bitfield_context = &self.bitfield_context;
 			let multiplicity = match self.prevote.add_vote(signer.clone(), vote, signature, weight) {
 				Some(m) => m,
 				_ => return Ok(None),
 			};
 			let round_number = self.round_number;
 
-			multiplicity.update_graph(
-				weight,
-				move |vote, weight, bitfield| {
+			match multiplicity {
+				VoteMultiplicity::Single(ref vote, _) => {
 					let vote_weight = VoteWeight {
-						prevote: weight,
-						precommit: 0,
-						bitfield,
+						bitfield: self.bitfield_context.prevote_bitfield(info)
+							.expect("info is instantiated from same voter set as context; qed"),
 					};
 
-					graph.insert(
+					self.graph.insert(
 						vote.target_hash.clone(),
 						vote.target_number,
 						vote_weight,
-						chain
-					)
-				},
-				|| {
-					let mut live = LiveBitfield::new(bitfield_context.clone());
-					live.equivocated_prevote(signer.clone(), weight)
-						.expect("no unrecognized voters will be added as equivocators; qed");
-					Bitfield::Live(live)
-				}
-			)?;
+						chain,
+					)?;
 
-			multiplicity.equivocation().map(|(first, second)| Equivocation {
-				round_number,
-				identity: signer,
-				first: first.clone(),
-				second: second.clone(),
-			})
+					None
+				}
+				VoteMultiplicity::Equivocated(ref first, ref second) => {
+					// mark the equivocator as such. no need to "undo" the first vote.
+					self.bitfield_context.equivocated_prevote(info)
+						.expect("info is instantiated from same voter set as bitfield; qed");
+
+					Some(Equivocation {
+						round_number,
+						identity: signer,
+						first: first.clone(),
+						second: second.clone(),
+					})
+				}
+			}
 		};
 
 		// update prevote-GHOST
 		let threshold = self.threshold();
 		if self.prevote.current_weight >= threshold {
-			self.prevote_ghost = self.graph.find_ghost(self.prevote_ghost.take(), |v| v.prevote >= threshold);
+			let equivocators = self.bitfield_context.equivocators().read();
+
+			self.prevote_ghost = self.graph.find_ghost(
+				self.prevote_ghost.take(),
+				|v| v.total_weight(&equivocators, &self.voters).prevote >= threshold,
+			);
 		}
 
 		self.update();
@@ -377,50 +332,48 @@ impl<Id, H, N, Signature> Round<Id, H, N, Signature> where
 		signer: Id,
 		signature: Signature,
 	) -> Result<Option<Equivocation<Id, Precommit<H, N>, Signature>>, crate::Error> {
-		let weight = match self.voters.get(&signer) {
-			Some(weight) => *weight,
+		let info = match self.voters.info(&signer) {
+			Some(info) => info,
 			None => return Ok(None),
 		};
+		let weight = info.weight();
 
 		let equivocation = {
-			let graph = &mut self.graph;
-			let bitfield_context = &self.bitfield_context;
 			let multiplicity = match self.precommit.add_vote(signer.clone(), vote, signature, weight) {
 				Some(m) => m,
 				_ => return Ok(None),
 			};
 			let round_number = self.round_number;
 
-			multiplicity.update_graph(
-				weight,
-				move |vote, weight, bitfield| {
+			match multiplicity {
+				VoteMultiplicity::Single(ref vote, _) => {
 					let vote_weight = VoteWeight {
-						prevote: 0,
-						precommit: weight,
-						bitfield,
+						bitfield: self.bitfield_context.precommit_bitfield(info)
+							.expect("info is instantiated from same voter set as context; qed"),
 					};
 
-					graph.insert(
+					self.graph.insert(
 						vote.target_hash.clone(),
 						vote.target_number,
 						vote_weight,
-						chain
-					)
-				},
-				|| {
-					let mut live = LiveBitfield::new(bitfield_context.clone());
-					live.equivocated_precommit(signer.clone(), weight)
-						.expect("no unrecognized voters will be added as equivocators; qed");
-					Bitfield::Live(live)
-				}
-			)?;
+						chain,
+					)?;
 
-			multiplicity.equivocation().map(|(first, second)| Equivocation {
-				round_number,
-				identity: signer,
-				first: first.clone(),
-				second: second.clone(),
-			})
+					None
+				}
+				VoteMultiplicity::Equivocated(ref first, ref second) => {
+					// mark the equivocator as such. no need to "undo" the first vote.
+					self.bitfield_context.equivocated_precommit(info)
+						.expect("info is instantiated from same voter set as bitfield; qed");
+
+					Some(Equivocation {
+						round_number,
+						identity: signer,
+						first: first.clone(),
+						second: second.clone(),
+					})
+				}
+			}
 		};
 
 		self.update();
@@ -443,6 +396,12 @@ impl<Id, H, N, Signature> Round<Id, H, N, Signature> where
 		if self.prevote.current_weight < threshold { return }
 
 		let remaining_commit_votes = self.total_weight - self.precommit.current_weight;
+		let equivocators = self.bitfield_context.equivocators().read();
+		let equivocators = &*equivocators;
+
+		let voters = &self.voters;
+
+
 		let (g_hash, g_num) = match self.prevote_ghost.clone() {
 			None => return,
 			Some(x) => x,
@@ -451,11 +410,12 @@ impl<Id, H, N, Signature> Round<Id, H, N, Signature> where
 		// anything new finalized? finalized blocks are those which have both
 		// 2/3+ prevote and precommit weight.
 		let threshold = self.threshold();
-		if self.precommit.current_weight >= threshold {
+		let current_precommits = self.precommit.current_weight;
+		if current_precommits >= threshold {
 			self.finalized = self.graph.find_ancestor(
 				g_hash.clone(),
 				g_num,
-				|v| v.precommit >= threshold
+				|v| v.total_weight(&equivocators, voters).precommit >= threshold,
 			);
 		};
 
@@ -463,22 +423,41 @@ impl<Id, H, N, Signature> Round<Id, H, N, Signature> where
 		// not straightforward because we have to account for all possible future
 		// equivocations and thus cannot discount weight from validators who
 		// have already voted.
-		let tolerated_equivocations = self.total_weight - threshold;
-		let possible_to_precommit = |weight: &VoteWeight<_>| {
-			// find how many more equivocations we could still get on this
-			// block.
-			let (_, precommit_equivocations) = weight.bitfield.total_weight();
-			let additional_equivocation_weight = tolerated_equivocations
-				.saturating_sub(precommit_equivocations);
+		let possible_to_precommit = {
+			let tolerated_equivocations = self.total_weight - threshold;
 
-			// all the votes already applied on this block,
-			// and assuming all remaining actors commit to this block,
-			// and assuming all possible equivocations end up on this block.
-			let full_possible_weight = weight.precommit
-				.saturating_add(remaining_commit_votes)
-				.saturating_add(additional_equivocation_weight);
+			// find how many more equivocations we could still get.
+			//
+			// it is only important to consider the voters whose votes
+			// we have already seen, because we are assuming any votes we
+			// haven't seen will target this block.
+			let current_equivocations = equivocators
+				.total_weight(|idx| self.voters.weight_by_index(idx).unwrap_or(0))
+				.1;
 
-			full_possible_weight >= threshold
+			let additional_equiv = tolerated_equivocations.saturating_sub(current_equivocations);
+
+			move |weight: &VoteWeight| {
+				// total precommits for this block, including equivocations.
+				let precommitted_for = weight.total_weight(&equivocators, voters)
+					.precommit;
+
+				// equivocations we could still get are out of those who
+				// have already voted, but not on this block.
+				let possible_equivocations = std::cmp::min(
+					current_precommits.saturating_sub(precommitted_for),
+					additional_equiv,
+				);
+
+				// all the votes already applied on this block,
+				// assuming all remaining actors commit to this block,
+				// and that we get further equivocations
+				let full_possible_weight = precommitted_for
+					.saturating_add(remaining_commit_votes)
+					.saturating_add(possible_equivocations);
+
+				full_possible_weight >= threshold
+			}
 		};
 
 		// until we have threshold precommits, any new block could get supermajority
@@ -538,7 +517,7 @@ impl<Id, H, N, Signature> Round<Id, H, N, Signature> where
 
 	// Threshold number of weight for supermajority.
 	pub fn threshold(&self) -> u64 {
-		self.threshold_weight
+		self.voters.threshold()
 	}
 
 	/// Return the round base.
@@ -547,7 +526,7 @@ impl<Id, H, N, Signature> Round<Id, H, N, Signature> where
 	}
 
 	/// Return the round voters and weights.
-	pub fn voters(&self) -> &HashMap<Id, u64> {
+	pub fn voters(&self) -> &VoterSet<Id> {
 		&self.voters
 	}
 
@@ -562,7 +541,7 @@ mod tests {
 	use super::*;
 	use crate::testing::{GENESIS_HASH, DummyChain};
 
-	fn voters() -> HashMap<&'static str, u64> {
+	fn voters() -> VoterSet<&'static str> {
 		[
 			("Alice", 4),
 			("Bob", 7),
@@ -572,20 +551,6 @@ mod tests {
 
 	#[derive(PartialEq, Eq, Hash, Clone, Debug)]
 	struct Signature(&'static str);
-
-	#[test]
-	fn threshold_is_right() {
-		assert_eq!(threshold(3), 3);
-		assert_eq!(threshold(4), 3);
-		assert_eq!(threshold(5), 4);
-		assert_eq!(threshold(6), 5);
-		assert_eq!(threshold(7), 5);
-		assert_eq!(threshold(10), 7);
-		assert_eq!(threshold(100), 67);
-		assert_eq!(threshold(101), 68);
-		assert_eq!(threshold(102), 69);
-		assert_eq!(threshold(103), 69);
-	}
 
 	#[test]
 	fn estimate_is_valid() {
@@ -707,6 +672,7 @@ mod tests {
 			base: ("C", 4),
 		});
 
+		// first prevote by eve
 		assert!(round.import_prevote(
 			&chain,
 			Prevote::new("FC", 10),
@@ -717,6 +683,7 @@ mod tests {
 
 		assert!(round.prevote_ghost.is_none());
 
+		// second prevote by eve: comes with equivocation proof
 		assert!(round.import_prevote(
 			&chain,
 			Prevote::new("ED", 10),
@@ -724,12 +691,13 @@ mod tests {
 			Signature("Eve-2"),
 		).unwrap().is_some());
 
+		// third prevote: returns nothing.
 		assert!(round.import_prevote(
 			&chain,
 			Prevote::new("F", 7),
 			"Eve", // still 3 on F and E
 			Signature("Eve-2"),
-		).unwrap().is_some());
+		).unwrap().is_none());
 
 		// three eves together would be enough.
 
@@ -743,5 +711,49 @@ mod tests {
 		).unwrap().is_none());
 
 		assert_eq!(round.prevote_ghost, Some(("FA", 8)));
+	}
+
+	#[test]
+	fn vote_weight_discounts_equivocators() {
+		let v: VoterSet<_> = [
+			(1, 1),
+			(2, 2),
+			(3, 3),
+			(4, 4),
+			(5, 5),
+		].iter().cloned().collect();
+
+		let ctx = BitfieldContext::new(5);
+
+		let equivocators = {
+			let equiv_a = ctx.prevote_bitfield(v.info(&1).unwrap()).unwrap();
+			let equiv_b = ctx.prevote_bitfield(v.info(&5).unwrap()).unwrap();
+
+			equiv_a.merge(&equiv_b).unwrap()
+		};
+
+		let votes = {
+			let vote_a = ctx.prevote_bitfield(v.info(&1).unwrap()).unwrap();
+			let vote_b = ctx.prevote_bitfield(v.info(&2).unwrap()).unwrap();
+			let vote_c = ctx.prevote_bitfield(v.info(&3).unwrap()).unwrap();
+
+			vote_a.merge(&vote_b).unwrap().merge(&vote_c).unwrap()
+		};
+
+		let weight = VoteWeight { bitfield: votes };
+		let vote_weight = weight.total_weight(&equivocators, &v);
+
+		// counts the prevotes from 2, 3, and the equivocations from 1, 5 without
+		// double-counting 1
+		assert_eq!(vote_weight, TotalWeight { prevote: 1 + 5 + 2 + 3, precommit: 0 });
+
+		let votes = weight.bitfield.merge(&ctx.prevote_bitfield(v.info(&5).unwrap()).unwrap()).unwrap();
+
+		let weight = VoteWeight { bitfield: votes };
+		let vote_weight = weight.total_weight(&equivocators, &v);
+
+
+		// adding an extra vote by 5 doesn't increase the count.
+		assert_eq!(vote_weight, TotalWeight { prevote: 1 + 5 + 2 + 3, precommit: 0 });
 	}
 }

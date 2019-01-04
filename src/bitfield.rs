@@ -14,85 +14,66 @@
 // You should have received a copy of the GNU General Public License
 // along with finality-grandpa. If not, see <http://www.gnu.org/licenses/>.
 
-//! Bitfield for handling equivocations.
+//! Bitfields and tools for handling equivocations.
 //!
-//! This is primarily a bitfield for tracking equivocating validators.
+//! This is primarily a bitfield for tracking equivocating voters.
 //! It is necessary because there is a need to track vote-weight of equivocation
 //! on the vote-graph but to avoid double-counting.
 //!
-//! Bitfields are either blank (in the general case) or live, in the case of
-//! equivocations, with two bits per equivocator. The first is for equivocations
-//! in prevote messages and the second for those in precommits.
+//! We count equivocating voters as voting for everything. This makes any
+//! further equivocations redundant with the first.
 //!
-//! Each live bitfield carries a reference to a shared object that
-//! provides lookups from bit indices to validator weight. Bitfields can be
-//! merged, and queried for total weight in commits and precommits.
+//! Bitfields are either blank or live, with two bits per equivocator.
+//! The first is for equivocations in prevote messages and the second
+//! for those in precommits.
+//!
+//! Bitfields on regular vote-nodes will tend to be live, but the equivocating
+//! bitfield will be mostly empty.
 
 use std::fmt;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use parking_lot::RwLock;
 
-// global used to ensure that conflicting shared objects are not used.
-static SHARED_IDX: AtomicUsize = AtomicUsize::new(0);
+use crate::VoterInfo;
 
 /// Errors that can occur when using the equivocation weighting tools.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Error {
-	/// Too many equivocating validators registered. (shared data IDX, n_validators).
-	TooManyEquivocators(usize, usize),
-	/// Mismatch in shared data IDX when merging bitfields.
-	ContextMismatch(usize, usize),
+	/// Attempted to index bitfield past its length.
+	IndexOutOfBounds(usize, usize),
+	/// Mismatch in bitfield length when merging bitfields.
+	LengthMismatch(usize, usize),
 }
 
 impl fmt::Display for Error {
 	fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
 		match *self {
-			Error::TooManyEquivocators(ref idx, ref n)
-				=> write!(f, "Registered too many equivocators for shared data with ID {}. Maximum specified was {}", idx, n),
-			Error::ContextMismatch(ref idx1, ref idx2)
-				=> write!(f, "Attempted to merge bitfields with different contexts: {} vs {}", idx1, idx2),
+			Error::IndexOutOfBounds(ref idx, ref n)
+				=> write!(f, "Attempted to set voter {}. Maximum specified was {}", idx, n),
+			Error::LengthMismatch(ref idx1, ref idx2)
+				=> write!(f, "Attempted to merge bitfields with different lengths: {} vs {}", idx1, idx2),
 		}
 	}
 }
 
 impl ::std::error::Error for Error {}
 
-/// Bitfield for equivocating validators.
-///
-/// See module docs for more details.
-#[derive(Debug)]
-pub enum Bitfield<Id> {
+/// Bitfield for tracking voters who have equivocated.
+#[derive(Debug, Eq, PartialEq, Clone)]
+pub enum Bitfield {
 	/// Blank bitfield,
 	Blank,
 	/// Live bitfield,
-	Live(LiveBitfield<Id>),
+	Live(LiveBitfield),
 }
 
-impl<Id> Default for Bitfield<Id> {
+impl Default for Bitfield {
 	fn default() -> Self {
 		Bitfield::Blank
 	}
 }
 
-impl<Id> Clone for Bitfield<Id> {
-	fn clone(&self) -> Self {
-		match *self {
-			Bitfield::Blank => Bitfield::Blank,
-			Bitfield::Live(ref l) => Bitfield::Live(l.clone()),
-		}
-	}
-}
-
-impl<Id: Eq> Bitfield<Id> {
-	/// Find total equivocating weight (prevote, precommit).
-	pub fn total_weight(&self) -> (u64, u64) {
-		match *self {
-			Bitfield::Blank => (0, 0),
-			Bitfield::Live(ref live) => live.total_weight(),
-		}
-	}
-
+impl Bitfield {
 	/// Combine two bitfields. Fails if they have conflicting shared data
 	/// (i.e. they come from different contexts).
 	pub fn merge(&self, other: &Self) -> Result<Self, Error> {
@@ -101,287 +82,257 @@ impl<Id: Eq> Bitfield<Id> {
 			(&Bitfield::Live(ref live), &Bitfield::Blank) | (&Bitfield::Blank, &Bitfield::Live(ref live))
 				=> Ok(Bitfield::Live(live.clone())),
 			(&Bitfield::Live(ref a), &Bitfield::Live(ref b)) => {
-				if a.shared.idx != b.shared.idx {
-					// we can't merge two bitfields from different contexts.
-					Err(Error::ContextMismatch(a.shared.idx, b.shared.idx))
+				if a.bits.len() != b.bits.len() {
+					// we can't merge two bitfields with different lengths.
+					Err(Error::LengthMismatch(a.bits.len(), b.bits.len()))
 				} else {
 					let bits = a.bits.iter().zip(&b.bits).map(|(a, b)| a | b).collect();
-					Ok(Bitfield::Live(LiveBitfield { bits, shared: a.shared.clone() }))
+					Ok(Bitfield::Live(LiveBitfield { bits }))
 				}
 			}
 		}
 	}
 
 	/// Find overlap weight (prevote, precommit) between this bitfield and another.
-	pub fn overlap(&self, other: &Self) -> Result<(u64, u64), Error> {
+	pub fn overlap(&self, other: &Self) -> Result<Self, Error> {
 		match (self, other) {
 			(&Bitfield::Live(ref a), &Bitfield::Live(ref b)) => {
-				if a.shared.idx != b.shared.idx {
-					// we can't merge two bitfields from different contexts.
-					Err(Error::ContextMismatch(a.shared.idx, b.shared.idx))
+				if a.bits.len() != b.bits.len() {
+					// we can't find overlap of two bitfields with different lengths.
+					Err(Error::LengthMismatch(a.bits.len(), b.bits.len()))
 				} else {
-					Ok(total_weight(
-						a.bits.iter().zip(&b.bits).map(|(a, b)| a & b),
-						a.shared.validators.read().as_slice(),
-					))
+					Ok(Bitfield::Live(LiveBitfield {
+						bits: a.bits.iter().zip(&b.bits).map(|(a, b)| a & b).collect(),
+					}))
 				}
 			}
-			_ => Ok((0, 0))
+			_ => Ok(Bitfield::Blank)
 		}
+	}
+
+	/// Find total equivocating weight (prevote, precommit).
+	/// Provide a function for looking up voter weight.
+	pub fn total_weight<F: Fn(usize) -> u64>(&self, lookup: F) -> (u64, u64) {
+		match *self {
+			Bitfield::Blank => (0, 0),
+			Bitfield::Live(ref live) => total_weight(live.bits.iter().cloned(), lookup),
+		}
+	}
+
+	/// Set a bit in the bitfield.
+	fn set_bit(&mut self, bit: usize, n_voters: usize) -> Result<(), Error> {
+		let mut live = match ::std::mem::replace(self, Bitfield::Blank) {
+			Bitfield::Blank => LiveBitfield::with_voters(n_voters),
+			Bitfield::Live(live) => live,
+		};
+
+		live.set_bit(bit, n_voters)?;
+		*self = Bitfield::Live(live);
+		Ok(())
 	}
 }
 
 /// Live bitfield instance.
-#[derive(Debug)]
-pub struct LiveBitfield<Id> {
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LiveBitfield {
 	bits: Vec<u64>,
-	shared: Shared<Id>,
 }
 
-impl<Id> Clone for LiveBitfield<Id> {
-	fn clone(&self) -> Self {
-		LiveBitfield {
-			bits: self.bits.clone(),
-			shared: self.shared.clone(),
-		}
-	}
-}
+impl LiveBitfield {
+	fn with_voters(n_voters: usize) -> Self {
+		let n_bits = n_voters * 2;
+		let n_words = (n_bits + 63) / 64;
 
-impl<Id: Eq> LiveBitfield<Id> {
-	/// Create a new live bitfield.
-	pub fn new(shared: Shared<Id>) -> Self {
-		LiveBitfield { bits: shared.blank_bitfield(), shared }
+		LiveBitfield { bits: vec![0; n_words] }
 	}
 
-	/// Note a validator's equivocation in prevote.
-	/// Fails if more equivocators than the number of validators have
-	/// been registered.
-	pub fn equivocated_prevote(&mut self, id: Id, weight: u64) -> Result<(), Error> {
-		let val_off = self.shared.get_or_register_equivocator(id, weight)?;
-		self.set_bit(val_off * 2);
-		Ok(())
-	}
-
-	/// Note a validator's equivocation in precommit.
-	/// Fails if more equivocators than the number of validators have
-	/// been registered.
-	pub fn equivocated_precommit(&mut self, id: Id, weight: u64) -> Result<(), Error> {
-		let val_off = self.shared.get_or_register_equivocator(id, weight)?;
-		self.set_bit(val_off * 2 + 1);
-		Ok(())
-	}
-
-	fn set_bit(&mut self, bit_idx: usize) {
+	fn set_bit(&mut self, bit_idx: usize, n_voters: usize) -> Result<(), Error> {
 		let word_off = bit_idx / 64;
 		let bit_off = bit_idx % 64;
 
 		// If this isn't `Some`, something has gone really wrong.
 		if let Some(word) = self.bits.get_mut(word_off) {
 			// set bit starting from left.
-			*word |= 1 << (63 - bit_off)
+			*word |= 1 << (63 - bit_off);
+			Ok(())
 		} else {
-			warn!(target: "afg", "Could not set bit {}. Bitfield was meant to have 2 bits for each of {} validators.",
-				bit_idx, self.shared.n_validators);
+			Err(Error::IndexOutOfBounds(bit_idx / 2, n_voters))
 		}
-	}
-
-	// find total weight of this bitfield (prevote, precommit).
-	fn total_weight(&self) -> (u64, u64) {
-		total_weight(self.bits.iter().cloned(), self.shared.validators.read().as_slice())
 	}
 }
 
 // find total weight of the given iterable of bits. assumes that there are enough
-// validators in the given context to correspond to all bits.
-fn total_weight<Iter, Id>(iterable: Iter, validators: &[ValidatorEntry<Id>]) -> (u64, u64)
-	where Iter: IntoIterator<Item=u64>
+// voters in the given context to correspond to all bits.
+fn total_weight<Iter, Lookup>(iterable: Iter, lookup: Lookup) -> (u64, u64) where
+	Iter: IntoIterator<Item=u64>,
+	Lookup: Fn(usize) -> u64,
 {
-		struct State {
-			word_idx: usize,
-			prevote: u64,
-			precommit: u64,
-		};
+	struct State {
+		val_idx: usize,
+		prevote: u64,
+		precommit: u64,
+	};
 
-		let state = State {
-			word_idx: 0,
-			prevote: 0,
-			precommit: 0,
-		};
+	let state = State {
+		val_idx: 0,
+		prevote: 0,
+		precommit: 0,
+	};
 
-		let state = iterable.into_iter().fold(state, |mut state, mut word| {
-			for i in 0..32 {
-				if word == 0 { break }
+	let state = iterable.into_iter().fold(state, |mut state, mut word| {
+		for i in 0..32 {
+			if word == 0 { break }
 
-				// prevote bit is set
-				if word & (1 << 63) == (1 << 63) {
-					state.prevote += validators[state.word_idx * 32 + i].weight;
-				}
-
-				// precommit bit is set
-				if word & (1 << 62) == (1 << 62) {
-					state.precommit += validators[state.word_idx * 32 + i].weight;
-				}
-
-				word <<= 2;
+			// prevote bit is set
+			if word & (1 << 63) == (1 << 63) {
+				state.prevote += lookup(state.val_idx + i);
 			}
 
-			state.word_idx += 1;
-			state
-		});
+			// precommit bit is set
+			if word & (1 << 62) == (1 << 62) {
+				state.precommit += lookup(state.val_idx + i);
+			}
 
-		(state.prevote, state.precommit)
-	}
+			word <<= 2;
+		}
+
+		state.val_idx += 32;
+		state
+	});
+
+	(state.prevote, state.precommit)
+}
 
 /// Shared data among all live bitfield instances.
 #[derive(Debug)]
-pub struct Shared<Id> {
-	idx: usize,
-	n_validators: usize,
-	validators: Arc<RwLock<Vec<ValidatorEntry<Id>>>>
+pub struct Shared {
+	n_voters: usize,
+	equivocators: Arc<RwLock<Bitfield>>,
 }
 
-impl<Id> Clone for Shared<Id> {
+impl Clone for Shared {
 	fn clone(&self) -> Self {
 		Shared {
-			idx: self.idx,
-			n_validators: self.n_validators,
-			validators: self.validators.clone(),
+			n_voters: self.n_voters,
+			equivocators: self.equivocators.clone(),
 		}
 	}
 }
 
-impl<Id: Eq> Shared<Id> {
-	/// Create new shared equivocation detection data. Provide the number
-	/// of validators.
-	pub fn new(n_validators: usize) -> Self {
-		let idx = SHARED_IDX.fetch_add(1, Ordering::SeqCst);
+impl Shared {
+	/// Create new shared equivocation detection data. Provide the number of voters.
+	pub fn new(n_voters: usize) -> Self {
 		Shared {
-			idx,
-			n_validators,
-			validators: Arc::new(RwLock::new(Vec::new())),
+			n_voters,
+			equivocators: Arc::new(RwLock::new(Bitfield::Blank)),
 		}
 	}
 
-	fn blank_bitfield(&self) -> Vec<u64> {
-		let n_bits = self.n_validators * 2;
-		let n_words = (n_bits + 63) / 64;
+	/// Construct a new bitfield for a specific voter prevoting.
+	pub fn prevote_bitfield(&self, info: &VoterInfo) -> Result<Bitfield, Error> {
+		let mut bitfield = LiveBitfield::with_voters(self.n_voters);
+		bitfield.set_bit(info.canon_idx() * 2, self.n_voters)?;
 
-		vec![0; n_words]
+		Ok(Bitfield::Live(bitfield))
 	}
 
-	fn get_or_register_equivocator(&self, equivocator: Id, weight: u64) -> Result<usize, Error> {
-		{
-			// linear search is probably fast enough until we have thousands of
-			// equivocators. finding the bit to set is slow but happens rarely.
-			let validators = self.validators.read();
-			let maybe_found = validators.iter()
-				.enumerate()
-				.find(|&(_, ref e)| e.id == equivocator);
+	/// Construct a new bitfield for a specific voter prevoting.
+	pub fn precommit_bitfield(&self, info: &VoterInfo) -> Result<Bitfield, Error> {
+		let mut bitfield = LiveBitfield::with_voters(self.n_voters);
+		bitfield.set_bit(info.canon_idx() * 2 + 1, self.n_voters)?;
 
-			if let Some((idx, _)) = maybe_found {
-				return Ok(idx);
-			}
-		}
-
-		let mut validators = self.validators.write();
-		if validators.len() == self.n_validators {
-			return Err(Error::TooManyEquivocators(self.idx, self.n_validators) )
-		}
-		validators.push(ValidatorEntry { id: equivocator, weight });
-		Ok(validators.len() - 1)
+		Ok(Bitfield::Live(bitfield))
 	}
-}
 
-#[derive(Debug)]
-struct ValidatorEntry<Id> {
-	id: Id,
-	weight: u64,
+	/// Get the equivocators bitfield.
+	pub fn equivocators(&self) -> &Arc<RwLock<Bitfield>> {
+		&self.equivocators
+	}
+
+	/// Note a voter's equivocation in prevote.
+	pub fn equivocated_prevote(&self, info: &VoterInfo) -> Result<(), Error> {
+		self.equivocators.write().set_bit(info.canon_idx() * 2, self.n_voters)?;
+		Ok(())
+	}
+
+	/// Note a voter's equivocation in precommit.
+	pub fn equivocated_precommit(&self, info: &VoterInfo) -> Result<(), Error> {
+		self.equivocators.write().set_bit(info.canon_idx() * 2 + 1, self.n_voters)?;
+		Ok(())
+	}
 }
 
 #[cfg(test)]
 mod tests {
 	use super::*;
-
-	#[test]
-	fn shared_fails_registering_too_many() {
-		let shared = Shared::new(0);
-		assert!(shared.get_or_register_equivocator(5, 1000).is_err());
-	}
-
-	#[test]
-	fn shared_register_same_many_times() {
-		let shared = Shared::new(1);
-		assert_eq!(shared.get_or_register_equivocator(5, 1000), Ok(0));
-		assert_eq!(shared.get_or_register_equivocator(5, 1000), Ok(0));
-	}
+	use crate::VoterSet;
 
 	#[test]
 	fn merge_live() {
-		let shared = Shared::new(10);
-		let mut live_a = LiveBitfield::new(shared.clone());
-		let mut live_b = LiveBitfield::new(shared.clone());
+		let mut a = Bitfield::Live(LiveBitfield::with_voters(10));
+		let mut b = Bitfield::Live(LiveBitfield::with_voters(10));
 
-		live_a.equivocated_prevote(1, 5).unwrap();
-		live_a.equivocated_precommit(2, 7).unwrap();
+		let v: VoterSet<usize> = [
+			(1, 5),
+			(4, 1),
+			(3, 9),
+			(5, 7),
+			(9, 9),
+			(2, 7),
+		].iter().cloned().collect();
 
-		live_b.equivocated_prevote(3, 9).unwrap();
-		live_b.equivocated_precommit(3, 9).unwrap();
+		a.set_bit(0, 10).unwrap(); // prevote 1
+		a.set_bit(11, 10).unwrap(); // precommit 2
 
-		assert_eq!(live_a.total_weight(), (5, 7));
-		assert_eq!(live_b.total_weight(), (9, 9));
-
-		let (a, b) = (Bitfield::Live(live_a), Bitfield::Live(live_b));
+		b.set_bit(4, 10).unwrap(); // prevote 3
+		b.set_bit(5, 10).unwrap(); // precommit 3
 
 		let c = a.merge(&b).unwrap();
-		assert_eq!(c.total_weight(), (14, 16));
-	}
-
-	#[test]
-	fn merge_with_different_shared_is_error() {
-		let shared_a: Shared<usize> = Shared::new(1);
-		let shared_b = Shared::new(1);
-
-		let bitfield_a = Bitfield::Live(LiveBitfield::new(shared_a));
-		let bitfield_b = Bitfield::Live(LiveBitfield::new(shared_b));
-
-		assert!(bitfield_a.merge(&bitfield_b).is_err());
+		assert_eq!(c.total_weight(|i| v.weight_by_index(i).unwrap()), (14, 16));
 	}
 
 	#[test]
 	fn set_first_and_last_bits() {
-		let shared = Shared::new(32);
-		assert_eq!(shared.blank_bitfield().len(), 1);
+		let v: VoterSet<usize> = (0..32).map(|i| (i, (i + 1) as u64)).collect();
 
-		for i in 0..32 {
-			shared.get_or_register_equivocator(i, i + 1).unwrap();
-		}
+		let mut live_bitfield = Bitfield::Live(LiveBitfield::with_voters(32));
 
-		let mut live_bitfield = LiveBitfield::new(shared);
-		live_bitfield.equivocated_prevote(0, 1).unwrap();
-		live_bitfield.equivocated_precommit(31, 32).unwrap();
+		live_bitfield.set_bit(0, 32).unwrap();
+		live_bitfield.set_bit(63, 32).unwrap();
 
-		assert_eq!(live_bitfield.total_weight(), (1, 32));
+		assert_eq!(live_bitfield.total_weight(|i| v.weight_by_index(i).unwrap()), (1, 32));
 	}
 
 	#[test]
 	fn weight_overlap() {
-		let shared = Shared::new(10);
-		let mut live_a = LiveBitfield::new(shared.clone());
-		let mut live_b = LiveBitfield::new(shared.clone());
+		let mut a = Bitfield::Live(LiveBitfield::with_voters(10));
+		let mut b = Bitfield::Live(LiveBitfield::with_voters(10));
 
-		live_a.equivocated_prevote(1, 5).unwrap();
-		live_a.equivocated_precommit(2, 7).unwrap();
-		live_a.equivocated_prevote(3, 9).unwrap();
+		let v: VoterSet<usize> = [
+			(1, 5),
+			(4, 1),
+			(3, 9),
+			(5, 7),
+			(9, 9),
+			(2, 7),
+		].iter().cloned().collect();
 
-		live_b.equivocated_prevote(1, 5).unwrap();
-		live_b.equivocated_precommit(2, 7).unwrap();
-		live_b.equivocated_precommit(3, 9).unwrap();
+		a.set_bit(0, 10).unwrap(); // prevote 1
+		a.set_bit(11, 10).unwrap(); // precommit 2
+		a.set_bit(4, 10).unwrap(); // prevote 3
 
-		assert_eq!(live_a.total_weight(), (14, 7));
-		assert_eq!(live_b.total_weight(), (5, 16));
+		b.set_bit(0, 10).unwrap(); // prevote 1
+		b.set_bit(11, 10).unwrap(); // precommit 2
+		b.set_bit(5, 10).unwrap(); // precommit 3
 
-		let (a, b) = (Bitfield::Live(live_a), Bitfield::Live(live_b));
+		assert_eq!(a.total_weight(|i| v.weight_by_index(i).unwrap()), (14, 7));
+		assert_eq!(b.total_weight(|i| v.weight_by_index(i).unwrap()), (5, 16));
 
-		assert_eq!(a.overlap(&b).unwrap(), (5, 7));
+		let mut c = Bitfield::Live(LiveBitfield::with_voters(10));
+
+		c.set_bit(0, 10).unwrap(); // prevote 1
+		c.set_bit(11, 10).unwrap(); // precommit 2
+
+		assert_eq!(a.overlap(&b).unwrap(), c);
 	}
 }
