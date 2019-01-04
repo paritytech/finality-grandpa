@@ -108,7 +108,7 @@ impl fmt::Display for Error {
 	}
 }
 
-impl ::std::error::Error for Error {
+impl std::error::Error for Error {
 	fn description(&self) -> &str {
 		match *self {
 			Error::NotDescendent => "Block not descendent of base",
@@ -118,20 +118,20 @@ impl ::std::error::Error for Error {
 
 /// Arithmetic necessary for a block number.
 pub trait BlockNumberOps:
-	::std::fmt::Debug +
-	::std::cmp::Ord +
-	::std::ops::Add<Output=Self> +
-	::std::ops::Sub<Output=Self> +
+	std::fmt::Debug +
+	std::cmp::Ord +
+	std::ops::Add<Output=Self> +
+	std::ops::Sub<Output=Self> +
 	crate::num::One +
 	crate::num::Zero +
 	crate::num::AsPrimitive<usize>
 {}
 
 impl<T> BlockNumberOps for T where
-	T: ::std::fmt::Debug,
-	T: ::std::cmp::Ord,
-	T: ::std::ops::Add<Output=Self>,
-	T: ::std::ops::Sub<Output=Self>,
+	T: std::fmt::Debug,
+	T: std::cmp::Ord,
+	T: std::ops::Add<Output=Self>,
+	T: std::ops::Sub<Output=Self>,
 	T: crate::num::One,
 	T: crate::num::Zero,
 	T: crate::num::AsPrimitive<usize>,
@@ -369,9 +369,9 @@ pub fn validate_commit<H, N, S, I, C: Chain<H, N>>(
 	chain: &C,
 ) -> Result<Option<(H, N)>, crate::Error>
 	where
-	H: ::std::hash::Hash + Clone + Eq + Ord + ::std::fmt::Debug,
-	N: Copy + BlockNumberOps + ::std::fmt::Debug,
-	I: Clone + ::std::hash::Hash + Eq + std::fmt::Debug,
+	H: std::hash::Hash + Clone + Eq + Ord + std::fmt::Debug,
+	N: Copy + BlockNumberOps + std::fmt::Debug,
+	I: Clone + std::hash::Hash + Eq + std::fmt::Debug,
 	S: Eq,
 {
 	// check that all precommits are for blocks higher than the target
@@ -386,7 +386,7 @@ pub fn validate_commit<H, N, S, I, C: Chain<H, N>>(
 		return Ok(None);
 	}
 
-	let mut equivocated = ::std::collections::HashSet::new();
+	let mut equivocated = std::collections::HashSet::new();
 
 	// Add all precommits to the round with correct counting logic
 	// the commit target as a base.

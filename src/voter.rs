@@ -25,7 +25,7 @@ use futures::prelude::*;
 use futures::task;
 use futures::stream::futures_unordered::FuturesUnordered;
 use futures::sync::mpsc::{self, UnboundedSender, UnboundedReceiver};
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, VecDeque};
 use std::hash::Hash;
 use std::sync::Arc;
 use parking_lot::Mutex;
@@ -440,7 +440,13 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 			// in this round or after.
 			match (&self.state, new_state.finalized) {
 				(&Some(State::Precommitted), Some((ref f_hash, ref f_number))) => {
-					let commit = create_commit(f_hash.clone(), f_number.clone(), self.votes.precommits(), &*self.env);
+					let commit = Commit {
+						target_hash: f_hash.clone(),
+						target_number: f_number.clone(),
+						precommits: self.votes.finalizing_precommits(&*self.env)
+							.expect("always returns none if something was finalized; this is checked above; qed")
+							.collect(),
+					};
 					let finalized = (f_hash.clone(), f_number.clone(), self.votes.number(), commit.clone());
 
 					let _ = self.finalized_sender.unbounded_send(finalized);
@@ -1073,38 +1079,6 @@ impl<H, N, E: Environment<H, N>, CommitIn, CommitOut> Future for Voter<H, N, E, 
 			Async::Ready(best_round_completable) => self.process_best_round(best_round_completable),
 			Async::NotReady => self.poll(),
 		}
-	}
-}
-
-fn create_commit<H, N, E: Environment<H, N>>(
-	target_hash: H,
-	target_number: N,
-	precommits: Vec<(E::Id, Precommit<H, N>, E::Signature)>,
-	env: &E,
-) -> Commit<H, N, E::Signature, E::Id>
-	where H: Hash + Clone + Eq + Ord + ::std::fmt::Debug,
-		  N: Copy + BlockNumberOps + ::std::fmt::Debug,
-{
-	let mut ids = HashSet::new();
-	let precommits = precommits.into_iter().filter_map(|(id, precommit, signature)| {
-		if env.is_equal_or_descendent_of(target_hash.clone(), precommit.target_hash.clone()) &&
-			ids.insert(id.clone()) {
-				// if an authority equivocated then only include one of its
-				// votes that justify the commit
-				Some(SignedPrecommit {
-					precommit: precommit,
-					signature: signature,
-					id: id,
-					})
-			} else {
-				None
-			}
-	}).collect();
-
-	Commit {
-		target_hash,
-		target_number,
-		precommits,
 	}
 }
 

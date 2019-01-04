@@ -408,6 +408,69 @@ impl<Id, H, N, Signature> Round<Id, H, N, Signature> where
 		self.precommit_ghost.clone()
 	}
 
+	/// Returns an iterator of all precommits targeting the finalized hash.
+	///
+	/// Only returns `None` if no block has been finalized in this round.
+	pub fn finalizing_precommits<'a, C: 'a + Chain<H, N>>(&'a mut self, chain: &'a C)
+		-> Option<impl Iterator<Item=crate::SignedPrecommit<H, N, Signature, Id>> + 'a>
+	{
+		struct YieldVotes<'b, V: 'b, S: 'b> {
+			yielded: usize,
+			multiplicity: &'b VoteMultiplicity<V, S>,
+		}
+
+		impl<'b, V: 'b + Clone, S: 'b + Clone> Iterator for YieldVotes<'b, V, S> {
+			type Item = (V, S);
+
+			fn next(&mut self) -> Option<(V, S)> {
+				match *self.multiplicity {
+					VoteMultiplicity::Single(ref v, ref s) => {
+						if self.yielded == 0 {
+							self.yielded += 1;
+							Some((v.clone(), s.clone()))
+						} else {
+							None
+						}
+					}
+					VoteMultiplicity::Equivocated(ref a, ref b) => {
+						let res = match self.yielded {
+							0 => Some(a.clone()),
+							1 => Some(b.clone()),
+							_ => None,
+						};
+
+						self.yielded += 1;
+						res
+					}
+				}
+			}
+		}
+
+		let (f_hash, _f_num) = self.finalized.clone()?;
+		let find_valid_precommits = self.precommit.votes.iter()
+			.filter(move |&(_id, ref multiplicity)| {
+				if let VoteMultiplicity::Single(ref v, _) = *multiplicity {
+					// if there is a single vote from this voter, we only include it
+					// if it branches off of the target.
+					chain.is_equal_or_descendent_of(f_hash.clone(), v.target_hash.clone())
+				} else {
+					// equivocations count for everything, so we always include them.
+					true
+				}
+			})
+			.flat_map(|(id, multiplicity)| {
+				let yield_votes = YieldVotes { yielded: 0, multiplicity };
+
+				yield_votes.map(move |(v, s)| crate::SignedPrecommit {
+					precommit: v,
+					signature: s,
+					id: id.clone(),
+				})
+			});
+
+		Some(find_valid_precommits)
+	}
+
 	// update the round-estimate and whether the round is completable.
 	fn update(&mut self) {
 		let threshold = self.threshold();
