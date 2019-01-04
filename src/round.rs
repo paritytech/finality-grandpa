@@ -214,6 +214,7 @@ pub struct Round<Id: Hash + Eq, H: Hash + Eq, N, Signature> {
 	total_weight: u64,
 	bitfield_context: BitfieldContext,
 	prevote_ghost: Option<(H, N)>, // current memoized prevote-GHOST block
+	precommit_ghost: Option<(H, N)>, // current memoized precommit-GHOST block
 	finalized: Option<(H, N)>, // best finalized block in this round.
 	estimate: Option<(H, N)>, // current memoized round-estimate
 	completable: bool, // whether the round is completable
@@ -241,6 +242,7 @@ impl<Id, H, N, Signature> Round<Id, H, N, Signature> where
 			precommit: VoteTracker::new(),
 			bitfield_context: BitfieldContext::new(n_validators),
 			prevote_ghost: None,
+			precommit_ghost: None,
 			finalized: None,
 			estimate: None,
 			completable: false,
@@ -271,7 +273,7 @@ impl<Id, H, N, Signature> Round<Id, H, N, Signature> where
 		let equivocation = {
 			let multiplicity = match self.prevote.add_vote(signer.clone(), vote, signature, weight) {
 				Some(m) => m,
-				_ => return Ok(None),
+				None => return Ok(None),
 			};
 			let round_number = self.round_number;
 
@@ -341,7 +343,7 @@ impl<Id, H, N, Signature> Round<Id, H, N, Signature> where
 		let equivocation = {
 			let multiplicity = match self.precommit.add_vote(signer.clone(), vote, signature, weight) {
 				Some(m) => m,
-				_ => return Ok(None),
+				None => return Ok(None),
 			};
 			let round_number = self.round_number;
 
@@ -388,6 +390,22 @@ impl<Id, H, N, Signature> Round<Id, H, N, Signature> where
 			estimate: self.estimate.clone(),
 			completable: self.completable,
 		}
+	}
+
+	/// Compute and cache the precommit-GHOST.
+	pub fn precommit_ghost(&mut self) -> Option<(H, N)> {
+		// update precommit-GHOST
+		let threshold = self.threshold();
+		if self.precommit.current_weight >= threshold {
+			let equivocators = self.bitfield_context.equivocators().read();
+
+			self.precommit_ghost = self.graph.find_ghost(
+				self.precommit_ghost.take(),
+				|v| v.total_weight(&equivocators, &self.voters).precommit >= threshold,
+			);
+		}
+
+		self.precommit_ghost.clone()
 	}
 
 	// update the round-estimate and whether the round is completable.
