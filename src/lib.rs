@@ -389,7 +389,7 @@ pub fn validate_commit<H, N, S, I, C: Chain<H, N>>(
 	let mut equivocated = std::collections::HashSet::new();
 
 	// Add all precommits to the round with correct counting logic
-	// the commit target as a base.
+	// using the commit target as a base.
 	let mut round = round::Round::new(round::RoundParams {
 		round_number: 0, // doesn't matter here.
 		voters: voters.clone(),
