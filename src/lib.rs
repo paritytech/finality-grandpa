@@ -108,7 +108,7 @@ impl fmt::Display for Error {
 	}
 }
 
-impl ::std::error::Error for Error {
+impl std::error::Error for Error {
 	fn description(&self) -> &str {
 		match *self {
 			Error::NotDescendent => "Block not descendent of base",
@@ -118,20 +118,20 @@ impl ::std::error::Error for Error {
 
 /// Arithmetic necessary for a block number.
 pub trait BlockNumberOps:
-	::std::fmt::Debug +
-	::std::cmp::Ord +
-	::std::ops::Add<Output=Self> +
-	::std::ops::Sub<Output=Self> +
+	std::fmt::Debug +
+	std::cmp::Ord +
+	std::ops::Add<Output=Self> +
+	std::ops::Sub<Output=Self> +
 	crate::num::One +
 	crate::num::Zero +
 	crate::num::AsPrimitive<usize>
 {}
 
 impl<T> BlockNumberOps for T where
-	T: ::std::fmt::Debug,
-	T: ::std::cmp::Ord,
-	T: ::std::ops::Add<Output=Self>,
-	T: ::std::ops::Sub<Output=Self>,
+	T: std::fmt::Debug,
+	T: std::cmp::Ord,
+	T: std::ops::Add<Output=Self>,
+	T: std::ops::Sub<Output=Self>,
 	T: crate::num::One,
 	T: crate::num::Zero,
 	T: crate::num::AsPrimitive<usize>,
@@ -357,19 +357,23 @@ impl<Id: Hash + Eq + Clone> std::iter::FromIterator<(Id, u64)> for VoterSet<Id> 
 
 /// Validates a GRANDPA commit message and returns the ghost calculated using
 /// the precommits in the commit message and using the commit target as a
-/// base. If no threshold is given it is calculated using `::threshold` and the
-/// provided voters.
+/// base.
+///
+/// Signatures on precommits are assumed to have been checked.
+///
+/// Duplicate votes or votes from voters not in the voter-set will be ignored, but it is recommended
+/// for the caller of this function to remove those at signature-verification time.
 pub fn validate_commit<H, N, S, I, C: Chain<H, N>>(
 	commit: &Commit<H, N, S, I>,
 	voters: &VoterSet<I>,
 	chain: &C,
 ) -> Result<Option<(H, N)>, crate::Error>
-	where H: ::std::hash::Hash + Clone + Eq + Ord + ::std::fmt::Debug,
-		  N: Copy + BlockNumberOps + ::std::fmt::Debug,
-		  I: Clone + ::std::hash::Hash + ::std::cmp::Eq,
+	where
+	H: std::hash::Hash + Clone + Eq + Ord + std::fmt::Debug,
+	N: Copy + BlockNumberOps + std::fmt::Debug,
+	I: Clone + std::hash::Hash + Eq + std::fmt::Debug,
+	S: Eq,
 {
-	let threshold = voters.threshold();
-
 	// check that all precommits are for blocks higher than the target
 	// commit block, and that they're its descendents
 	if !commit.precommits.iter().all(|signed| {
@@ -382,45 +386,26 @@ pub fn validate_commit<H, N, S, I, C: Chain<H, N>>(
 		return Ok(None);
 	}
 
-	// check that the precommits don't include equivocations
-	let mut ids = ::std::collections::HashSet::new();
-	if !commit.precommits.iter().all(|signed| ids.insert(signed.id.clone())) {
-		return Ok(None);
-	}
+	let mut equivocated = std::collections::HashSet::new();
 
-	// check all precommits are from authorities
-	if !commit.precommits.iter().all(|signed| voters.contains_key(&signed.id)) {
-		return Ok(None);
-	}
-
-	// make sure weight of all precommits surpasses threshold
-	// (this is needed to avoid a possible DoS vector)
-	let commit_weight = commit.precommits.iter().fold(0, |total_weight, precommit| {
-		total_weight + voters.info(&precommit.id).map(|info| info.weight()).unwrap_or(0)
+	// Add all precommits to the round with correct counting logic
+	// using the commit target as a base.
+	let mut round = round::Round::new(round::RoundParams {
+		round_number: 0, // doesn't matter here.
+		voters: voters.clone(),
+		base: (commit.target_hash.clone(), commit.target_number),
 	});
 
-	if commit_weight < threshold {
-		return Ok(None);
+	for SignedPrecommit { precommit, id, signature } in commit.precommits.iter() {
+		if let Some(_) = round.import_precommit(chain, precommit.clone(), id.clone(), signature.clone())? {
+			// allow only one equivocation per voter, as extras are redundant.
+			if !equivocated.insert(id) { return Ok(None) }
+		}
 	}
-
-	// add all precommits to an empty vote graph with the commit target as the base
-	let mut vote_graph = vote_graph::VoteGraph::new(commit.target_hash.clone(), commit.target_number.clone());
-	for SignedPrecommit { precommit, id, .. } in commit.precommits.iter() {
-		let weight = voters.info(id)
-			.expect("previously verified that all ids are voters; qed")
-			.weight();
-		vote_graph.insert(precommit.target_hash.clone(), precommit.target_number.clone(), weight, chain)?;
-	}
-
-	// find ghost using commit target as current best
-	let ghost = vote_graph.find_ghost(
-		Some((commit.target_hash.clone(), commit.target_number.clone())),
-		|w| *w >= threshold,
-	);
 
 	// if a ghost is found then it must be equal or higher than the commit
 	// target, otherwise the commit is invalid
-	Ok(ghost)
+	Ok(round.precommit_ghost())
 }
 
 fn threshold(total_weight: u64) -> u64 {

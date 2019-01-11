@@ -214,6 +214,7 @@ pub struct Round<Id: Hash + Eq, H: Hash + Eq, N, Signature> {
 	total_weight: u64,
 	bitfield_context: BitfieldContext,
 	prevote_ghost: Option<(H, N)>, // current memoized prevote-GHOST block
+	precommit_ghost: Option<(H, N)>, // current memoized precommit-GHOST block
 	finalized: Option<(H, N)>, // best finalized block in this round.
 	estimate: Option<(H, N)>, // current memoized round-estimate
 	completable: bool, // whether the round is completable
@@ -241,6 +242,7 @@ impl<Id, H, N, Signature> Round<Id, H, N, Signature> where
 			precommit: VoteTracker::new(),
 			bitfield_context: BitfieldContext::new(n_validators),
 			prevote_ghost: None,
+			precommit_ghost: None,
 			finalized: None,
 			estimate: None,
 			completable: false,
@@ -271,7 +273,7 @@ impl<Id, H, N, Signature> Round<Id, H, N, Signature> where
 		let equivocation = {
 			let multiplicity = match self.prevote.add_vote(signer.clone(), vote, signature, weight) {
 				Some(m) => m,
-				_ => return Ok(None),
+				None => return Ok(None),
 			};
 			let round_number = self.round_number;
 
@@ -341,7 +343,7 @@ impl<Id, H, N, Signature> Round<Id, H, N, Signature> where
 		let equivocation = {
 			let multiplicity = match self.precommit.add_vote(signer.clone(), vote, signature, weight) {
 				Some(m) => m,
-				_ => return Ok(None),
+				None => return Ok(None),
 			};
 			let round_number = self.round_number;
 
@@ -388,6 +390,85 @@ impl<Id, H, N, Signature> Round<Id, H, N, Signature> where
 			estimate: self.estimate.clone(),
 			completable: self.completable,
 		}
+	}
+
+	/// Compute and cache the precommit-GHOST.
+	pub fn precommit_ghost(&mut self) -> Option<(H, N)> {
+		// update precommit-GHOST
+		let threshold = self.threshold();
+		if self.precommit.current_weight >= threshold {
+			let equivocators = self.bitfield_context.equivocators().read();
+
+			self.precommit_ghost = self.graph.find_ghost(
+				self.precommit_ghost.take(),
+				|v| v.total_weight(&equivocators, &self.voters).precommit >= threshold,
+			);
+		}
+
+		self.precommit_ghost.clone()
+	}
+
+	/// Returns an iterator of all precommits targeting the finalized hash.
+	///
+	/// Only returns `None` if no block has been finalized in this round.
+	pub fn finalizing_precommits<'a, C: 'a + Chain<H, N>>(&'a mut self, chain: &'a C)
+		-> Option<impl Iterator<Item=crate::SignedPrecommit<H, N, Signature, Id>> + 'a>
+	{
+		struct YieldVotes<'b, V: 'b, S: 'b> {
+			yielded: usize,
+			multiplicity: &'b VoteMultiplicity<V, S>,
+		}
+
+		impl<'b, V: 'b + Clone, S: 'b + Clone> Iterator for YieldVotes<'b, V, S> {
+			type Item = (V, S);
+
+			fn next(&mut self) -> Option<(V, S)> {
+				match *self.multiplicity {
+					VoteMultiplicity::Single(ref v, ref s) => {
+						if self.yielded == 0 {
+							self.yielded += 1;
+							Some((v.clone(), s.clone()))
+						} else {
+							None
+						}
+					}
+					VoteMultiplicity::Equivocated(ref a, ref b) => {
+						let res = match self.yielded {
+							0 => Some(a.clone()),
+							1 => Some(b.clone()),
+							_ => None,
+						};
+
+						self.yielded += 1;
+						res
+					}
+				}
+			}
+		}
+
+		let (f_hash, _f_num) = self.finalized.clone()?;
+		let find_valid_precommits = self.precommit.votes.iter()
+			.filter(move |&(_id, ref multiplicity)| {
+				if let VoteMultiplicity::Single(ref v, _) = *multiplicity {
+					// if there is a single vote from this voter, we only include it
+					// if it branches off of the target.
+					chain.is_equal_or_descendent_of(f_hash.clone(), v.target_hash.clone())
+				} else {
+					// equivocations count for everything, so we always include them.
+					true
+				}
+			})
+			.flat_map(|(id, multiplicity)| {
+				let yield_votes = YieldVotes { yielded: 0, multiplicity };
+
+				yield_votes.map(move |(v, s)| crate::SignedPrecommit {
+					precommit: v,
+					signature: s,
+					id: id.clone(),
+				})
+			});
+
+		Some(find_valid_precommits)
 	}
 
 	// update the round-estimate and whether the round is completable.
