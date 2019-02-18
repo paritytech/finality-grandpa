@@ -25,10 +25,11 @@ use futures::prelude::*;
 use futures::task;
 use futures::stream::futures_unordered::FuturesUnordered;
 use futures::sync::mpsc::{self, UnboundedSender, UnboundedReceiver};
+use parking_lot::Mutex;
+
 use std::collections::{HashMap, VecDeque};
 use std::hash::Hash;
 use std::sync::Arc;
-use parking_lot::Mutex;
 
 use crate::round::{Round, State as RoundState};
 use crate::{

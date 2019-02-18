@@ -27,12 +27,15 @@
 //! Equivocation detection and vote-set management is done in the `round` module.
 //! The work for actually casting votes is done in the `voter` module.
 
+#![cfg_attr(not(feature = "std"), no_std)]
+#![cfg_attr(not(feature = "std"), feature(alloc))]
+
 extern crate parking_lot;
 extern crate num_traits as num;
 
-#[macro_use]
+#[cfg_attr(feature = "std", macro_use)]
 extern crate futures;
-#[macro_use]
+#[cfg_attr(feature = "std", macro_use)]
 extern crate log;
 
 #[cfg(test)]
@@ -49,19 +52,42 @@ extern crate parity_codec_derive;
 #[cfg(feature = "derive-codec")]
 extern crate parity_codec;
 
+#[cfg(not(feature = "std"))]
+extern crate core as std;
+
+#[cfg(not(feature = "std"))]
+#[macro_use]
+extern crate alloc;
+
 pub mod bitfield;
 pub mod round;
 pub mod vote_graph;
+
+#[cfg(feature = "std")]
 pub mod voter;
 
+#[cfg(feature = "std")]
 mod bridge_state;
 
 #[cfg(test)]
 mod testing;
 
-use std::collections::HashMap;
+use collections::{HashMap, Vec};
 use std::fmt;
 use std::hash::Hash;
+
+#[cfg(not(feature = "std"))]
+mod collections {
+	pub use alloc::collections::*;
+	pub use alloc::vec::Vec;
+	pub use hashmap_core::{map as hash_map, HashMap, HashSet};
+}
+
+#[cfg(feature = "std")]
+mod collections {
+	pub use std::collections::*;
+	pub use std::vec::Vec;
+}
 
 /// A prevote for a block and its ancestors.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -108,6 +134,7 @@ impl fmt::Display for Error {
 	}
 }
 
+#[cfg(feature = "std")]
 impl std::error::Error for Error {
 	fn description(&self) -> &str {
 		match *self {
@@ -386,7 +413,7 @@ pub fn validate_commit<H, N, S, I, C: Chain<H, N>>(
 		return Ok(None);
 	}
 
-	let mut equivocated = std::collections::HashSet::new();
+	let mut equivocated = crate::collections::HashSet::new();
 
 	// Add all precommits to the round with correct counting logic
 	// using the commit target as a base.
@@ -436,8 +463,8 @@ mod tests {
 	fn codec_was_derived() {
 		use parity_codec::{Encode, Decode};
 
-		let signed = ::SignedMessage {
-			message: ::Message::Prevote(::Prevote {
+		let signed = crate::SignedMessage {
+			message: crate::Message::Prevote(crate::Prevote {
 				target_hash: b"Hello".to_vec(),
 				target_number: 5,
 			}),
@@ -446,7 +473,7 @@ mod tests {
 		};
 
 		let encoded = signed.encode();
-		let signed2 = ::SignedMessage::decode(&mut &encoded[..]).unwrap();
+		let signed2 = crate::SignedMessage::decode(&mut &encoded[..]).unwrap();
 		assert_eq!(signed, signed2);
 	}
 }

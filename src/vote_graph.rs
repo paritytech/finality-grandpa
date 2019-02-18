@@ -18,11 +18,11 @@
 //!
 //! See docs on `VoteGraph` for more information.
 
-use std::collections::{HashMap, HashSet};
 use std::fmt::Debug;
 use std::hash::Hash;
 use std::ops::AddAssign;
 
+use crate::collections::{HashMap, HashSet, Vec};
 use super::{Chain, Error, BlockNumberOps};
 
 #[derive(Debug)]
