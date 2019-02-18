@@ -16,13 +16,12 @@
 
 //! Logic for a single round of GRANDPA.
 
-use crate::vote_graph::VoteGraph;
-
-use std::collections::hash_map::{HashMap, Entry};
 use std::hash::Hash;
 use std::ops::AddAssign;
 
+use crate::collections::{hash_map::{HashMap, Entry}, Vec};
 use crate::bitfield::{Shared as BitfieldContext, Bitfield};
+use crate::vote_graph::VoteGraph;
 
 use super::{Equivocation, Prevote, Precommit, Chain, BlockNumberOps, VoterSet};
 

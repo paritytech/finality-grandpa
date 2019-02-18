@@ -31,9 +31,15 @@
 //! bitfield will be mostly empty.
 
 use std::fmt;
-use std::sync::Arc;
 use parking_lot::RwLock;
 
+#[cfg(feature = "std")]
+use std::sync::Arc;
+
+#[cfg(not(feature = "std"))]
+use alloc::sync::Arc;
+
+use crate::collections::Vec;
 use crate::VoterInfo;
 
 /// Errors that can occur when using the equivocation weighting tools.
@@ -56,6 +62,7 @@ impl fmt::Display for Error {
 	}
 }
 
+#[cfg(feature = "std")]
 impl ::std::error::Error for Error {}
 
 /// Bitfield for tracking voters who have equivocated.
