@@ -21,7 +21,7 @@ use std::sync::Arc;
 use std::time::{Instant, Duration};
 
 use crate::round::State as RoundState;
-use crate::voter::RoundData;
+use crate::voter::{RoundData, CommunicationIn, CommunicationOut};
 use tokio::timer::Delay;
 use parking_lot::Mutex;
 use futures::prelude::*;
@@ -299,22 +299,22 @@ impl<M: Clone> BroadcastNetwork<M> {
 /// Give the network future to node environments and spawn the routing task
 /// to run.
 pub fn make_network() -> (Network, NetworkRouting) {
-	let commits = Arc::new(Mutex::new(CommitNetwork::new()));
+	let global_messages = Arc::new(Mutex::new(GlobalMessageNetwork::new()));
 	let rounds = Arc::new(Mutex::new(HashMap::new()));
 	(
-		Network { commits: commits.clone(), rounds: rounds.clone() },
-		NetworkRouting { commits, rounds }
+		Network { global_messages: global_messages.clone(), rounds: rounds.clone() },
+		NetworkRouting { global_messages, rounds }
 	)
 }
 
 type RoundNetwork = BroadcastNetwork<SignedMessage<&'static str, u32, Signature, Id>>;
-type CommitNetwork = BroadcastNetwork<(u64, CompactCommit<&'static str, u32, Signature, Id>)>;
+type GlobalMessageNetwork = BroadcastNetwork<CommunicationIn<&'static str, u32, Signature, Id>>;
 
 /// A test network. Instantiate this with `make_network`,
 #[derive(Clone)]
 pub struct Network {
 	rounds: Arc<Mutex<HashMap<u64, RoundNetwork>>>,
-	commits: Arc<Mutex<CommitNetwork>>,
+	global_messages: Arc<Mutex<GlobalMessageNetwork>>,
 }
 
 impl Network {
@@ -332,19 +332,22 @@ impl Network {
 			})
 	}
 
-	pub fn make_commits_comms(&self) -> (
-		impl Stream<Item=(u64, CompactCommit<&'static str, u32, Signature, Id>),Error=Error>,
-		impl Sink<SinkItem=(u64, Commit<&'static str, u32, Signature, Id>),SinkError=Error>
+	pub fn make_global_comms(&self) -> (
+		impl Stream<Item=CommunicationIn<&'static str, u32, Signature, Id>,Error=Error>,
+		impl Sink<SinkItem=CommunicationOut<&'static str, u32, Signature, Id>,SinkError=Error>
 	) {
-		let mut commits = self.commits.lock();
-		commits.add_node(|(round_number, commit)| (round_number, CompactCommit::from(commit)))
+		let mut global_messages = self.global_messages.lock();
+		global_messages.add_node(|message| match message {
+			CommunicationOut::Commit(r, commit) => CommunicationIn::Commit(r, commit.into()),
+			CommunicationOut::Auxiliary(aux) => CommunicationIn::Auxiliary(aux),
+		})
 	}
 }
 
 /// the network routing task.
 pub struct NetworkRouting {
 	rounds: Arc<Mutex<HashMap<u64, RoundNetwork>>>,
-	commits: Arc<Mutex<CommitNetwork>>,
+	global_messages: Arc<Mutex<GlobalMessageNetwork>>,
 }
 
 impl Future for NetworkRouting {
@@ -358,8 +361,8 @@ impl Future for NetworkRouting {
 			Ok(Async::NotReady) => true,
 		});
 
-		let mut commits = self.commits.lock();
-		let _ = commits.route();
+		let mut global_messages = self.global_messages.lock();
+		let _ = global_messages.route();
 
 		Ok(Async::NotReady)
 	}
