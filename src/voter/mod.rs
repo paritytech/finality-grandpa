@@ -1025,7 +1025,7 @@ impl<H, N, E: Environment<H, N>, GlobalIn, GlobalOut> Voter<H, N, E, GlobalIn, G
 
 		if should_start_prospective {
 			trace!(target: "afg", "Imported commit for later round than current best {}, starting prospective round at {}",
-				   self.best_round.votes.number(),
+				self.best_round.votes.number(),
 				   round_number + 1);
 
 			// the GHOST-base in general for a round r is the best finalized
