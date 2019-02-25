@@ -27,6 +27,7 @@ use futures::stream::{self, futures_unordered::FuturesUnordered};
 use futures::sync::mpsc::{self, UnboundedSender, UnboundedReceiver};
 
 use std::collections::{HashMap, VecDeque};
+use std::cmp;
 use std::hash::Hash;
 use std::sync::Arc;
 
@@ -240,7 +241,7 @@ pub struct VotingRound<H, N, E: Environment<H, N>> where
 	state: Option<State<E::Timer>>, // state machine driving votes.
 	bridged_round_state: Option<crate::bridge_state::PriorView<H, N>>, // updates to later round
 	last_round_state: Option<crate::bridge_state::LatterView<H, N>>, // updates from prior round
-	primary_block: Option<(H, N)>, // a block posted by primary as a hint. TODO: implement
+	primary_block: Option<(H, N)>, // a block posted by primary as a hint.
 	finalized_sender: UnboundedSender<(H, N, u64, Commit<H, N, E::Signature, E::Id>)>,
 	best_finalized: Option<Commit<H, N, E::Signature, E::Id>>,
 }
@@ -558,7 +559,7 @@ impl<H, N, E: Environment<H, N>> BackgroundRound<H, N, E> where
 	}
 
 	fn update_finalized(&mut self, new_finalized: N) {
-		self.finalized_number = ::std::cmp::max(self.finalized_number, new_finalized);
+		self.finalized_number = cmp::max(self.finalized_number, new_finalized);
 
 		// wake up the future to be polled if done.
 		if self.is_done() {
@@ -758,7 +759,8 @@ impl<H, N, E: Environment<H, N>> PastRounds<H, N, E> where
 		let background = BackgroundRound {
 			inner: round,
 			task: None,
-			finalized_number: N::zero(), // TODO: do that right.
+			// https://github.com/paritytech/finality-grandpa/issues/50
+			finalized_number: N::zero(),
 			round_committer: Some(RoundCommitter::new(
 				env.round_commit_timer(),
 				rx,
@@ -981,10 +983,8 @@ impl<H, N, E: Environment<H, N>, GlobalIn, GlobalOut> Voter<H, N, E, GlobalIn, G
 							&self.voters,
 							&*self.env,
 						)? {
-							match highest_incoming_foreign_commit {
-								Some(n) if n >= round_number => {},
-								_ => highest_incoming_foreign_commit = Some(round_number),
-							}
+							highest_incoming_foreign_commit = Some(highest_incoming_foreign_commit
+								.map_or(round_number, |n| cmp::max(n, round_number)));
 
 							// this can't be moved to a function because the compiler
 							// will complain about getting two mutable borrows to self
@@ -998,7 +998,7 @@ impl<H, N, E: Environment<H, N>, GlobalIn, GlobalOut> Voter<H, N, E, GlobalIn, G
 						}
 					}
 				}
-				CommunicationIn::Auxiliary(aux) => {}, // Do nothing.
+				CommunicationIn::Auxiliary(_aux) => {}, // Do nothing.
 			}
 		}
 
@@ -1026,7 +1026,8 @@ impl<H, N, E: Environment<H, N>, GlobalIn, GlobalOut> Voter<H, N, E, GlobalIn, G
 		if should_start_prospective {
 			trace!(target: "afg", "Imported commit for later round than current best {}, starting prospective round at {}",
 				self.best_round.votes.number(),
-				   round_number + 1);
+				round_number + 1,
+			);
 
 			// the GHOST-base in general for a round r is the best finalized
 			// block in r-2 or earlier. We can't use the commit's base, since
@@ -1190,7 +1191,6 @@ impl<H, N, E: Environment<H, N>, GlobalIn, GlobalOut> Voter<H, N, E, GlobalIn, G
 			self.env.clone(),
 		);
 
-		// TODO: should we clear `past_rounds`?
 		self.past_rounds.push(&*self.env, prospective_round);
 
 		Ok(())

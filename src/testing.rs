@@ -26,7 +26,7 @@ use tokio::timer::Delay;
 use parking_lot::Mutex;
 use futures::prelude::*;
 use futures::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
-use super::{Chain, Commit, CompactCommit, Error, Equivocation, Message, Prevote, Precommit, SignedMessage};
+use super::{Chain, Commit, Error, Equivocation, Message, Prevote, Precommit, SignedMessage};
 
 pub const GENESIS_HASH: &str = "genesis";
 const NULL_HASH: &str = "NULL";
