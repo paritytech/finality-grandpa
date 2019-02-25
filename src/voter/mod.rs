@@ -576,7 +576,7 @@ enum BackgroundRoundChange<H, N, E: Environment<H, N>> where
 	/// Background round has become irrelevant and can be discarded.
 	Irrelevant(u64),
 	/// Background round has a commit message to issue but should continue
-	/// being drive afterwards.
+	/// being driven afterwards.
 	Committed(Commit<H, N, E::Signature, E::Id>),
 }
 
