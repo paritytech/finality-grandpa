@@ -1,4 +1,4 @@
-// Copyright 2018 Parity Technologies (UK) Ltd.
+// Copyright 2019 Parity Technologies (UK) Ltd.
 // This file is part of finality-grandpa.
 
 // finality-grandpa is free software: you can redistribute it and/or modify
