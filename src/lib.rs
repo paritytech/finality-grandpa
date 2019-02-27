@@ -211,8 +211,10 @@ pub struct Equivocation<Id, V, S> {
 #[cfg_attr(feature = "derive-codec", derive(Encode, Decode))]
 pub enum Message<H, N> {
 	/// A prevote message.
+	#[cfg_attr(feature = "derive-codec", codec(index = "0"))]
 	Prevote(Prevote<H, N>),
 	/// A precommit message.
+	#[cfg_attr(feature = "derive-codec", codec(index = "1"))]
 	Precommit(Precommit<H, N>),
 	// TODO: liveness - primary propose.
 }
