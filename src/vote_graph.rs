@@ -581,6 +581,28 @@ mod tests {
 	}
 
 	#[test]
+	fn test_ghost_symmetry() {
+		let mut chain = DummyChain::new();
+		let mut tracker1 = VoteGraph::new(GENESIS_HASH, 1);
+		let mut tracker2 = VoteGraph::new(GENESIS_HASH, 1);
+
+		chain.push_blocks(GENESIS_HASH, &["A", "B", "C"]);
+		chain.push_blocks("C", &["D1", "E1", "F1"]);
+		chain.push_blocks("C", &["D2", "E2", "F2"]);
+
+		tracker1.insert("A", 2, 100u32, &chain).unwrap();
+		tracker1.insert("F2", 7, 100, &chain).unwrap();
+		tracker1.insert("E1", 6, 100, &chain).unwrap();
+
+		tracker2.insert("A", 2, 100u32, &chain).unwrap();
+		tracker2.insert("E1", 6, 100, &chain).unwrap();
+		tracker2.insert("F2", 7, 100, &chain).unwrap();
+
+		assert_eq!(tracker1.find_ghost(None, |&x| x >= 100),
+					tracker2.find_ghost(None, |&x| x >= 100));
+	}
+
+	#[test]
 	fn graph_fork_at_node() {
 		let mut chain = DummyChain::new();
 		let mut tracker1 = VoteGraph::new(GENESIS_HASH, 1);
