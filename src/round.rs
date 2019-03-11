@@ -451,7 +451,10 @@ impl<Id, H, N, Signature> Round<Id, H, N, Signature> where
 				if let VoteMultiplicity::Single(ref v, _) = *multiplicity {
 					// if there is a single vote from this voter, we only include it
 					// if it branches off of the target.
-					chain.is_equal_or_descendent_of(f_hash.clone(), v.target_hash.clone())
+					match chain.is_equal_or_descendent_of(f_hash.clone(), v.target_hash.clone()) {
+						Ok(b) => b,
+						Err(_) => false,
+					}
 				} else {
 					// equivocations count for everything, so we always include them.
 					true

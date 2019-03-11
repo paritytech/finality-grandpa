@@ -182,17 +182,13 @@ pub trait Chain<H: Eq, N: Copy + BlockNumberOps> {
 	fn best_chain_containing(&self, base: H) -> Option<(H, N)>;
 
 	/// Returns true if `block` is a descendent of or equal to the given `base`.
-	fn is_equal_or_descendent_of(&self, base: H, block: H) -> bool {
-		if base == block { return true; }
+	fn is_equal_or_descendent_of(&self, base: H, block: H) -> Result<bool, Error> {
+		if base == block { return Ok(true); }
 
-		// TODO: currently this function always succeeds since the only error
-		// variant is `Error::NotDescendent`, this may change in the future as
-		// other errors (e.g. IO) are not being exposed.
 		match self.ancestry(base, block) {
-			Ok(_) => true,
-			Err(Error::NotDescendent) => false,
-			// TODO: probably this whole error handling match should be re-thinked now
-			Err(Error::MultipleForksSupportPredicate) => unreachable!(),
+			Ok(_) => Ok(true),
+			Err(Error::NotDescendent) => Ok(false),
+			Err(e) => Err(e) ,
 		}
 	}
 }
@@ -415,7 +411,7 @@ pub fn validate_commit<H, N, S, I, C: Chain<H, N>>(
 			chain.is_equal_or_descendent_of(
 				commit.target_hash.clone(),
 				signed.precommit.target_hash.clone(),
-			)
+			).unwrap_or(false)
 	}) {
 		return Ok(None);
 	}

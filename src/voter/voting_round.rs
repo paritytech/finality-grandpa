@@ -213,7 +213,7 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 			trace!(target: "afg", "Got incoming message");
 			let SignedMessage { message, signature, id } = incoming;
 
-			if !self.env.is_equal_or_descendent_of(self.votes.base().0, message.target().0.clone()) {
+			if !self.env.is_equal_or_descendent_of(self.votes.base().0, message.target().0.clone())? {
 				trace!(target: "afg", "Ignoring message targeting {:?} lower than round base {:?}",
 					   message.target(),
 					   self.votes.base(),
@@ -274,7 +274,7 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 					// the ancestor of the current round's p-Ghost before precommitting.
 					self.votes.state().prevote_ghost.as_ref().map_or(false, |p_g| {
 						p_g == &last_round_estimate ||
-							self.env.is_equal_or_descendent_of(last_round_estimate.0, p_g.0.clone())
+							self.env.is_equal_or_descendent_of(last_round_estimate.0, p_g.0.clone()).unwrap_or(false)
 					})
 				} && match precommit_timer.poll() {
 					Err(e) => return Err(e),
