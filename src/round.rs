@@ -392,22 +392,19 @@ impl<Id, H, N, Signature> Round<Id, H, N, Signature> where
 	}
 
 	/// Compute and cache the precommit-GHOST.
-	pub fn precommit_ghost(&mut self) -> Option<(H, N)> {
+	pub fn precommit_ghost(&mut self) -> Result<Option<(H, N)>, crate::Error> {
 		// update precommit-GHOST
 		let threshold = self.threshold();
 		if self.precommit.current_weight >= threshold {
 			let equivocators = self.bitfield_context.equivocators().read();
 
-			self.precommit_ghost = match self.graph.find_ghost(
+			self.precommit_ghost = self.graph.find_ghost(
 				self.precommit_ghost.take(),
 				|v| v.total_weight(&equivocators, &self.voters).precommit >= threshold,
-			) {
-				Ok(b) => b,
-				_ => None
-			}
+			)?;
 		}
 
-		self.precommit_ghost.clone()
+		Ok(self.precommit_ghost.clone())
 	}
 
 	/// Returns an iterator of all precommits targeting the finalized hash.

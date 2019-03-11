@@ -439,7 +439,7 @@ pub fn validate_commit<H, N, S, I, C: Chain<H, N>>(
 
 	// if a ghost is found then it must be equal or higher than the commit
 	// target, otherwise the commit is invalid
-	Ok(round.precommit_ghost())
+	Ok(round.precommit_ghost()?)
 }
 
 fn threshold(total_weight: u64) -> u64 {
