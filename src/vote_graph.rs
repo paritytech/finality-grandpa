@@ -304,7 +304,7 @@ impl<H, N, V> VoteGraph<H, N, V> where
 					}
 				})
 				.filter(|&(_, ref node)| condition(&node.cumulative_vote))
-				.next();
+				.max_by(|&(_, ref node1), &(_, ref node2)| node1.number.cmp(&node2.number));
 
 			match next_descendent {
 				Some((key, node)) => {
