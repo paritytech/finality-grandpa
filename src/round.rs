@@ -315,7 +315,7 @@ impl<Id, H, N, Signature> Round<Id, H, N, Signature> where
 			self.prevote_ghost = self.graph.find_ghost(
 				self.prevote_ghost.take(),
 				|v| v.total_weight(&equivocators, &self.voters).prevote >= threshold,
-			);
+			)?;
 		}
 
 		self.update();
@@ -398,10 +398,13 @@ impl<Id, H, N, Signature> Round<Id, H, N, Signature> where
 		if self.precommit.current_weight >= threshold {
 			let equivocators = self.bitfield_context.equivocators().read();
 
-			self.precommit_ghost = self.graph.find_ghost(
+			self.precommit_ghost = match self.graph.find_ghost(
 				self.precommit_ghost.take(),
 				|v| v.total_weight(&equivocators, &self.voters).precommit >= threshold,
-			);
+			) {
+				Ok(b) => b,
+				_ => None
+			}
 		}
 
 		self.precommit_ghost.clone()
@@ -567,7 +570,8 @@ impl<Id, H, N, Signature> Round<Id, H, N, Signature> where
 				// this round is still completable if no further blocks
 				// could have commit-supermajority.
 				self.graph.find_ghost(Some((b_hash, b_num)), possible_to_precommit)
-					.map_or(true, |x| x == (g_hash, g_num))
+					.ok()
+					.map_or(true, |x| x == Some((g_hash, g_num)))
 			}
 		})
 	}

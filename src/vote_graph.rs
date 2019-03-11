@@ -263,7 +263,7 @@ impl<H, N, V> VoteGraph<H, N, V> where
 	/// enough to trigger the threshold.
 	///
 	/// Returns `None` when the given `current_best` does not fulfill the condition.
-	pub fn find_ghost<'a, F>(&'a self, current_best: Option<(H, N)>, condition: F) -> Option<(H, N)>
+	pub fn find_ghost<'a, F>(&'a self, current_best: Option<(H, N)>, condition: F) -> Result<Option<(H, N)>, Error>
 		where F: Fn(&V) -> bool
 	{
 		let entries = &self.entries;
@@ -288,11 +288,11 @@ impl<H, N, V> VoteGraph<H, N, V> where
 
 		let mut active_node = get_node(&node_key);
 
-		if !condition(&active_node.cumulative_vote) { return None }
+		if !condition(&active_node.cumulative_vote) { return Ok(None) }
 
 		// breadth-first search starting from this node.
 		loop {
-			let next_descendent = active_node.descendents
+			let mut descendent_candidates = active_node.descendents
 				.iter()
 				.map(|d| (d.clone(), get_node(d)))
 				.filter(|&(_, ref node)| {
@@ -303,8 +303,12 @@ impl<H, N, V> VoteGraph<H, N, V> where
 						true
 					}
 				})
-				.filter(|&(_, ref node)| condition(&node.cumulative_vote))
-				.max_by(|&(_, ref node1), &(_, ref node2)| node1.number.cmp(&node2.number));
+				.filter(|&(_, ref node)| condition(&node.cumulative_vote));
+			let next_descendent = descendent_candidates.next();
+
+			if let Some(_) = descendent_candidates.next() {
+				return Err(Error::MultipleForksSupportPredicate);
+			}
 
 			match next_descendent {
 				Some((key, node)) => {
@@ -322,12 +326,12 @@ impl<H, N, V> VoteGraph<H, N, V> where
 		// its descendents comprise frontier of vote-nodes which individually don't have enough votes
 		// to pass the threshold but some subset of them join either at `active_node`'s block or at some
 		// descendent block of it, giving that block sufficient votes.
-		self.ghost_find_merge_point(
+		Ok(self.ghost_find_merge_point(
 			node_key,
 			active_node,
 			if force_constrain { current_best } else { None },
 			condition,
-		).best()
+		).best())
 	}
 
 	// given a key, node pair (which must correspond), assuming this node fulfills the condition,
@@ -581,7 +585,7 @@ mod tests {
 	}
 
 	#[test]
-	fn test_ghost_symmetry() {
+	fn multiple_forks_predicate() {
 		let mut chain = DummyChain::new();
 		let mut tracker1 = VoteGraph::new(GENESIS_HASH, 1);
 		let mut tracker2 = VoteGraph::new(GENESIS_HASH, 1);
@@ -598,8 +602,7 @@ mod tests {
 		tracker2.insert("E1", 6, 100, &chain).unwrap();
 		tracker2.insert("F2", 7, 100, &chain).unwrap();
 
-		assert_eq!(tracker1.find_ghost(None, |&x| x >= 100),
-					tracker2.find_ghost(None, |&x| x >= 100));
+		assert_eq!(tracker1.find_ghost(None, |&x| x >= 100), Err(super::Error::MultipleForksSupportPredicate));
 	}
 
 	#[test]
@@ -655,9 +658,9 @@ mod tests {
 		tracker.insert("E1", 6, 100, &chain).unwrap();
 		tracker.insert("F2", 7, 100, &chain).unwrap();
 
-		assert_eq!(tracker.find_ghost(None, |&x| x >= 250), Some(("C", 4)));
-		assert_eq!(tracker.find_ghost(Some(("C", 4)), |&x| x >= 250), Some(("C", 4)));
-		assert_eq!(tracker.find_ghost(Some(("B", 3)), |&x| x >= 250), Some(("C", 4)));
+		assert_eq!(tracker.find_ghost(None, |&x| x >= 250), Ok(Some(("C", 4))));
+		assert_eq!(tracker.find_ghost(Some(("C", 4)), |&x| x >= 250), Ok(Some(("C", 4))));
+		assert_eq!(tracker.find_ghost(Some(("B", 3)), |&x| x >= 250), Ok(Some(("C", 4))));
 	}
 
 	#[test]
@@ -673,10 +676,10 @@ mod tests {
 		tracker.insert("G1", 8, 100, &chain).unwrap();
 		tracker.insert("H2", 9, 150, &chain).unwrap();
 
-		assert_eq!(tracker.find_ghost(None, |&x| x >= 250), Some(("F", 7)));
-		assert_eq!(tracker.find_ghost(Some(("F", 7)), |&x| x >= 250), Some(("F", 7)));
-		assert_eq!(tracker.find_ghost(Some(("C", 4)), |&x| x >= 250), Some(("F", 7)));
-		assert_eq!(tracker.find_ghost(Some(("B", 3)), |&x| x >= 250), Some(("F", 7)));
+		assert_eq!(tracker.find_ghost(None, |&x| x >= 250), Ok(Some(("F", 7))));
+		assert_eq!(tracker.find_ghost(Some(("F", 7)), |&x| x >= 250), Ok(Some(("F", 7))));
+		assert_eq!(tracker.find_ghost(Some(("C", 4)), |&x| x >= 250), Ok(Some(("F", 7))));
+		assert_eq!(tracker.find_ghost(Some(("B", 3)), |&x| x >= 250), Ok(Some(("F", 7))));
 	}
 
 	#[test]
@@ -691,7 +694,7 @@ mod tests {
 		tracker.insert("FC", 10, 5u32, &chain).unwrap();
 		tracker.insert("ED", 10, 7, &chain).unwrap();
 
-		assert_eq!(tracker.find_ghost(None, |&x| x >= 10), Some(("E", 6)));
+		assert_eq!(tracker.find_ghost(None, |&x| x >= 10), Ok(Some(("E", 6))));
 
 		assert_eq!(tracker.entries.get(GENESIS_HASH).unwrap().descendents, vec!["FC", "ED"]);
 
@@ -704,9 +707,9 @@ mod tests {
 		assert!(descendents.contains(&"ED"));
 		assert!(descendents.contains(&"FC"));
 
-		assert_eq!(tracker.find_ghost(None, |&x| x >= 10), Some(("E", 6)));
-		assert_eq!(tracker.find_ghost(Some(("C", 4)), |&x| x >= 10), Some(("E", 6)));
-		assert_eq!(tracker.find_ghost(Some(("E", 6)), |&x| x >= 10), Some(("E", 6)));
+		assert_eq!(tracker.find_ghost(None, |&x| x >= 10), Ok(Some(("E", 6))));
+		assert_eq!(tracker.find_ghost(Some(("C", 4)), |&x| x >= 10), Ok(Some(("E", 6))));
+		assert_eq!(tracker.find_ghost(Some(("E", 6)), |&x| x >= 10), Ok(Some(("E", 6))));
 	}
 
 	#[test]

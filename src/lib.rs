@@ -124,12 +124,14 @@ impl<H, N> Precommit<H, N> {
 #[derive(Debug, Clone, PartialEq)]
 pub enum Error {
 	NotDescendent,
+	MultipleForksSupportPredicate,
 }
 
 impl fmt::Display for Error {
 	fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
 		match *self {
 			Error::NotDescendent => write!(f, "Block not descendent of base"),
+			Error::MultipleForksSupportPredicate => write!(f, "Multiple forks support the predicate"),
 		}
 	}
 }
@@ -139,6 +141,7 @@ impl std::error::Error for Error {
 	fn description(&self) -> &str {
 		match *self {
 			Error::NotDescendent => "Block not descendent of base",
+			Error::MultipleForksSupportPredicate => "Multiple forks support the predicate",
 		}
 	}
 }
@@ -188,6 +191,8 @@ pub trait Chain<H: Eq, N: Copy + BlockNumberOps> {
 		match self.ancestry(base, block) {
 			Ok(_) => true,
 			Err(Error::NotDescendent) => false,
+			// TODO: probably this whole error handling match should be re-thinked now
+			Err(Error::MultipleForksSupportPredicate) => unreachable!(),
 		}
 	}
 }

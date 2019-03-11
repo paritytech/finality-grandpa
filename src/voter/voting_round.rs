@@ -342,7 +342,7 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 								last_round_estimate.0
 							}
 						}
-						Err(crate::Error::NotDescendent) => last_round_estimate.0,
+						Err(_) => last_round_estimate.0,
 					}
 				}
 			}
