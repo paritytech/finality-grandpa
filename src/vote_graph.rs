@@ -304,6 +304,7 @@ impl<H, N, V> VoteGraph<H, N, V> where
 					}
 				})
 				.filter(|&(_, ref node)| condition(&node.cumulative_vote));
+			
 			let next_descendent = descendent_candidates.next();
 
 			if let Some(_) = descendent_candidates.next() {
