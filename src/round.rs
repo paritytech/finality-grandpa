@@ -452,7 +452,7 @@ impl<Id, H, N, Signature> Round<Id, H, N, Signature> where
 			return Ok(None)
 		}
 
-		let variants: Result<Vec<_>, crate::Error> = self.precommit.votes.iter()
+		let variants: Vec<_> = self.precommit.votes.iter()
 			.map(|(id, ref multiplicity)| {
 				if let VoteMultiplicity::Single(ref v, _) = *multiplicity {
 					// if there is a single vote from this voter, we only include it
@@ -465,9 +465,9 @@ impl<Id, H, N, Signature> Round<Id, H, N, Signature> where
 					// equivocations count for everything, so we always include them.
 					Ok(Some((id, *multiplicity)))
 				}
-			}).collect();
+			}).collect::<Result<_,_>>()?;
 
-		Ok(Some(variants?.into_iter()
+		Ok(Some(variants.into_iter()
 			.filter_map(|x| x)
 			.flat_map(|(id, multiplicity)| {
 				let yield_votes = YieldVotes { yielded: 0, multiplicity };
