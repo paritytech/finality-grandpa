@@ -256,6 +256,27 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 		self.best_finalized.as_ref()
 	}
 
+	/// Return all imported votes for the round (prevotes and precommits).
+	pub(super) fn votes(&self) -> Vec<SignedMessage<H, N, E::Signature, E::Id>> {
+		let prevotes = self.votes.prevotes().into_iter().map(|(id, prevote, signature)| {
+			SignedMessage {
+				id,
+				signature,
+				message: Message::Prevote(prevote),
+			}
+		});
+
+		let precommits = self.votes.precommits().into_iter().map(|(id, precommit, signature)| {
+			SignedMessage {
+				id,
+				signature,
+				message: Message::Precommit(precommit),
+			}
+		});
+
+		prevotes.chain(precommits).collect()
+	}
+
 	fn process_incoming(&mut self) -> Result<(), E::Error> {
 		while let Async::Ready(Some(incoming)) = self.incoming.poll()? {
 			trace!(target: "afg", "Got incoming message");

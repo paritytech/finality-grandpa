@@ -215,7 +215,13 @@ impl crate::voter::Environment<&'static str, u32> for Environment {
 		Box::new(Delay::new(now + delay).map_err(|_| panic!("Timer failed")))
 	}
 
-	fn completed(&self, _round: u64, _state: RoundState<&'static str, u32>) -> Result<(), Error> {
+	fn completed(
+		&self,
+		_round: u64,
+		_state: RoundState<&'static str, u32>,
+		_base: (&'static str, u32),
+		_votes: Vec<SignedMessage<&'static str, u32, Signature, Id>>,
+	) -> Result<(), Error> {
 		Ok(())
 	}
 
