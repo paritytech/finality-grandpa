@@ -363,6 +363,7 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 				if self.voting.is_active() {
 					if let Some(prevote) = self.construct_prevote(last_round_state)? {
 						debug!(target: "afg", "Casting prevote for round {}", self.votes.number());
+						self.env.prevoted(self.round_number(), prevote.clone())?;
 						self.outgoing.push(Message::Prevote(prevote));
 					}
 				}
@@ -414,6 +415,7 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 					if self.voting.is_active() {
 						debug!(target: "afg", "Casting precommit for round {}", self.votes.number());
 						let precommit = self.construct_precommit();
+						self.env.precommitted(self.round_number(), precommit.clone())?;
 						self.outgoing.push(Message::Precommit(precommit));
 					}
 					self.state = Some(State::Precommitted);
