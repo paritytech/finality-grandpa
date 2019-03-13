@@ -121,7 +121,7 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 
 		// broadcast finality notifications after attempting to cast votes
 		let post_state = self.votes.state();
-		self.notify(pre_state, post_state);
+		self.notify(pre_state, post_state)?;
 
 		if self.votes.completable() {
 			Ok(Async::Ready(()))
@@ -272,10 +272,12 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 				let should_precommit = {
 					// we wait for the last round's estimate to be equal to or
 					// the ancestor of the current round's p-Ghost before precommitting.
-					self.votes.state().prevote_ghost.as_ref().map_or(false, |p_g| {
+					if let Some(p_g) = self.votes.state().prevote_ghost.as_ref() {
 						p_g == &last_round_estimate ||
-							self.env.is_equal_or_descendent_of(last_round_estimate.0, p_g.0.clone()).unwrap_or(false)
-					})
+							self.env.is_equal_or_descendent_of(last_round_estimate.0, p_g.0.clone())?
+					} else {
+						false
+					}
 				} && match precommit_timer.poll() {
 					Err(e) => return Err(e),
 					Ok(Async::Ready(())) => true,
@@ -382,8 +384,8 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 	}
 
 	// notify when new blocks are finalized or when the round-estimate is updated
-	fn notify(&mut self, last_state: RoundState<H, N>, new_state: RoundState<H, N>) {
-		if last_state == new_state { return }
+	fn notify(&mut self, last_state: RoundState<H, N>, new_state: RoundState<H, N>) -> Result<(), crate::Error> {
+		if last_state == new_state { return Ok(()) }
 
 		if let Some(ref b) = self.bridged_round_state {
 			b.update(new_state.clone());
@@ -399,7 +401,7 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 					let commit = Commit {
 						target_hash: f_hash.clone(),
 						target_number: f_number.clone(),
-						precommits: self.votes.finalizing_precommits(&*self.env)
+						precommits: self.votes.finalizing_precommits(&*self.env)?
 							.expect("always returns none if something was finalized; this is checked above; qed")
 							.collect(),
 					};
@@ -411,5 +413,6 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 				_ => {}
 			}
 		}
+		Ok(())
 	}
 }

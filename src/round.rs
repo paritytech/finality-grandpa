@@ -411,7 +411,7 @@ impl<Id, H, N, Signature> Round<Id, H, N, Signature> where
 	///
 	/// Only returns `None` if no block has been finalized in this round.
 	pub fn finalizing_precommits<'a, C: 'a + Chain<H, N>>(&'a mut self, chain: &'a C)
-		-> Option<impl Iterator<Item=crate::SignedPrecommit<H, N, Signature, Id>> + 'a>
+		-> Result<Option<impl Iterator<Item=crate::SignedPrecommit<H, N, Signature, Id>> + 'a>, crate::Error>
 	{
 		struct YieldVotes<'b, V: 'b, S: 'b> {
 			yielded: usize,
@@ -445,21 +445,30 @@ impl<Id, H, N, Signature> Round<Id, H, N, Signature> where
 			}
 		}
 
-		let (f_hash, _f_num) = self.finalized.clone()?;
-		let find_valid_precommits = self.precommit.votes.iter()
-			.filter(move |&(_id, ref multiplicity)| {
+		let f_hash;
+		if let Some((a, _b)) = self.finalized.clone() {
+			f_hash = a;
+		} else {
+			return Ok(None)
+		}
+
+		let variants: Result<Vec<_>, crate::Error> = self.precommit.votes.iter()
+			.map(|(id, ref multiplicity)| {
 				if let VoteMultiplicity::Single(ref v, _) = *multiplicity {
 					// if there is a single vote from this voter, we only include it
 					// if it branches off of the target.
-					match chain.is_equal_or_descendent_of(f_hash.clone(), v.target_hash.clone()) {
-						Ok(b) => b,
-						Err(_) => false,
+					match chain.is_equal_or_descendent_of(f_hash.clone(), v.target_hash.clone())? {
+						true => Ok(Some((id, *multiplicity))),
+						false => Ok(None)
 					}
 				} else {
 					// equivocations count for everything, so we always include them.
-					true
+					Ok(Some((id, *multiplicity)))
 				}
-			})
+			}).collect();
+
+		Ok(Some(variants?.into_iter()
+			.filter_map(|x| x)
 			.flat_map(|(id, multiplicity)| {
 				let yield_votes = YieldVotes { yielded: 0, multiplicity };
 
@@ -468,9 +477,7 @@ impl<Id, H, N, Signature> Round<Id, H, N, Signature> where
 					signature: s,
 					id: id.clone(),
 				})
-			});
-
-		Some(find_valid_precommits)
+			})))
 	}
 
 	// update the round-estimate and whether the round is completable.

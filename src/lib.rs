@@ -406,14 +406,14 @@ pub fn validate_commit<H, N, S, I, C: Chain<H, N>>(
 {
 	// check that all precommits are for blocks higher than the target
 	// commit block, and that they're its descendents
-	if !commit.precommits.iter().all(|signed| {
-		signed.precommit.target_number >= commit.target_number &&
+	for signed in commit.precommits.iter() {
+		if !(signed.precommit.target_number >= commit.target_number &&
 			chain.is_equal_or_descendent_of(
 				commit.target_hash.clone(),
 				signed.precommit.target_hash.clone(),
-			).unwrap_or(false)
-	}) {
-		return Ok(None);
+			)?) {
+			return Ok(None);
+		}
 	}
 
 	let mut equivocated = crate::collections::HashSet::new();
