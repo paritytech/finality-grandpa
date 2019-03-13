@@ -80,6 +80,12 @@ pub trait Environment<H: Eq, N: BlockNumberOps>: Chain<H, N> {
 	/// commit messages that are sent (e.g. random value in [0, 1] seconds).
 	fn round_commit_timer(&self) -> Self::Timer;
 
+	/// Note that we have prevoted in the given round.
+	fn prevoted(&self, round: u64, prevote: Prevote<H, N>) -> Result<(), Self::Error>;
+
+	/// Note that we have precommitted in the given round.
+	fn precommitted(&self, round: u64, precommit: Precommit<H, N>) -> Result<(), Self::Error>;
+
 	/// Note that a round was completed. This is called when a round has been
 	/// voted in. Should return an error when something fatal occurs.
 	fn completed(

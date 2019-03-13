@@ -235,6 +235,10 @@ impl crate::voter::Environment<&'static str, u32> for Environment {
 		Ok(())
 	}
 
+	fn prevoted(&self, _round: u64, _prevote: Prevote<&'static str, u32>) {}
+
+	fn precommitted(&self, _round: u64, _precommit: Precommit<&'static str, u32>) {}
+
 	fn prevote_equivocation(&self, round: u64, equivocation: Equivocation<Id, Prevote<&'static str, u32>, Signature>) {
 		panic!("Encountered equivocation in round {}: {:?}", round, equivocation);
 	}
