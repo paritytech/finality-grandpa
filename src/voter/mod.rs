@@ -246,7 +246,6 @@ pub struct Voter<H, N, E: Environment<H, N>, GlobalIn, GlobalOut> where
 	past_rounds: PastRounds<H, N, E>,
 	finalized_notifications: UnboundedReceiver<(H, N, u64, Commit<H, N, E::Signature, E::Id>)>,
 	last_finalized_number: N,
-	prospective_round: Option<VotingRound<H, N, E>>,
 	global_in: GlobalIn,
 	global_out: Buffered<GlobalOut>,
 	// the commit protocol might finalize further than the current round (if we're
@@ -302,7 +301,6 @@ impl<H, N, E: Environment<H, N>, GlobalIn, GlobalOut> Voter<H, N, E, GlobalIn, G
 			voters,
 			best_round,
 			past_rounds: PastRounds::new(),
-			prospective_round: None,
 			finalized_notifications,
 			last_finalized_number,
 			last_finalized_in_rounds: last_finalized,
@@ -346,11 +344,7 @@ impl<H, N, E: Environment<H, N>, GlobalIn, GlobalOut> Voter<H, N, E, GlobalIn, G
 	///
 	/// Otherwise, we will simply handle the commit and issue a finalization command
 	/// to the environment.
-	///
-	/// When witnessing a commit from a future round, we also start a prospective round
-	/// that can allow us to catch up when we've been stuck behind.
 	fn process_incoming(&mut self) -> Result<(), E::Error> {
-		let mut highest_incoming_foreign_commit = None;
 		while let Async::Ready(Some(item)) = self.global_in.poll()? {
 			match item {
 				CommunicationIn::Commit(round_number, commit) => {
@@ -372,9 +366,6 @@ impl<H, N, E: Environment<H, N>, GlobalIn, GlobalOut> Voter<H, N, E, GlobalIn, G
 							&self.voters,
 							&*self.env,
 						)? {
-							highest_incoming_foreign_commit = Some(highest_incoming_foreign_commit
-								.map_or(round_number, |n| cmp::max(n, round_number)));
-
 							// this can't be moved to a function because the compiler
 							// will complain about getting two mutable borrows to self
 							// (due to the call to `self.rounds.get_mut`).
@@ -391,135 +382,17 @@ impl<H, N, E: Environment<H, N>, GlobalIn, GlobalOut> Voter<H, N, E, GlobalIn, G
 			}
 		}
 
-		if let Some(round_number) = highest_incoming_foreign_commit {
-			self.maybe_start_prospective_round(round_number)?;
-		}
-
 		Ok(())
 	}
 
-	fn maybe_start_prospective_round(&mut self, round_number: u64) -> Result<(), E::Error> {
-		let prospective_round_number =
-			self.prospective_round.as_ref().map(|r| r.round_number());
-
-		// we saw a commit for a round `r` that is at least 2 higher than
-		// our current best round so we start a prospective round at `r + 1`
-		//
-		// we also start a prospective round only if our last prospective round is before
-		// the given commit message. we could technically restart if they are the same,
-		// but if commit messages at the round are live then other messages are likely to be
-		// as well. Not restarting gives the best chance of completing the round faster.
-		let should_start_prospective = round_number > self.best_round.round_number() + 1 &&
-			prospective_round_number.map_or(true, |n| round_number > n);
-
-		if should_start_prospective {
-			trace!(target: "afg", "Imported commit for later round than current best {}, starting prospective round at {}",
-				self.best_round.round_number(),
-				round_number + 1,
-			);
-
-			// the GHOST-base in general for a round r is the best finalized
-			// block in r-2 or earlier. We can't use the commit's base, since
-			// it's only r-1 relative to the new prospective.
-			//
-			// We use, in this order:
-			//   - a finalized a block in the current prospective round or
-			//   - a finalized block in the active round, or
-			//   - the last finalized in prior rounds
-			let ghost_base = self.prospective_round.as_ref()
-				.and_then(|r| r.round_state().finalized.clone())
-				.or_else(|| self.best_round.round_state().finalized.clone())
-				.unwrap_or_else(|| self.last_finalized_in_rounds.clone());
-
-			// we set `last_round_state` to `None` so that no votes are cast
-			self.prospective_round = Some(VotingRound::new(
-				round_number + 1,
-				self.voters.clone(),
-				ghost_base,
-				None,
-				self.best_round.finalized_sender(),
-				self.env.clone(),
-			));
-		}
-
-		Ok(())
-	}
-
-	// Processes the current prospective round, returns `Async::NotReady` when
-	// the `best_round` has been updated and the caller should re-poll.
-	fn process_prospective_round(&mut self) -> Poll<Option<bool>, E::Error> {
-		let mut best_round_completable = None;
-
-		// poll the prospective round (if any).
-		if let Some(mut prospective_round) = self.prospective_round.take() {
-			match prospective_round.poll() {
-				// if it is completable then we background it and start the new
-				// `best_round` at `prospective_round.number + 1`.
-				Ok(Async::Ready(())) => {
-					trace!(target: "afg", "Prospective round at {} has become completable. Starting best round at {}",
-						   prospective_round.round_number(),
-						   prospective_round.round_number() + 1);
-
-					self.completed_prospective_round(prospective_round)?;
-
-					// round has been updated, so we return `NotReady` to trigger a re-poll.
-					return Ok(Async::NotReady);
-				},
-				Ok(_) => {
-					assert!(self.best_round.round_number() < prospective_round.round_number());
-					if let Async::Ready(()) = self.best_round.poll()? {
-						// if `best_round` is completable and we've caught up with prospective round,
-						// then we background the current `best_round` and set the `best_round`
-						// to `prospective_round`.
-						if self.best_round.round_number() == prospective_round.round_number() - 1 {
-							trace!(target: "afg", "Best round at {} has caught up with prospective round at {}. \
-												   Setting best round to prospective round.",
-								   self.best_round.round_number(),
-								   prospective_round.round_number());
-
-							prospective_round.bridge_state_from(&mut self.best_round);
-							self.completed_best_round(Some(prospective_round))?;
-
-							// round has been updated, so we return `NotReady` to trigger a re-poll.
-							return Ok(Async::NotReady);
-						}
-
-						best_round_completable = Some(true);
-
-					} else {
-						// otherwise we keep the current `prospective_round` running.
-						self.prospective_round = Some(prospective_round);
-						best_round_completable = Some(false);
-					}
-				},
-				Err(e) => {
-					// the `prospective_round` may fail because the commit votes
-					// haven't been validated against typical voting rules,
-					// e.g. we could start the round with a base that is too
-					// high compared to other honest voters and would fail to
-					// import their votes.
-					trace!(target: "afg", "Prospective round at {} has failed with: {}.",
-						   prospective_round.round_number(),
-						   e,
-					);
-				}
-			}
-		}
-
-		Ok(Async::Ready(best_round_completable))
-	}
-
-	fn process_best_round(&mut self, best_round_completable: Option<bool>) -> Poll<(), E::Error> {
+	// process the logic of the best round.
+	fn process_best_round(&mut self) -> Poll<(), E::Error> {
 		// If the current `best_round` is completable and we've already precommitted,
 		// we start a new round at `best_round + 1`.
 		let should_start_next = {
-			let completable = match best_round_completable {
-				Some(true) => true,
-				Some(false) => false,
-				None => match self.best_round.poll()? {
-					Async::Ready(()) => true,
-					Async::NotReady => false,
-				},
+			let completable = match self.best_round.poll()? {
+				Async::Ready(()) => true,
+				Async::NotReady => false,
 			};
 
 			let precommitted = match self.best_round.state() {
@@ -537,51 +410,28 @@ impl<H, N, E: Environment<H, N>, GlobalIn, GlobalOut> Voter<H, N, E, GlobalIn, G
 			self.best_round.round_number() + 1,
 		);
 
-		self.completed_best_round(None)?;
+		self.completed_best_round()?;
 
 		// round has been updated. so we need to re-poll.
 		self.poll()
 	}
 
-	fn completed_best_round(&mut self, next_round: Option<VotingRound<H, N, E>>) -> Result<(), E::Error> {
+	fn completed_best_round(&mut self) -> Result<(), E::Error> {
 		self.env.completed(self.best_round.round_number(), self.best_round.round_state())?;
 
 		let old_round_number = self.best_round.round_number();
 
-		let next_round = next_round.unwrap_or_else(||
-			VotingRound::new(
-				old_round_number + 1,
-				self.voters.clone(),
-				self.last_finalized_in_rounds.clone(),
-				Some(self.best_round.bridge_state()),
-				self.best_round.finalized_sender(),
-				self.env.clone(),
-			)
-		);
-
-		let old_round = ::std::mem::replace(&mut self.best_round, next_round);
-		self.past_rounds.push(&*self.env, old_round);
-		Ok(())
-	}
-
-	fn completed_prospective_round(&mut self, mut prospective_round: VotingRound<H, N, E>)
-		-> Result<(), E::Error>
-	{
-		self.env.completed(prospective_round.round_number(), prospective_round.round_state())?;
-
-		self.best_round = VotingRound::new(
-			prospective_round.round_number() + 1,
+		let next_round = VotingRound::new(
+			old_round_number + 1,
 			self.voters.clone(),
-			// the finalized commit target that triggered
-			// the prospective round was used as base.
-			prospective_round.dag_base(),
-			Some(prospective_round.bridge_state()),
+			self.last_finalized_in_rounds.clone(),
+			Some(self.best_round.bridge_state()),
 			self.best_round.finalized_sender(),
 			self.env.clone(),
 		);
 
-		self.past_rounds.push(&*self.env, prospective_round);
-
+		let old_round = ::std::mem::replace(&mut self.best_round, next_round);
+		self.past_rounds.push(&*self.env, old_round);
 		Ok(())
 	}
 
@@ -609,11 +459,7 @@ impl<H, N, E: Environment<H, N>, GlobalIn, GlobalOut> Future for Voter<H, N, E, 
 		self.prune_background_rounds()?;
 		self.global_out.poll()?;
 
-		// this returns `Async::NotReady` when the `best_round` is updated and we should re-poll.
-		match self.process_prospective_round()? {
-			Async::Ready(best_round_completable) => self.process_best_round(best_round_completable),
-			Async::NotReady => self.poll(),
-		}
+		self.process_best_round()
 	}
 }
 
@@ -909,81 +755,6 @@ mod tests {
 				.take_while(|&(_, n, _)| Ok(n < 6))
 				.for_each(|_| Ok(()))
 				.map(|_| signal.fire())
-		})).unwrap();
-	}
-
-	#[test]
-	fn skips_to_latest_round() {
-		// 3 voters
-		let voters: VoterSet<_> = (0..3).map(|i| (Id(i), 1)).collect();
-
-		let (network, routing_task) = testing::make_network();
-		let (signal, exit) = ::exit_future::signal();
-
-		current_thread::block_on_all(::futures::future::lazy(move || {
-			::tokio::spawn(exit.clone().until(routing_task).map(|_| ()));
-
-			// initialize unsynced voter at round 0
-			let mut unsynced_voter = {
-				let local_id = Id(4);
-
-				let env = Arc::new(Environment::new(network.clone(), local_id));
-				let last_finalized = env.with_chain(|chain| {
-					chain.push_blocks(GENESIS_HASH, &["A", "B", "C", "D", "E"]);
-					chain.last_finalized()
-				});
-
-				let last_round_state = RoundState::genesis((GENESIS_HASH, 1));
-
-				Voter::new(
-					env.clone(),
-					voters.clone(),
-					network.make_global_comms(),
-					0,
-					last_round_state,
-					last_finalized,
-				)
-			};
-
-			// poll the unsynced voter until it reaches a round higher than 5
-			::tokio::spawn(::futures::future::poll_fn(move || {
-				if unsynced_voter.best_round.round_number() > 5 {
-					Ok(Async::Ready(()))
-				} else {
-					unsynced_voter.poll().map_err(|_| ())
-				}
-			}).map(|_| signal.fire()));
-
-			// initialize all remaining voters at round 5
-			let synced_voters = (0..3).map(move |i| {
-				let local_id = Id(i);
-
-				// initialize chain
-				let env = Arc::new(Environment::new(network.clone(), local_id));
-				let last_finalized = env.with_chain(|chain| {
-					chain.push_blocks(GENESIS_HASH, &["A", "B", "C", "D", "E"]);
-					chain.last_finalized()
-				});
-
-				let last_round_state = RoundState::genesis((GENESIS_HASH, 1));
-
-				// run voter in background starting at round 5. scheduling it to shut down when signalled.
-				let voter = Voter::new(
-					env.clone(),
-					voters.clone(),
-					network.make_global_comms(),
-					5,
-					last_round_state,
-					last_finalized,
-				);
-
-				exit.clone()
-					.until(voter.map_err(|_| panic!("Error voting")))
-					.map(|_| ())
-					.map_err(|_| ())
-			});
-
-			::futures::future::join_all(synced_voters)
 		})).unwrap();
 	}
 }
