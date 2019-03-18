@@ -99,6 +99,36 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 		}
 	}
 
+	/// Create a voting round from a completed `Round`. We will not vote further
+	/// in this round.
+	pub (super) fn completed(
+		votes: Round<E::Id, H, N, E::Signature>,
+		finalized_sender: UnboundedSender<(H, N, u64, Commit<H, N, E::Signature, E::Id>)>,
+		env: Arc<E>,
+	) -> VotingRound<H, N, E> {
+
+		let round_data = env.round_data(votes.number());
+
+		VotingRound {
+			votes,
+			incoming: round_data.incoming,
+			outgoing: Buffered::new(round_data.outgoing),
+			state: Some(State::Precommitted), // so we don't vote anymore.
+			bridged_round_state: None,
+			primary_block: None,
+			env,
+			last_round_state: None,
+			finalized_sender,
+			best_finalized: None,
+		}
+	}
+
+	/// Mark the round as no-further-voting. Rounds that are in this state will not be
+	/// voted on any more. Irreversible.
+	pub(super) fn stop_voting(&mut self) {
+		self.state = Some(State::Precommitted);
+	}
+
 	/// Poll the round. When the round is completable and messages have been flushed, it will return `Async::Ready` but
 	/// can continue to be polled.
 	pub(super) fn poll(&mut self) -> Poll<(), E::Error> {
@@ -139,12 +169,6 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 	pub(super) fn round_number(&self) -> u64 {
 		self.votes.number()
 	}
-
-	/// Get the base block in the dag.
-	pub(super) fn dag_base(&self) -> (H, N) {
-		self.votes.base()
-	}
-
 	/// Get the round state.
 	pub(super) fn round_state(&self) -> RoundState<H, N> {
 		self.votes.state()

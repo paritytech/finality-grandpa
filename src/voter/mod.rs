@@ -25,14 +25,13 @@ use futures::prelude::*;
 use futures::sync::mpsc::{self, UnboundedReceiver};
 
 use std::collections::VecDeque;
-use std::cmp;
 use std::hash::Hash;
 use std::sync::Arc;
 
 use crate::round::State as RoundState;
 use crate::{
 	Chain, Commit, CompactCommit, Equivocation, Message, Prevote, Precommit, SignedMessage,
-	BlockNumberOps, VoterSet, validate_commit
+	BlockNumberOps, VoterSet, CatchUp, validate_commit
 };
 use past_rounds::PastRounds;
 use voting_round::{VotingRound, State as VotingRoundState};
@@ -102,7 +101,7 @@ pub enum CommunicationOut<H, N, S, Id> {
 	Commit(u64, Commit<H, N, S, Id>),
 	/// Auxiliary messages out.
 	#[cfg_attr(feature = "derive-codec", codec(index = "1"))]
-	Auxiliary(AuxiliaryCommunication<H, N, Id>),
+	Auxiliary(AuxiliaryCommunication<H, N, S, Id>),
 }
 
 /// Communication between nodes that is not round-localized.
@@ -114,41 +113,16 @@ pub enum CommunicationIn<H, N, S, Id> {
 	Commit(u64, CompactCommit<H, N, S, Id>),
 	/// Auxiliary messages out.
 	#[cfg_attr(feature = "derive-codec", codec(index = "1"))]
-	Auxiliary(AuxiliaryCommunication<H, N, Id>),
+	Auxiliary(AuxiliaryCommunication<H, N, S, Id>),
 }
 
 /// Communication between nodes that is not round-localized.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "derive-codec", derive(Encode, Decode))]
-pub enum AuxiliaryCommunication<H, N, Id> {
-	/// A request for catch-up.
-	#[cfg_attr(feature = "derive-codec", codec(index = "0"))]
-	CatchUpRequest(CatchUpRequest<Id>),
+pub enum AuxiliaryCommunication<H, N, S, Id> {
 	/// A response for catch-up request.
 	#[cfg_attr(feature = "derive-codec", codec(index = "1"))]
-	CatchUp(CatchUp<H, N>)
-}
-
-/// A request to catch-up, given current round.
-#[derive(Debug, Clone, PartialEq, Eq)]
-#[cfg_attr(feature = "derive-codec", derive(Encode, Decode))]
-pub struct CatchUpRequest<Id> {
-	/// The voter the request is from.
-	pub from: Id,
-	/// The round this voter claims to be at.
-	pub current_round: u64,
-}
-
-/// A message for catching-up to a round.
-///
-/// This is a summary of all votes needed to witness a round's completion.
-#[derive(Debug, Clone, PartialEq, Eq)]
-#[cfg_attr(feature = "derive-codec", derive(Encode, Decode))]
-pub struct CatchUp<H, N> {
-	/// Prevotes in the round.
-	pub prevotes: Vec<Prevote<H, N>>,
-	/// Precommits in the round.
-	pub precommits: Vec<Precommit<H, N>>,
+	CatchUp(CatchUp<H, N, S, Id>)
 }
 
 /// Data necessary to participate in a round.
@@ -378,7 +352,119 @@ impl<H, N, E: Environment<H, N>, GlobalIn, GlobalOut> Voter<H, N, E, GlobalIn, G
 						}
 					}
 				}
-				CommunicationIn::Auxiliary(_aux) => {}, // Do nothing.
+				CommunicationIn::Auxiliary(AuxiliaryCommunication::CatchUp(catch_up)) => {
+					trace!(target: "afg", "Got catch-up message for round {}", catch_up.round_number);
+
+					if catch_up.round_number <= self.best_round.round_number() {
+						trace!(target: "afg", "Ignoring because best round number is {}",
+							self.best_round.round_number());
+
+						return Ok(())
+					}
+
+					// check threshold support in prevotes and precommits.
+					{
+						let mut map = std::collections::HashMap::new();
+						let voters = &self.voters;
+
+						for prevote in &catch_up.prevotes {
+							if !voters.contains_key(&prevote.id) {
+								return Ok(())
+							}
+							map.entry(prevote.id.clone()).or_insert((false ,false)).0 = true;
+						}
+
+						for precommit in &catch_up.precommits {
+							if !voters.contains_key(&precommit.id) {
+								return Ok(())
+							}
+							map.entry(precommit.id.clone()).or_insert((false ,false)).1 = true;
+						}
+
+						let (pv, pc) = map.into_iter().fold(
+							(0, 0),
+							|(mut pv, mut pc), (id, (prevoted, precommitted))| {
+								let weight = voters.info(&id).map(|i| i.weight).unwrap_or(0);
+
+								if prevoted {
+									pv += weight;
+								}
+
+								if precommitted {
+									pc += weight;
+								}
+
+								(pv, pc)
+							},
+						);
+
+						let threshold = voters.threshold();
+						if pv < threshold || pc < threshold {
+							return Ok(())
+						}
+					}
+
+					let mut round = crate::round::Round::new(crate::round::RoundParams {
+						round_number: catch_up.round_number,
+						voters: self.voters.clone(),
+						base: (catch_up.base_hash, catch_up.base_number),
+					});
+
+					// import prevotes first.
+					for crate::SignedPrevote { prevote, id, signature } in catch_up.prevotes {
+						match round.import_prevote(&*self.env, prevote, id, signature) {
+							Ok(_) => {},
+							Err(e) => return Ok(()),
+						}
+					}
+
+					// then precommits.
+					for crate::SignedPrecommit { precommit, id, signature } in catch_up.precommits {
+						match round.import_precommit(&*self.env, precommit, id, signature) {
+							Ok(_) => {},
+							Err(e) => return Ok(()),
+						}
+					}
+
+					let state = round.state();
+					if !state.completable { return Ok(()) }
+
+					// beyond this point, we set this round to the past and
+					// start voting in the next round.
+					let mut just_completed = VotingRound::completed(
+						round,
+						self.best_round.finalized_sender(),
+						self.env.clone(),
+					);
+
+					let new_best = VotingRound::new(
+						catch_up.round_number + 1,
+						self.voters.clone(),
+						self.last_finalized_in_rounds.clone(),
+						Some(just_completed.bridge_state()),
+						self.best_round.finalized_sender(),
+						self.env.clone(),
+					);
+
+					// update last-finalized in rounds _after_ starting new round.
+					// otherwise the base could be too eagerly set forward.
+					if let Some((f_hash, f_num)) = state.finalized.clone() {
+						if f_num > self.last_finalized_in_rounds.1 {
+							self.last_finalized_in_rounds = (f_hash, f_num);
+						}
+					}
+
+					self.env.completed(just_completed.round_number(), state)?;
+					self.past_rounds.push(&*self.env, just_completed);
+
+					// stop voting in the best round before we background it, just in case it contradicts what
+					// we're doing now.
+					self.best_round.stop_voting();
+					self.past_rounds.push(
+						&*self.env,
+						std::mem::replace(&mut self.best_round, new_best),
+					);
+				},
 			}
 		}
 
