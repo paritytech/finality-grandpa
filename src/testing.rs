@@ -257,6 +257,10 @@ impl<M: Clone> BroadcastNetwork<M> {
 		}
 	}
 
+	pub fn send_message(&self, message: M) {
+		let _ = self.raw_sender.unbounded_send(message);
+	}
+
 	// add a node to the network for a round.
 	fn add_node<N, F: Fn(N) -> M>(&mut self, f: F) -> (
 		impl Stream<Item=M,Error=Error>,
@@ -341,6 +345,11 @@ impl Network {
 			CommunicationOut::Commit(r, commit) => CommunicationIn::Commit(r, commit.into()),
 			CommunicationOut::Auxiliary(aux) => CommunicationIn::Auxiliary(aux),
 		})
+	}
+
+	/// Send a message to all nodes.
+	pub fn send_message(&self, message: CommunicationIn<&'static str, u32, Signature, Id>) {
+		self.global_messages.lock().send_message(message);
 	}
 }
 

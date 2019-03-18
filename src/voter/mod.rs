@@ -843,4 +843,71 @@ mod tests {
 				.map(|_| signal.fire())
 		})).unwrap();
 	}
+
+	#[test]
+	fn skips_to_latest_round_after_catch_up() {
+		// 3 voters
+		let voters: VoterSet<_> = (0..3).map(|i| (Id(i), 1)).collect();
+
+		let (network, routing_task) = testing::make_network();
+		let (signal, exit) = ::exit_future::signal();
+
+		current_thread::block_on_all(::futures::future::lazy(move || {
+			::tokio::spawn(exit.clone().until(routing_task).map(|_| ()));
+
+			// initialize unsynced voter at round 0
+			let mut unsynced_voter = {
+				let local_id = Id(4);
+
+				let env = Arc::new(Environment::new(network.clone(), local_id));
+				let last_finalized = env.with_chain(|chain| {
+					chain.push_blocks(GENESIS_HASH, &["A", "B", "C", "D", "E"]);
+					chain.last_finalized()
+				});
+
+				let last_round_state = RoundState::genesis((GENESIS_HASH, 1));
+
+				Voter::new(
+					env.clone(),
+					voters.clone(),
+					network.make_global_comms(),
+					0,
+					last_round_state,
+					last_finalized,
+				)
+			};
+
+			let pv = |id| crate::SignedPrevote {
+				prevote: crate::Prevote { target_hash: "C", target_number: 4 },
+				id: Id(id),
+				signature: testing::Signature(99),
+			};
+
+			let pc = |id| crate::SignedPrecommit {
+				precommit: crate::Precommit { target_hash: "C", target_number: 4 },
+				id: Id(id),
+				signature: testing::Signature(99),
+			};
+
+			// send in a catch-up message for round 5.
+			network.send_message(CommunicationIn::Auxiliary(AuxiliaryCommunication::CatchUp(CatchUp {
+				base_number: 1,
+				base_hash: GENESIS_HASH,
+				round_number: 5,
+				prevotes: vec![pv(0), pv(1), pv(2)],
+				precommits: vec![pc(0), pc(1), pc(2)],
+			})));
+
+			// poll until it's caught up.
+			// should skip to round 6
+			::futures::future::poll_fn(move || -> Poll<(), ()> {
+				let poll = unsynced_voter.poll().map_err(|_| ())?;
+				if unsynced_voter.best_round.round_number() == 6 {
+					Ok(Async::Ready(()))
+				} else {
+					Ok(poll)
+				}
+			}).map(move |_| signal.fire())
+		})).unwrap();
+	}
 }
