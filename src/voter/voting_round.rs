@@ -232,6 +232,9 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 						self.env.precommit_equivocation(self.votes.number(), e);
 					}
 				}
+				Message::Primary(primary) => {
+					self.primary_block = Some((primary.target_hash, primary.target_number));
+				}
 			};
 		}
 
