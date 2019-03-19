@@ -24,7 +24,7 @@ use std::sync::Arc;
 
 use crate::round::{Round, State as RoundState};
 use crate::{
-	Commit, Message, Prevote, Precommit, SignedMessage,
+	Commit, Message, Prevote, Precommit, Primary, SignedMessage,
 	SignedPrecommit, BlockNumberOps, VoterSet, validate_commit
 };
 use super::{Environment, Buffered};
@@ -112,6 +112,7 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 		// we might have started this round as a prospect "future" round to
 		// check whether the voter is lagging behind the current round.
 		if let Some(last_round_state) = self.last_round_state.as_ref().map(|s| s.get().clone()) {
+			self.primary(&last_round_state)?;
 			self.prevote(&last_round_state)?;
 			self.precommit(&last_round_state)?;
 		}
@@ -236,6 +237,29 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 					self.primary_block = Some((primary.target_hash, primary.target_number));
 				}
 			};
+		}
+
+		Ok(())
+	}
+
+	fn primary(&mut self, last_round_state: &RoundState<H, N>) -> Result<(), E::Error> {
+		match self.state {
+			Some(State::Start(mut prevote_timer, precommit_timer)) => {
+				let last_round_estimate = last_round_state.estimate.clone()
+					.expect("Rounds only started when prior round completable; qed");
+				let last_round_finalized = last_round_state.finalized.clone()
+					.expect("Rounds only started when prior round completable; qed"); // TODO: check this.
+				let should_send_primary = last_round_estimate.1 < last_round_finalized.1;
+
+				if should_send_primary {
+					debug!(target: "afg", "Sending primary hint for round {}", self.votes.number());
+					self.outgoing.push(Message::Primary(Primary {
+						target_hash: last_round_estimate.0,
+						target_number: last_round_estimate.1,
+					}));
+				}
+			}
+			_ => { }
 		}
 
 		Ok(())
