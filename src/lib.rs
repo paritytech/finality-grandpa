@@ -243,6 +243,7 @@ impl<H, N: Copy> Message<H, N> {
 		match *self {
 			Message::Prevote(ref v) => (&v.target_hash, v.target_number),
 			Message::Precommit(ref v) => (&v.target_hash, v.target_number),
+			Message::Primary(ref v) => (&v.target_hash, v.target_number),
 		}
 	}
 }
