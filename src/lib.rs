@@ -121,6 +121,22 @@ impl<H, N> Precommit<H, N> {
 	}
 }
 
+/// A Primary proposed block.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "derive-codec", derive(Encode, Decode))]
+pub struct Primary<H, N> {
+	/// The target block's hash.
+	pub target_hash: H,
+	/// The target block's number
+	pub target_number: N,
+}
+
+impl<H, N> Primary<H, N> {
+	pub fn new(target_hash: H, target_number: N) -> Self {
+		Primary { target_hash, target_number }
+	}
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum Error {
 	NotDescendent,
@@ -216,7 +232,9 @@ pub enum Message<H, N> {
 	/// A precommit message.
 	#[cfg_attr(feature = "derive-codec", codec(index = "1"))]
 	Precommit(Precommit<H, N>),
-	// TODO: liveness - primary propose.
+	// Primary proposed block.
+	#[cfg_attr(feature = "derive-codec", codec(index = "2"))]
+	Primary(Primary<H, N>),
 }
 
 impl<H, N: Copy> Message<H, N> {
