@@ -32,8 +32,9 @@ use std::sync::Arc;
 use crate::round::State as RoundState;
 use crate::{
 	Chain, Commit, CompactCommit, Equivocation, Message, Prevote, Precommit, SignedMessage,
-	BlockNumberOps, VoterSet, validate_commit
+	BlockNumberOps, validate_commit
 };
+use crate::voter_set::VoterSet;
 use past_rounds::PastRounds;
 use voting_round::{VotingRound, State as VotingRoundState};
 

@@ -62,6 +62,7 @@ extern crate alloc;
 pub mod bitfield;
 pub mod round;
 pub mod vote_graph;
+pub mod voter_set;
 
 #[cfg(feature = "std")]
 pub mod voter;
@@ -72,9 +73,9 @@ mod bridge_state;
 #[cfg(test)]
 mod testing;
 
-use collections::{HashMap, Vec};
+use collections::{Vec};
 use std::fmt;
-use std::hash::Hash;
+use crate::voter_set::VoterSet;
 
 #[cfg(not(feature = "std"))]
 mod collections {
@@ -333,76 +334,6 @@ impl<H: Clone, N: Clone, S, Id> From<Commit<H, N, S, Id>> for CompactCommit<H, N
 	}
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct VoterInfo {
-	canon_idx: usize,
-	weight: u64,
-}
-
-impl VoterInfo {
-	/// Get the canonical index of the voter.
-	pub fn canon_idx(&self) -> usize { self.canon_idx }
-
-	/// Get the weight of the voter.
-	pub fn weight(&self) -> u64 { self.weight }
-}
-
-/// A voter set, with accompanying indices.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct VoterSet<Id: Hash + Eq> {
-	weights: HashMap<Id, VoterInfo>,
-	voters: Vec<(Id, u64)>,
-	threshold: u64,
-}
-
-impl<Id: Hash + Eq> VoterSet<Id> {
-	/// Get the voter info for a voter.
-	pub fn info<'a>(&'a self, id: &Id) -> Option<&'a VoterInfo> {
-		self.weights.get(id)
-	}
-
-	/// Get the length of the set.
-	pub fn len(&self) -> usize { self.voters.len() }
-
-	/// Whether the set contains the key.
-	pub fn contains_key(&self, id: &Id) -> bool {
-		self.weights.contains_key(id)
-	}
-
-	/// Get voter info by index.
-	pub fn weight_by_index<'a>(&'a self, idx: usize) -> Option<u64> {
-		self.voters.get(idx).map(|&(_, weight)| weight)
-	}
-
-	/// Get the threshold weight.
-	pub fn threshold(&self) -> u64 { self.threshold }
-
-	/// Get the total weight.
-	pub fn total_weight(&self) -> u64 {
-		self.voters.iter().map(|&(_, weight)| weight).sum()
-	}
-}
-
-impl<Id: Hash + Eq + Clone> std::iter::FromIterator<(Id, u64)> for VoterSet<Id> {
-	fn from_iter<I: IntoIterator<Item = (Id, u64)>>(iterable: I) -> Self {
-		let iter = iterable.into_iter();
-		let (lower, _) = iter.size_hint();
-
-		let mut voters = Vec::with_capacity(lower);
-		let mut weights = HashMap::with_capacity(lower);
-
-		let mut total_weight = 0;
-		for (idx, (id, weight)) in iter.enumerate() {
-			voters.push((id.clone(), weight));
-			weights.insert(id, VoterInfo { canon_idx: idx, weight });
-			total_weight += weight;
-		}
-
-		let threshold = threshold(total_weight);
-		VoterSet { weights, voters, threshold }
-	}
-}
-
 /// Validates a GRANDPA commit message and returns the ghost calculated using
 /// the precommits in the commit message and using the commit target as a
 /// base.
@@ -456,7 +387,7 @@ pub fn validate_commit<H, N, S, I, C: Chain<H, N>>(
 	Ok(round.precommit_ghost())
 }
 
-fn threshold(total_weight: u64) -> u64 {
+pub fn threshold(total_weight: u64) -> u64 {
 	let faulty = total_weight.saturating_sub(1) / 3;
 	total_weight - faulty
 }

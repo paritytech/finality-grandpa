@@ -25,8 +25,9 @@ use std::sync::Arc;
 use crate::round::{Round, State as RoundState};
 use crate::{
 	Commit, Message, Prevote, Precommit, PrimaryPropose, SignedMessage,
-	SignedPrecommit, BlockNumberOps, VoterSet, validate_commit
+	SignedPrecommit, BlockNumberOps, validate_commit
 };
+use crate::voter_set::VoterSet;
 use super::{Environment, Buffered};
 
 /// The state of a voting round.

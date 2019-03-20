@@ -40,7 +40,7 @@ use std::sync::Arc;
 use alloc::sync::Arc;
 
 use crate::collections::Vec;
-use crate::VoterInfo;
+use crate::voter_set::VoterInfo;
 
 /// Errors that can occur when using the equivocation weighting tools.
 #[derive(Clone, Debug, PartialEq, Eq)]
