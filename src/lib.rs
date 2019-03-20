@@ -121,19 +121,19 @@ impl<H, N> Precommit<H, N> {
 	}
 }
 
-/// A Primary proposed block.
+/// A primary proposed block, this is a broadcast of the last round's estimate.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "derive-codec", derive(Encode, Decode))]
-pub struct Primary<H, N> {
+pub struct PrimaryPropose<H, N> {
 	/// The target block's hash.
 	pub target_hash: H,
 	/// The target block's number
 	pub target_number: N,
 }
 
-impl<H, N> Primary<H, N> {
+impl<H, N> PrimaryPropose<H, N> {
 	pub fn new(target_hash: H, target_number: N) -> Self {
-		Primary { target_hash, target_number }
+		PrimaryPropose { target_hash, target_number }
 	}
 }
 
@@ -234,7 +234,7 @@ pub enum Message<H, N> {
 	Precommit(Precommit<H, N>),
 	// Primary proposed block.
 	#[cfg_attr(feature = "derive-codec", codec(index = "2"))]
-	Primary(Primary<H, N>),
+	PrimaryPropose(PrimaryPropose<H, N>),
 }
 
 impl<H, N: Copy> Message<H, N> {
@@ -243,7 +243,7 @@ impl<H, N: Copy> Message<H, N> {
 		match *self {
 			Message::Prevote(ref v) => (&v.target_hash, v.target_number),
 			Message::Precommit(ref v) => (&v.target_hash, v.target_number),
-			Message::Primary(ref v) => (&v.target_hash, v.target_number),
+			Message::PrimaryPropose(ref v) => (&v.target_hash, v.target_number),
 		}
 	}
 }

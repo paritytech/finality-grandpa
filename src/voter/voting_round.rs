@@ -24,7 +24,7 @@ use std::sync::Arc;
 
 use crate::round::{Round, State as RoundState};
 use crate::{
-	Commit, Message, Prevote, Precommit, Primary, SignedMessage,
+	Commit, Message, Prevote, Precommit, PrimaryPropose, SignedMessage,
 	SignedPrecommit, BlockNumberOps, VoterSet, validate_commit
 };
 use super::{Environment, Buffered};
@@ -233,10 +233,8 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 						self.env.precommit_equivocation(self.votes.number(), e);
 					}
 				}
-				Message::Primary(primary) => {
-					let primary_index = self.votes.number() as usize % self.votes.voters().voters.len();
-					let primary_id = self.votes.voters().voters.get(primary_index)
-						.expect("primary_index in range by definition; qed").0.clone();
+				Message::PrimaryPropose(primary) => {
+					let primary_id = self.votes.primary_voter().0.clone();
 					if id == primary_id {
 						self.primary_block = Some((primary.target_hash, primary.target_number));
 					}
@@ -250,20 +248,24 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 	fn primary(&mut self, last_round_state: &RoundState<H, N>) -> Result<(), E::Error> {
 		match self.state {
 			Some(State::Start(_, _)) => {
-				let last_round_estimate = last_round_state.estimate.clone()
-					.expect("Rounds only started when prior round completable; qed");
-				let last_round_finalized = last_round_state.finalized.clone()
-					.expect("Rounds only started when prior round completable; qed"); // TODO: check this.
+				let maybe_estimate = last_round_state.estimate.clone();
+				let maybe_finalized = last_round_state.finalized.clone();
+				if let (Some(last_round_estimate), Some(last_round_finalized)) = (maybe_estimate, maybe_finalized) {
+					// Last round estimate has not been finalized and we are the primary.
+					let should_send_primary = last_round_estimate.1 < last_round_finalized.1;
 
-				// Last round estimate has not been finalized and we are the primary.
-				let should_send_primary = last_round_estimate.1 < last_round_finalized.1;
-
-				if should_send_primary {
-					debug!(target: "afg", "Sending primary block hint for round {}", self.votes.number());
-					self.outgoing.push(Message::Primary(Primary {
-						target_hash: last_round_estimate.0,
-						target_number: last_round_estimate.1,
-					}));
+					if should_send_primary {
+						debug!(target: "afg", "Sending primary block hint for round {}", self.votes.number());
+						self.outgoing.push(Message::PrimaryPropose(
+							PrimaryPropose {
+								target_hash: last_round_estimate.0,
+								target_number: last_round_estimate.1,
+							})
+						);
+					}
+				} else {
+					debug!(target: "afg", "Last round estimate or finalized block does not exists, \
+						before trying to send primary block hint for round {}", self.votes.number());
 				}
 			}
 			_ => { }
