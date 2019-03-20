@@ -64,7 +64,7 @@ impl<Id: Hash + Eq> VoterSet<Id> {
 	}
 }
 
-impl<Id: Hash + Eq + Clone> std::iter::FromIterator<(Id, u64)> for VoterSet<Id> {
+impl<Id: Hash + Eq + Clone + Ord> std::iter::FromIterator<(Id, u64)> for VoterSet<Id> {
 	fn from_iter<I: IntoIterator<Item = (Id, u64)>>(iterable: I) -> Self {
 		let iter = iterable.into_iter();
 		let (lower, _) = iter.size_hint();
@@ -73,10 +73,15 @@ impl<Id: Hash + Eq + Clone> std::iter::FromIterator<(Id, u64)> for VoterSet<Id> 
 		let mut weights = HashMap::with_capacity(lower);
 
 		let mut total_weight = 0;
-		for (idx, (id, weight)) in iter.enumerate() {
+		for (id, weight) in iter {
 			voters.push((id.clone(), weight));
-			weights.insert(id, VoterInfo { canon_idx: idx, weight });
 			total_weight += weight;
+		}
+
+		voters.sort_unstable(); // Not sure if this is worth.
+
+		for (idx, (id, weight)) in voters.iter().enumerate() {
+			weights.insert(id.clone(), VoterInfo { canon_idx: idx, weight: weight.clone() });
 		}
 
 		let threshold = threshold(total_weight);
