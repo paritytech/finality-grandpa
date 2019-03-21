@@ -46,8 +46,8 @@ impl<Id: Hash + Eq> VoterSet<Id> {
 	}
 
 	// Get voter by index.
-	pub fn voter_by_index<'a>(&'a self, idx: usize) -> Option<&(Id, u64)> {
-		self.voters.get(idx)
+	pub fn voter_by_index(&self, idx: usize) -> &(Id, u64) {
+		&self.voters[idx]
 	}
 
 	/// Get voter info by index.

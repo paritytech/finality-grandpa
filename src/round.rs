@@ -613,9 +613,7 @@ impl<Id, H, N, Signature> Round<Id, H, N, Signature> where
 
 	/// Return the primary voter of the round.
 	pub fn primary_voter(&self) -> &(Id, u64) {
-		self.voters
-			.voter_by_index(self.round_number as usize % self.voters.len())
-			.expect("by definition of % and length of self.voters; qed")
+		self.voters.voter_by_index(self.round_number as usize % self.voters.len())
 	}
 
 	/// Return all imported precommits.
