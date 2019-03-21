@@ -62,6 +62,7 @@ pub(super) struct VotingRound<H, N, E: Environment<H, N>> where
 	primary_block: Option<(H, N)>, // a block posted by primary as a hint.
 	finalized_sender: UnboundedSender<(H, N, u64, Commit<H, N, E::Signature, E::Id>)>,
 	best_finalized: Option<Commit<H, N, E::Signature, E::Id>>,
+	voter_id: Option<E::Id>,
 }
 
 impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
@@ -76,6 +77,7 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 		last_round_state: Option<crate::bridge_state::LatterView<H, N>>,
 		finalized_sender: UnboundedSender<(H, N, u64, Commit<H, N, E::Signature, E::Id>)>,
 		env: Arc<E>,
+		voter_id: Option<E::Id>,
 	) -> VotingRound<H, N, E> {
 		let round_data = env.round_data(round_number);
 		let round_params = crate::round::RoundParams {
@@ -97,6 +99,7 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 			env,
 			last_round_state,
 			finalized_sender,
+			voter_id,
 		}
 	}
 
@@ -104,16 +107,14 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 	/// can continue to be polled.
 	pub(super) fn poll(&mut self) -> Poll<(), E::Error> {
 		trace!(target: "afg", "Polling round {}, state = {:?}, step = {:?}", self.votes.number(), self.votes.state(), self.state);
-
 		let pre_state = self.votes.state();
-
 		self.process_incoming()?;
 
 		// we only cast votes when we have access to the previous round state.
 		// we might have started this round as a prospect "future" round to
 		// check whether the voter is lagging behind the current round.
 		if let Some(last_round_state) = self.last_round_state.as_ref().map(|s| s.get().clone()) {
-			self.primary(&last_round_state)?;
+			self.primary_propose(&last_round_state)?;
 			self.prevote(&last_round_state)?;
 			self.precommit(&last_round_state)?;
 		}
@@ -214,7 +215,6 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 		while let Async::Ready(Some(incoming)) = self.incoming.poll()? {
 			trace!(target: "afg", "Got incoming message");
 			let SignedMessage { message, signature, id } = incoming;
-
 			if !self.env.is_equal_or_descendent_of(self.votes.base().0, message.target().0.clone()) {
 				trace!(target: "afg", "Ignoring message targeting {:?} lower than round base {:?}",
 					   message.target(),
@@ -246,15 +246,19 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 		Ok(())
 	}
 
-	fn primary(&mut self, last_round_state: &RoundState<H, N>) -> Result<(), E::Error> {
-		match self.state {
-			Some(State::Start(_, _)) => {
-				let maybe_estimate = last_round_state.estimate.clone();
-				let maybe_finalized = last_round_state.finalized.clone();
-				if let (Some(last_round_estimate), Some(last_round_finalized)) = (maybe_estimate, maybe_finalized) {
-					// Last round estimate has not been finalized and we are the primary.
-					let should_send_primary = last_round_estimate.1 < last_round_finalized.1;
+	fn voter_is_primary(&self) -> bool {
+		self.voter_id.as_ref().map_or(false, |id| id == &self.votes.primary_voter().0)
+	}
 
+	fn primary_propose(&mut self, last_round_state: &RoundState<H, N>) -> Result<(), E::Error> {
+		match self.state {
+			Some(State::Start(_, _)) if self.voter_is_primary() => {
+				let maybe_estimate = last_round_state.estimate.clone();
+				if let Some(last_round_estimate) = maybe_estimate {
+					let maybe_finalized = last_round_state.finalized.clone();
+
+					// Last round estimate has not been finalized.
+					let should_send_primary = maybe_finalized.map_or(true, |f| last_round_estimate.1 < f.1);
 					if should_send_primary {
 						debug!(target: "afg", "Sending primary block hint for round {}", self.votes.number());
 						self.outgoing.push(Message::PrimaryPropose(
@@ -265,8 +269,8 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 						);
 					}
 				} else {
-					debug!(target: "afg", "Last round estimate or finalized block does not exists, \
-						before trying to send primary block hint for round {}", self.votes.number());
+					debug!(target: "afg", "Last round estimate does not exists, \
+						not sending primary block hint for round {}", self.votes.number());
 				}
 			}
 			_ => { }

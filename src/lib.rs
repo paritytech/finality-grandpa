@@ -387,6 +387,7 @@ pub fn validate_commit<H, N, S, I, C: Chain<H, N>>(
 	Ok(round.precommit_ghost())
 }
 
+/// Get the threshold weight given the total voting weight.
 pub fn threshold(total_weight: u64) -> u64 {
 	let faulty = total_weight.saturating_sub(1) / 3;
 	total_weight - faulty
