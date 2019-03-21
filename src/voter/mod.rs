@@ -254,7 +254,6 @@ pub struct Voter<H, N, E: Environment<H, N>, GlobalIn, GlobalOut> where
 	// behind), we keep track of last finalized in round so we don't violate any
 	// assumptions from round-to-round.
 	last_finalized_in_rounds: (H, N),
-	voter_id: Option<E::Id>,
 }
 
 impl<H, N, E: Environment<H, N>, GlobalIn, GlobalOut> Voter<H, N, E, GlobalIn, GlobalOut> where
@@ -280,7 +279,6 @@ impl<H, N, E: Environment<H, N>, GlobalIn, GlobalOut> Voter<H, N, E, GlobalIn, G
 		last_round_number: u64,
 		last_round_state: RoundState<H, N>,
 		last_finalized: (H, N),
-		voter_id: Option<E::Id>,
 	) -> Self {
 		let (finalized_sender, finalized_notifications) = mpsc::unbounded();
 		let last_finalized_number = last_finalized.1.clone();
@@ -293,7 +291,6 @@ impl<H, N, E: Environment<H, N>, GlobalIn, GlobalOut> Voter<H, N, E, GlobalIn, G
 			Some(last_round_state),
 			finalized_sender,
 			env.clone(),
-			voter_id.clone(),
 		);
 
 		let (global_in, global_out) = global_comms;
@@ -312,7 +309,6 @@ impl<H, N, E: Environment<H, N>, GlobalIn, GlobalOut> Voter<H, N, E, GlobalIn, G
 			last_finalized_in_rounds: last_finalized,
 			global_in,
 			global_out: Buffered::new(global_out),
-			voter_id,
 		}
 	}
 
@@ -444,7 +440,6 @@ impl<H, N, E: Environment<H, N>, GlobalIn, GlobalOut> Voter<H, N, E, GlobalIn, G
 				None,
 				self.best_round.finalized_sender(),
 				self.env.clone(),
-				self.voter_id.clone(),
 			));
 		}
 
@@ -562,7 +557,6 @@ impl<H, N, E: Environment<H, N>, GlobalIn, GlobalOut> Voter<H, N, E, GlobalIn, G
 				Some(self.best_round.bridge_state()),
 				self.best_round.finalized_sender(),
 				self.env.clone(),
-				self.voter_id.clone(),
 			)
 		);
 
@@ -585,7 +579,6 @@ impl<H, N, E: Environment<H, N>, GlobalIn, GlobalOut> Voter<H, N, E, GlobalIn, G
 			Some(prospective_round.bridge_state()),
 			self.best_round.finalized_sender(),
 			self.env.clone(),
-			self.voter_id.clone(),
 		);
 
 		self.past_rounds.push(&*self.env, prospective_round);
@@ -662,7 +655,6 @@ mod tests {
 				0,
 				last_round_state,
 				last_finalized,
-				local_id,
 			);
 			::tokio::spawn(exit.clone()
 				.until(voter.map_err(|_| panic!("Error voting"))).map(|_| ()));
@@ -709,7 +701,6 @@ mod tests {
 					0,
 					last_round_state,
 					last_finalized,
-					local_id,
 				);
 				::tokio::spawn(exit.clone()
 					.until(voter.map_err(|_| panic!("Error voting"))).map(|_| ()));
@@ -753,7 +744,6 @@ mod tests {
 				0,
 				last_round_state,
 				last_finalized,
-				local_id,
 			);
 			::tokio::spawn(exit.clone()
 				.until(voter.map_err(|_| panic!("Error voting"))).map(|_| ()));
@@ -819,7 +809,6 @@ mod tests {
 				0,
 				last_round_state,
 				last_finalized,
-				local_id,
 			);
 			::tokio::spawn(exit.clone()
 				.until(voter.map_err(|e| panic!("Error voting: {:?}", e))).map(|_| ()));
@@ -907,7 +896,6 @@ mod tests {
 				1,
 				last_round_state,
 				last_finalized,
-				local_id,
 			);
 			::tokio::spawn(exit.clone()
 				.until(voter.map_err(|_| panic!("Error voting"))).map(|_| ()));
@@ -955,7 +943,6 @@ mod tests {
 					0,
 					last_round_state,
 					last_finalized,
-					local_id,
 				)
 			};
 
@@ -989,7 +976,6 @@ mod tests {
 					5,
 					last_round_state,
 					last_finalized,
-					local_id,
 				);
 
 				exit.clone()

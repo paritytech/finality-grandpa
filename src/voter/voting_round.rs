@@ -62,7 +62,6 @@ pub(super) struct VotingRound<H, N, E: Environment<H, N>> where
 	primary_block: Option<(H, N)>, // a block posted by primary as a hint.
 	finalized_sender: UnboundedSender<(H, N, u64, Commit<H, N, E::Signature, E::Id>)>,
 	best_finalized: Option<Commit<H, N, E::Signature, E::Id>>,
-	voter_id: Option<E::Id>,
 }
 
 impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
@@ -77,7 +76,6 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 		last_round_state: Option<crate::bridge_state::LatterView<H, N>>,
 		finalized_sender: UnboundedSender<(H, N, u64, Commit<H, N, E::Signature, E::Id>)>,
 		env: Arc<E>,
-		voter_id: Option<E::Id>,
 	) -> VotingRound<H, N, E> {
 		let round_data = env.round_data(round_number);
 		let round_params = crate::round::RoundParams {
@@ -99,7 +97,6 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 			env,
 			last_round_state,
 			finalized_sender,
-			voter_id,
 		}
 	}
 
@@ -246,13 +243,9 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 		Ok(())
 	}
 
-	fn voter_is_primary(&self) -> bool {
-		self.voter_id.as_ref().map_or(false, |id| id == &self.votes.primary_voter().0)
-	}
-
 	fn primary_propose(&mut self, last_round_state: &RoundState<H, N>) -> Result<(), E::Error> {
 		match self.state {
-			Some(State::Start(_, _)) if self.voter_is_primary() => {
+			Some(State::Start(_, _)) => {
 				let maybe_estimate = last_round_state.estimate.clone();
 				if let Some(last_round_estimate) = maybe_estimate {
 					let maybe_finalized = last_round_state.finalized.clone();
