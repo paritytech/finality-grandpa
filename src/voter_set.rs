@@ -102,3 +102,32 @@ impl VoterInfo {
 	/// Get the weight of the voter.
 	pub fn weight(&self) -> u64 { self.weight }
 }
+
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+
+	#[test]
+	fn voters_are_sorted() {
+		let v1: VoterSet<usize> = [
+			(1, 5),
+			(4, 1),
+			(3, 9),
+			(5, 7),
+			(9, 9),
+			(2, 7),
+		].iter().cloned().collect();
+
+		let v2: VoterSet<usize> = [
+			(1, 5),
+			(2, 7),
+			(3, 9),
+			(4, 1),
+			(5, 7),
+			(9, 9),
+		].iter().cloned().collect();
+
+		assert_eq!(v1, v2);
+	}
+}
