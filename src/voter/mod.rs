@@ -28,18 +28,21 @@ use std::collections::VecDeque;
 use std::cmp;
 use std::hash::Hash;
 use std::sync::Arc;
+use parking_lot::Mutex;
 
 use crate::round::State as RoundState;
 use crate::{
 	Chain, Commit, CompactCommit, Equivocation, Message, Prevote, Precommit, SignedMessage,
-	BlockNumberOps, validate_commit
+	BlockNumberOps, validate_commit,
 };
 use crate::voter_set::VoterSet;
 use past_rounds::PastRounds;
 use voting_round::{VotingRound, State as VotingRoundState};
+use voter_state::{VoterState};
 
 mod past_rounds;
 mod voting_round;
+mod voter_state;
 
 /// Necessary environment for a voter.
 ///
@@ -254,6 +257,7 @@ pub struct Voter<H, N, E: Environment<H, N>, GlobalIn, GlobalOut> where
 	// behind), we keep track of last finalized in round so we don't violate any
 	// assumptions from round-to-round.
 	last_finalized_in_rounds: (H, N),
+	voter_state: VoterState<H, N, E>,
 }
 
 impl<H, N, E: Environment<H, N>, GlobalIn, GlobalOut> Voter<H, N, E, GlobalIn, GlobalOut> where
@@ -298,9 +302,15 @@ impl<H, N, E: Environment<H, N>, GlobalIn, GlobalOut> Voter<H, N, E, GlobalIn, G
 		// TODO: load last round (or more), re-process all votes from them,
 		// and background until irrelevant
 
+		let mut voter_state = VoterState::new();
+		voter_state.set_primary_voter(
+			voters.voter_by_index((last_round_number + 1) as usize % voters.len()).0.clone(),
+		);
+		// voter_state.update_active_round(best_round.clone());
+
 		Voter {
 			env,
-			voters,
+			voters: voters.clone(),
 			best_round,
 			past_rounds: PastRounds::new(),
 			prospective_round: None,
@@ -309,7 +319,12 @@ impl<H, N, E: Environment<H, N>, GlobalIn, GlobalOut> Voter<H, N, E, GlobalIn, G
 			last_finalized_in_rounds: last_finalized,
 			global_in,
 			global_out: Buffered::new(global_out),
+			voter_state,
 		}
+	}
+
+	pub fn voter_state(&self) -> VoterState<H, N, E> {
+		self.voter_state.clone()
 	}
 
 	fn prune_background_rounds(&mut self) -> Result<(), E::Error> {
