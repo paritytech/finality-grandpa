@@ -73,7 +73,7 @@ mod bridge_state;
 #[cfg(test)]
 mod testing;
 
-use collections::{Vec};
+use collections::Vec;
 use std::fmt;
 use crate::voter_set::VoterSet;
 
