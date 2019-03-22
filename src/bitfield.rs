@@ -289,7 +289,7 @@ mod tests {
 		].iter().cloned().collect();
 
 		a.set_bit(0, 10).unwrap(); // prevote 1
-		a.set_bit(11, 10).unwrap(); // precommit 2
+		a.set_bit(3, 10).unwrap(); // precommit 2
 
 		b.set_bit(4, 10).unwrap(); // prevote 3
 		b.set_bit(5, 10).unwrap(); // precommit 3
@@ -325,11 +325,11 @@ mod tests {
 		].iter().cloned().collect();
 
 		a.set_bit(0, 10).unwrap(); // prevote 1
-		a.set_bit(11, 10).unwrap(); // precommit 2
+		a.set_bit(3, 10).unwrap(); // precommit 2
 		a.set_bit(4, 10).unwrap(); // prevote 3
 
 		b.set_bit(0, 10).unwrap(); // prevote 1
-		b.set_bit(11, 10).unwrap(); // precommit 2
+		b.set_bit(3, 10).unwrap(); // precommit 2
 		b.set_bit(5, 10).unwrap(); // precommit 3
 
 		assert_eq!(a.total_weight(|i| v.weight_by_index(i).unwrap()), (14, 7));
@@ -338,7 +338,7 @@ mod tests {
 		let mut c = Bitfield::Live(LiveBitfield::with_voters(10));
 
 		c.set_bit(0, 10).unwrap(); // prevote 1
-		c.set_bit(11, 10).unwrap(); // precommit 2
+		c.set_bit(3, 10).unwrap(); // precommit 2
 
 		assert_eq!(a.overlap(&b).unwrap(), c);
 	}
