@@ -133,7 +133,7 @@ impl Chain<&'static str, u32> for DummyChain {
 	}
 }
 
-#[derive(Hash, Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Hash, Debug, Clone, Copy, PartialEq, Eq, Ord, PartialOrd)]
 pub struct Id(pub u32);
 
 #[derive(Debug, Clone, PartialEq, Eq)]

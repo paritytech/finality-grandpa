@@ -22,8 +22,9 @@ use std::ops::AddAssign;
 use crate::collections::{hash_map::{HashMap, Entry}, Vec};
 use crate::bitfield::{Shared as BitfieldContext, Bitfield};
 use crate::vote_graph::VoteGraph;
+use crate::voter_set::VoterSet;
 
-use super::{Equivocation, Prevote, Precommit, Chain, BlockNumberOps, VoterSet};
+use super::{Equivocation, Prevote, Precommit, Chain, BlockNumberOps};
 
 #[derive(Hash, Eq, PartialEq)]
 struct Address;
@@ -608,6 +609,11 @@ impl<Id, H, N, Signature> Round<Id, H, N, Signature> where
 	/// Return the round voters and weights.
 	pub fn voters(&self) -> &VoterSet<Id> {
 		&self.voters
+	}
+
+	/// Return the primary voter of the round.
+	pub fn primary_voter(&self) -> &(Id, u64) {
+		self.voters.voter_by_index(self.round_number as usize % self.voters.len())
 	}
 
 	/// Return all imported precommits.

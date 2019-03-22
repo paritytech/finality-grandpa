@@ -24,9 +24,10 @@ use std::sync::Arc;
 
 use crate::round::{Round, State as RoundState};
 use crate::{
-	Commit, Message, Prevote, Precommit, SignedMessage,
-	SignedPrecommit, BlockNumberOps, VoterSet, validate_commit
+	Commit, Message, Prevote, Precommit, PrimaryPropose, SignedMessage,
+	SignedPrecommit, BlockNumberOps, validate_commit
 };
+use crate::voter_set::VoterSet;
 use super::{Environment, Buffered};
 
 /// The state of a voting round.
@@ -103,15 +104,14 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 	/// can continue to be polled.
 	pub(super) fn poll(&mut self) -> Poll<(), E::Error> {
 		trace!(target: "afg", "Polling round {}, state = {:?}, step = {:?}", self.votes.number(), self.votes.state(), self.state);
-
 		let pre_state = self.votes.state();
-
 		self.process_incoming()?;
 
 		// we only cast votes when we have access to the previous round state.
 		// we might have started this round as a prospect "future" round to
 		// check whether the voter is lagging behind the current round.
 		if let Some(last_round_state) = self.last_round_state.as_ref().map(|s| s.get().clone()) {
+			self.primary_propose(&last_round_state)?;
 			self.prevote(&last_round_state)?;
 			self.precommit(&last_round_state)?;
 		}
@@ -212,7 +212,6 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 		while let Async::Ready(Some(incoming)) = self.incoming.poll()? {
 			trace!(target: "afg", "Got incoming message");
 			let SignedMessage { message, signature, id } = incoming;
-
 			if !self.env.is_equal_or_descendent_of(self.votes.base().0, message.target().0.clone()) {
 				trace!(target: "afg", "Ignoring message targeting {:?} lower than round base {:?}",
 					   message.target(),
@@ -232,7 +231,42 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 						self.env.precommit_equivocation(self.votes.number(), e);
 					}
 				}
+				Message::PrimaryPropose(primary) => {
+					let primary_id = self.votes.primary_voter().0.clone();
+					if id == primary_id {
+						self.primary_block = Some((primary.target_hash, primary.target_number));
+					}
+				}
 			};
+		}
+
+		Ok(())
+	}
+
+	fn primary_propose(&mut self, last_round_state: &RoundState<H, N>) -> Result<(), E::Error> {
+		match self.state {
+			Some(State::Start(_, _)) => {
+				let maybe_estimate = last_round_state.estimate.clone();
+				if let Some(last_round_estimate) = maybe_estimate {
+					let maybe_finalized = last_round_state.finalized.clone();
+
+					// Last round estimate has not been finalized.
+					let should_send_primary = maybe_finalized.map_or(true, |f| last_round_estimate.1 < f.1);
+					if should_send_primary {
+						debug!(target: "afg", "Sending primary block hint for round {}", self.votes.number());
+						self.outgoing.push(Message::PrimaryPropose(
+							PrimaryPropose {
+								target_hash: last_round_estimate.0,
+								target_number: last_round_estimate.1,
+							})
+						);
+					}
+				} else {
+					debug!(target: "afg", "Last round estimate does not exists, \
+						not sending primary block hint for round {}", self.votes.number());
+				}
+			}
+			_ => { }
 		}
 
 		Ok(())
