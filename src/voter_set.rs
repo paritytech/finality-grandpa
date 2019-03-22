@@ -130,4 +130,26 @@ mod tests {
 
 		assert_eq!(v1, v2);
 	}
+
+	#[test]
+	fn voter_by_index_works() {
+		let v: VoterSet<usize> = [
+			(1, 5),
+			(4, 1),
+			(3, 9),
+			(5, 7),
+			(9, 9),
+			(2, 7),
+		].iter().cloned().collect();
+
+		assert_eq!(v.len(), 6);
+		assert_eq!(v.total_weight(), 38);
+
+		assert_eq!(v.voter_by_index(0), &(1, 5));
+		assert_eq!(v.voter_by_index(1), &(2, 7));
+		assert_eq!(v.voter_by_index(2), &(3, 9));
+		assert_eq!(v.voter_by_index(3), &(4, 1));
+		assert_eq!(v.voter_by_index(4), &(5, 7));
+		assert_eq!(v.voter_by_index(5), &(9, 9));
+	}
 }
