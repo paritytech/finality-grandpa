@@ -274,6 +274,14 @@ mod tests {
 	use super::*;
 	use crate::VoterSet;
 
+	fn to_prevote(id: usize) -> usize {
+		id * 2
+	}
+
+	fn to_precommit(id: usize) -> usize {
+		id * 2 + 1
+	}
+
 	#[test]
 	fn merge_live() {
 		let mut a = Bitfield::Live(LiveBitfield::with_voters(10));
@@ -288,11 +296,11 @@ mod tests {
 			(2, 7),
 		].iter().cloned().collect();
 
-		a.set_bit(0, 10).unwrap(); // prevote 1
-		a.set_bit(3, 10).unwrap(); // precommit 2
+		a.set_bit(to_prevote(v.info(&1).unwrap().canon_idx()), 10).unwrap(); // prevote 1
+		a.set_bit(to_precommit(v.info(&2).unwrap().canon_idx()), 10).unwrap(); // precommit 2
 
-		b.set_bit(4, 10).unwrap(); // prevote 3
-		b.set_bit(5, 10).unwrap(); // precommit 3
+		b.set_bit(to_prevote(v.info(&3).unwrap().canon_idx()), 10).unwrap(); // prevote 3
+		b.set_bit(to_precommit(v.info(&3).unwrap().canon_idx()), 10).unwrap(); // precommit 3
 
 		let c = a.merge(&b).unwrap();
 		assert_eq!(c.total_weight(|i| v.weight_by_index(i).unwrap()), (14, 16));
@@ -324,21 +332,21 @@ mod tests {
 			(2, 7),
 		].iter().cloned().collect();
 
-		a.set_bit(0, 10).unwrap(); // prevote 1
-		a.set_bit(3, 10).unwrap(); // precommit 2
-		a.set_bit(4, 10).unwrap(); // prevote 3
+		a.set_bit(to_prevote(v.info(&1).unwrap().canon_idx()), 10).unwrap(); // prevote 1
+		a.set_bit(to_precommit(v.info(&2).unwrap().canon_idx()), 10).unwrap(); // precommit 2
+		a.set_bit(to_prevote(v.info(&3).unwrap().canon_idx()), 10).unwrap(); // prevote 3
 
-		b.set_bit(0, 10).unwrap(); // prevote 1
-		b.set_bit(3, 10).unwrap(); // precommit 2
-		b.set_bit(5, 10).unwrap(); // precommit 3
+		b.set_bit(to_prevote(v.info(&1).unwrap().canon_idx()), 10).unwrap(); // prevote 1
+		b.set_bit(to_precommit(v.info(&2).unwrap().canon_idx()), 10).unwrap(); // precommit 2
+		b.set_bit(to_precommit(v.info(&3).unwrap().canon_idx()), 10).unwrap(); // precommit 3
 
 		assert_eq!(a.total_weight(|i| v.weight_by_index(i).unwrap()), (14, 7));
 		assert_eq!(b.total_weight(|i| v.weight_by_index(i).unwrap()), (5, 16));
 
 		let mut c = Bitfield::Live(LiveBitfield::with_voters(10));
 
-		c.set_bit(0, 10).unwrap(); // prevote 1
-		c.set_bit(3, 10).unwrap(); // precommit 2
+		c.set_bit(to_prevote(v.info(&1).unwrap().canon_idx()), 10).unwrap(); // prevote 1
+		c.set_bit(to_precommit(v.info(&2).unwrap().canon_idx()), 10).unwrap(); // precommit 2
 
 		assert_eq!(a.overlap(&b).unwrap(), c);
 	}
