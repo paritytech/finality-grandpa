@@ -106,13 +106,29 @@ pub enum CommunicationOut<H, N, S, Id> {
 	Auxiliary(AuxiliaryCommunication<H, N, Id>),
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "derive-codec", derive(Encode, Decode))]
+pub enum CommitProcessingOutcome {
+	Good,
+	Bad,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "derive-codec", derive(Encode, Decode))]
+pub enum Callback<F: Fn(CommitProcessingOutcome)> {
+	/// Default value.
+	Blank,
+	/// Callback to execute given a commit processing outcome.
+	Work(F),
+}
+
 /// Communication between nodes that is not round-localized.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "derive-codec", derive(Encode, Decode))]
-pub enum CommunicationIn<H, N, S, Id> {
+pub enum CommunicationIn<H, N, S, Id, F: Fn(CommitProcessingOutcome)> {
 	/// A commit message.
 	#[cfg_attr(feature = "derive-codec", codec(index = "0"))]
-	Commit(u64, CompactCommit<H, N, S, Id>),
+	Commit(u64, CompactCommit<H, N, S, Id>, Callback<F>),
 	/// Auxiliary messages out.
 	#[cfg_attr(feature = "derive-codec", codec(index = "1"))]
 	Auxiliary(AuxiliaryCommunication<H, N, Id>),
@@ -235,10 +251,11 @@ impl<S: Sink> Buffered<S> {
 /// Additionally, we also listen to commit messages from rounds that aren't
 /// currently running, we validate the commit and dispatch a finalization
 /// notification (if any) to the environment.
-pub struct Voter<H, N, E: Environment<H, N>, GlobalIn, GlobalOut> where
+pub struct Voter<H, N, E: Environment<H, N>, GlobalIn, GlobalOut, F> where
 	H: Hash + Clone + Eq + Ord + ::std::fmt::Debug,
 	N: Copy + BlockNumberOps + ::std::fmt::Debug,
-	GlobalIn: Stream<Item=CommunicationIn<H, N, E::Signature, E::Id>, Error=E::Error>,
+	F: Fn(CommitProcessingOutcome),
+	GlobalIn: Stream<Item=CommunicationIn<H, N, E::Signature, E::Id, F>, Error=E::Error>,
 	GlobalOut: Sink<SinkItem=CommunicationOut<H, N, E::Signature, E::Id>, SinkError=E::Error>,
 {
 	env: Arc<E>,
@@ -256,10 +273,11 @@ pub struct Voter<H, N, E: Environment<H, N>, GlobalIn, GlobalOut> where
 	last_finalized_in_rounds: (H, N),
 }
 
-impl<H, N, E: Environment<H, N>, GlobalIn, GlobalOut> Voter<H, N, E, GlobalIn, GlobalOut> where
+impl<H, N, E: Environment<H, N>, GlobalIn, GlobalOut, F> Voter<H, N, E, GlobalIn, GlobalOut, F> where
 	H: Hash + Clone + Eq + Ord + ::std::fmt::Debug,
 	N: Copy + BlockNumberOps + ::std::fmt::Debug,
-	GlobalIn: Stream<Item=CommunicationIn<H, N, E::Signature, E::Id>, Error=E::Error>,
+	F: Fn(CommitProcessingOutcome),
+	GlobalIn: Stream<Item=CommunicationIn<H, N, E::Signature, E::Id, F>, Error=E::Error>,
 	GlobalOut: Sink<SinkItem=CommunicationOut<H, N, E::Signature, E::Id>, SinkError=E::Error>,
 {
 	/// Create new `Voter` tracker with given round number and base block.
@@ -354,7 +372,7 @@ impl<H, N, E: Environment<H, N>, GlobalIn, GlobalOut> Voter<H, N, E, GlobalIn, G
 		let mut highest_incoming_foreign_commit = None;
 		while let Async::Ready(Some(item)) = self.global_in.poll()? {
 			match item {
-				CommunicationIn::Commit(round_number, commit) => {
+				CommunicationIn::Commit(round_number, commit, process_commit_outcome) => {
 					trace!(target: "afg", "Got commit for round_number {:?}: target_number: {:?}, target_hash: {:?}",
 						round_number,
 						commit.target_number,
@@ -384,6 +402,13 @@ impl<H, N, E: Environment<H, N>, GlobalIn, GlobalOut> Voter<H, N, E, GlobalIn, G
 							if finalized_number > *last_finalized_number {
 								*last_finalized_number = finalized_number.clone();
 								self.env.finalize_block(finalized_hash, finalized_number, round_number, commit)?;
+							}
+							if let Callback::Work(with_call) = process_commit_outcome {
+								with_call(CommitProcessingOutcome::Good);
+							}
+						} else {
+							if let Callback::Work(with_call) = process_commit_outcome {
+								with_call(CommitProcessingOutcome::Bad);
 							}
 						}
 					}
@@ -596,10 +621,11 @@ impl<H, N, E: Environment<H, N>, GlobalIn, GlobalOut> Voter<H, N, E, GlobalIn, G
 	}
 }
 
-impl<H, N, E: Environment<H, N>, GlobalIn, GlobalOut> Future for Voter<H, N, E, GlobalIn, GlobalOut> where
+impl<H, N, E: Environment<H, N>, GlobalIn, GlobalOut, F> Future for Voter<H, N, E, GlobalIn, GlobalOut, F> where
 	H: Hash + Clone + Eq + Ord + ::std::fmt::Debug,
 	N: Copy + BlockNumberOps + ::std::fmt::Debug,
-	GlobalIn: Stream<Item=CommunicationIn<H, N, E::Signature, E::Id>, Error=E::Error>,
+	F: Fn(CommitProcessingOutcome),
+	GlobalIn: Stream<Item=CommunicationIn<H, N, E::Signature, E::Id, F>, Error=E::Error>,
 	GlobalOut: Sink<SinkItem=CommunicationOut<H, N, E::Signature, E::Id>, SinkError=E::Error>,
 {
 	type Item = ();

@@ -21,7 +21,7 @@ use std::sync::Arc;
 use std::time::{Instant, Duration};
 
 use crate::round::State as RoundState;
-use crate::voter::{RoundData, CommunicationIn, CommunicationOut};
+use crate::voter::{RoundData, CommunicationIn, CommunicationOut, Callback, CommitProcessingOutcome};
 use tokio::timer::Delay;
 use parking_lot::Mutex;
 use futures::prelude::*;
@@ -308,16 +308,16 @@ pub fn make_network() -> (Network, NetworkRouting) {
 }
 
 type RoundNetwork = BroadcastNetwork<SignedMessage<&'static str, u32, Signature, Id>>;
-type GlobalMessageNetwork = BroadcastNetwork<CommunicationIn<&'static str, u32, Signature, Id>>;
+type GlobalMessageNetwork = BroadcastNetwork<CommunicationIn<&'static str, u32, Signature, Id, fn(CommitProcessingOutcome)>>;
 
 /// A test network. Instantiate this with `make_network`,
-#[derive(Clone)]
 pub struct Network {
 	rounds: Arc<Mutex<HashMap<u64, RoundNetwork>>>,
 	global_messages: Arc<Mutex<GlobalMessageNetwork>>,
 }
 
-impl Network {
+impl Network
+{
 	pub fn make_round_comms(&self, round_number: u64, node_id: Id) -> (
 		impl Stream<Item=SignedMessage<&'static str, u32, Signature, Id>,Error=Error>,
 		impl Sink<SinkItem=Message<&'static str, u32>,SinkError=Error>
@@ -333,12 +333,12 @@ impl Network {
 	}
 
 	pub fn make_global_comms(&self) -> (
-		impl Stream<Item=CommunicationIn<&'static str, u32, Signature, Id>,Error=Error>,
+		impl Stream<Item=CommunicationIn<&'static str, u32, Signature, Id, fn(CommitProcessingOutcome)>,Error=Error>,
 		impl Sink<SinkItem=CommunicationOut<&'static str, u32, Signature, Id>,SinkError=Error>
 	) {
 		let mut global_messages = self.global_messages.lock();
 		global_messages.add_node(|message| match message {
-			CommunicationOut::Commit(r, commit) => CommunicationIn::Commit(r, commit.into()),
+			CommunicationOut::Commit(r, commit) => CommunicationIn::Commit(r, commit.into(), Callback::Blank),
 			CommunicationOut::Auxiliary(aux) => CommunicationIn::Auxiliary(aux),
 		})
 	}
