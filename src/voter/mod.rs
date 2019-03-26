@@ -115,7 +115,7 @@ pub enum CommitProcessingOutcome {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "derive-codec", derive(Encode, Decode))]
-pub enum Callback<F: Fn(CommitProcessingOutcome)> {
+pub enum Callback<F> {
 	/// Default value.
 	Blank,
 	/// Callback to execute given a commit processing outcome.
@@ -128,7 +128,7 @@ pub enum Callback<F: Fn(CommitProcessingOutcome)> {
 pub enum CommunicationIn<H, N, S, Id, F: Fn(CommitProcessingOutcome)> {
 	/// A commit message.
 	#[cfg_attr(feature = "derive-codec", codec(index = "0"))]
-	Commit(u64, CompactCommit<H, N, S, Id>, Callback<F>),
+	Commit(u64, CompactCommit<H, N, S, Id>, Callback<Box<F>>),
 	/// Auxiliary messages out.
 	#[cfg_attr(feature = "derive-codec", codec(index = "1"))]
 	Auxiliary(AuxiliaryCommunication<H, N, Id>),
@@ -381,6 +381,12 @@ impl<H, N, E: Environment<H, N>, GlobalIn, GlobalOut, F> Voter<H, N, E, GlobalIn
 
 					let commit: Commit<_, _, _, _> = commit.into();
 
+					let call_with = |callback: Callback<Box<F>>, outcome| {
+						if let Callback::Work(with_call) = callback {
+							(with_call)(outcome);
+						}
+					};
+
 					// if the commit is for a background round dispatch to round committer.
 					// that returns Some if there wasn't one.
 					if let Some(commit) = self.past_rounds.import_commit(round_number, commit) {
@@ -403,14 +409,14 @@ impl<H, N, E: Environment<H, N>, GlobalIn, GlobalOut, F> Voter<H, N, E, GlobalIn
 								*last_finalized_number = finalized_number.clone();
 								self.env.finalize_block(finalized_hash, finalized_number, round_number, commit)?;
 							}
-							if let Callback::Work(with_call) = process_commit_outcome {
-								with_call(CommitProcessingOutcome::Good);
-							}
+							call_with(process_commit_outcome, CommitProcessingOutcome::Good);
 						} else {
-							if let Callback::Work(with_call) = process_commit_outcome {
-								with_call(CommitProcessingOutcome::Bad);
-							}
+							// Failing validation of a commit is bad.
+							call_with(process_commit_outcome, CommitProcessingOutcome::Bad);
 						}
+					} else {
+						// Import to backgrounded round is good.
+						call_with(process_commit_outcome, CommitProcessingOutcome::Good);
 					}
 				}
 				CommunicationIn::Auxiliary(_aux) => {}, // Do nothing.

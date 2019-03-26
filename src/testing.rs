@@ -311,6 +311,7 @@ type RoundNetwork = BroadcastNetwork<SignedMessage<&'static str, u32, Signature,
 type GlobalMessageNetwork = BroadcastNetwork<CommunicationIn<&'static str, u32, Signature, Id, fn(CommitProcessingOutcome)>>;
 
 /// A test network. Instantiate this with `make_network`,
+#[derive(Clone)]
 pub struct Network {
 	rounds: Arc<Mutex<HashMap<u64, RoundNetwork>>>,
 	global_messages: Arc<Mutex<GlobalMessageNetwork>>,
