@@ -106,11 +106,17 @@ pub enum CommunicationOut<H, N, S, Id> {
 	Auxiliary(AuxiliaryCommunication<H, N, Id>),
 }
 
+/// Number of precommits in the commit. 
+/// More commits imply a worst outcome because of the processing time.
+type NumOfPrecommits = usize;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "derive-codec", derive(Encode, Decode))]
 pub enum CommitProcessingOutcome {
+	/// It was beneficial to process this commit.
 	Good,
-	Bad,
+	/// It wasn't beneficial to process this commit. We wasted resources.
+	Bad(NumOfPrecommits),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -412,7 +418,7 @@ impl<H, N, E: Environment<H, N>, GlobalIn, GlobalOut, F> Voter<H, N, E, GlobalIn
 							call_with(process_commit_outcome, CommitProcessingOutcome::Good);
 						} else {
 							// Failing validation of a commit is bad.
-							call_with(process_commit_outcome, CommitProcessingOutcome::Bad);
+							call_with(process_commit_outcome, CommitProcessingOutcome::Bad(commit.precommits.len()));
 						}
 					} else {
 						// Import to backgrounded round is good.
