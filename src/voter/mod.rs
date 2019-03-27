@@ -242,6 +242,7 @@ pub struct Voter<H, N, E: Environment<H, N>, GlobalIn, GlobalOut> where
 	GlobalOut: Sink<SinkItem=CommunicationOut<H, N, E::Signature, E::Id>, SinkError=E::Error>,
 {
 	env: Arc<E>,
+	voter_id: Option<E::Id>,
 	voters: VoterSet<E::Id>,
 	best_round: VotingRound<H, N, E>,
 	past_rounds: PastRounds<H, N, E>,
@@ -274,6 +275,7 @@ impl<H, N, E: Environment<H, N>, GlobalIn, GlobalOut> Voter<H, N, E, GlobalIn, G
 	/// messages.
 	pub fn new(
 		env: Arc<E>,
+		voter_id: Option<E::Id>,
 		voters: VoterSet<E::Id>,
 		global_comms: (GlobalIn, GlobalOut),
 		last_round_number: u64,
@@ -286,6 +288,7 @@ impl<H, N, E: Environment<H, N>, GlobalIn, GlobalOut> Voter<H, N, E, GlobalIn, G
 
 		let best_round = VotingRound::new(
 			last_round_number + 1,
+			voter_id.clone(),
 			voters.clone(),
 			last_finalized.clone(),
 			Some(last_round_state),
@@ -300,6 +303,7 @@ impl<H, N, E: Environment<H, N>, GlobalIn, GlobalOut> Voter<H, N, E, GlobalIn, G
 
 		Voter {
 			env,
+			voter_id,
 			voters,
 			best_round,
 			past_rounds: PastRounds::new(),
@@ -435,6 +439,7 @@ impl<H, N, E: Environment<H, N>, GlobalIn, GlobalOut> Voter<H, N, E, GlobalIn, G
 			// we set `last_round_state` to `None` so that no votes are cast
 			self.prospective_round = Some(VotingRound::new(
 				round_number + 1,
+				self.voter_id.clone(),
 				self.voters.clone(),
 				ghost_base,
 				None,
@@ -552,6 +557,7 @@ impl<H, N, E: Environment<H, N>, GlobalIn, GlobalOut> Voter<H, N, E, GlobalIn, G
 		let next_round = next_round.unwrap_or_else(||
 			VotingRound::new(
 				old_round_number + 1,
+				self.voter_id.clone(),
 				self.voters.clone(),
 				self.last_finalized_in_rounds.clone(),
 				Some(self.best_round.bridge_state()),
@@ -572,6 +578,7 @@ impl<H, N, E: Environment<H, N>, GlobalIn, GlobalOut> Voter<H, N, E, GlobalIn, G
 
 		self.best_round = VotingRound::new(
 			prospective_round.round_number() + 1,
+			self.voter_id.clone(),
 			self.voters.clone(),
 			// the finalized commit target that triggered
 			// the prospective round was used as base.

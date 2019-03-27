@@ -33,6 +33,7 @@ use super::{Environment, Buffered};
 /// The state of a voting round.
 pub(super) enum State<T> {
 	Start(T, T),
+	Proposed(T, T),
 	Prevoted(T),
 	Precommitted,
 }
@@ -41,6 +42,7 @@ impl<T> std::fmt::Debug for State<T> {
 	fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
 		match self {
 			State::Start(..) => write!(f, "Start"),
+			State::Proposed(..) => write!(f, "Proposed"),
 			State::Prevoted(_) => write!(f, "Prevoted"),
 			State::Precommitted => write!(f, "Precommitted"),
 		}
@@ -53,6 +55,7 @@ pub(super) struct VotingRound<H, N, E: Environment<H, N>> where
 	N: Copy + BlockNumberOps + ::std::fmt::Debug,
 {
 	env: Arc<E>,
+	voter_id: Option<E::Id>,
 	votes: Round<E::Id, H, N, E::Signature>,
 	incoming: E::In,
 	outgoing: Buffered<E::Out>,
@@ -71,6 +74,7 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 	/// Create a new voting round.
 	pub (super) fn new(
 		round_number: u64,
+		voter_id: Option<E::Id>,
 		voters: VoterSet<E::Id>,
 		base: (H, N),
 		last_round_state: Option<crate::bridge_state::LatterView<H, N>>,
@@ -85,6 +89,7 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 		};
 
 		VotingRound {
+			voter_id,
 			votes: Round::new(round_params),
 			incoming: round_data.incoming,
 			outgoing: Buffered::new(round_data.outgoing),
@@ -244,10 +249,12 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 	}
 
 	fn primary_propose(&mut self, last_round_state: &RoundState<H, N>) -> Result<(), E::Error> {
-		match self.state {
-			Some(State::Start(_, _)) => {
+		match self.state.take() {
+			Some(State::Start(prevote_timer, precommit_timer)) => {
+				let our_turn = self.voter_id.as_ref() == Some(&self.votes.primary_voter().0);
 				let maybe_estimate = last_round_state.estimate.clone();
-				if let Some(last_round_estimate) = maybe_estimate {
+
+				if let (Some(last_round_estimate), true) = (maybe_estimate, our_turn) {
 					let maybe_finalized = last_round_state.finalized.clone();
 
 					// Last round estimate has not been finalized.
@@ -260,37 +267,56 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 								target_number: last_round_estimate.1,
 							})
 						);
+						self.state = Some(State::Proposed(prevote_timer, precommit_timer));
 					}
 				} else {
-					debug!(target: "afg", "Last round estimate does not exists, \
-						not sending primary block hint for round {}", self.votes.number());
+					if our_turn {
+						debug!(target: "afg", "Last round estimate does not exist, \
+							not sending primary block hint for round {}", self.votes.number());
+					}
+					self.state = Some(State::Start(prevote_timer, precommit_timer));
 				}
-			}
-			_ => { }
+			},
+			x => { self.state = x; }
 		}
 
 		Ok(())
 	}
 
 	fn prevote(&mut self, last_round_state: &RoundState<H, N>) -> Result<(), E::Error> {
-		match self.state.take() {
-			Some(State::Start(mut prevote_timer, precommit_timer)) => {
-				let should_prevote = match prevote_timer.poll() {
-					Err(e) => return Err(e),
-					Ok(Async::Ready(())) => true,
-					Ok(Async::NotReady) => self.votes.completable(),
-				};
+		let state = self.state.take();
 
-				if should_prevote {
-					if let Some(prevote) = self.construct_prevote(last_round_state)? {
-						debug!(target: "afg", "Casting prevote for round {}", self.votes.number());
-						self.outgoing.push(Message::Prevote(prevote));
-					}
-					self.state = Some(State::Prevoted(precommit_timer));
+		let mut handle_prevote = |mut prevote_timer: E::Timer, precommit_timer: E::Timer, proposed| {
+			let should_prevote = match prevote_timer.poll() {
+				Err(e) => return Err(e),
+				Ok(Async::Ready(())) => true,
+				Ok(Async::NotReady) => self.votes.completable(),
+			};
+
+			if should_prevote {
+				if let Some(prevote) = self.construct_prevote(last_round_state)? {
+					debug!(target: "afg", "Casting prevote for round {}", self.votes.number());
+					self.outgoing.push(Message::Prevote(prevote));
+				}
+				self.state = Some(State::Prevoted(precommit_timer));
+			} else {
+				if proposed {
+					self.state = Some(State::Proposed(prevote_timer, precommit_timer));
 				} else {
 					self.state = Some(State::Start(prevote_timer, precommit_timer));
 				}
 			}
+
+			Ok(())
+		};
+
+		match state {
+			Some(State::Start(prevote_timer, precommit_timer)) => {
+				handle_prevote(prevote_timer, precommit_timer, false)?;
+			},
+			Some(State::Proposed(prevote_timer, precommit_timer)) => {
+				handle_prevote(prevote_timer, precommit_timer, true)?;
+			},
 			x => { self.state = x; }
 		}
 
