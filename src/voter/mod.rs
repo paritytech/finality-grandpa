@@ -657,6 +657,7 @@ mod tests {
 			let finalized = env.finalized_stream();
 			let voter = Voter::new(
 				env.clone(),
+				None,
 				voters,
 				global_comms,
 				0,
@@ -703,6 +704,7 @@ mod tests {
 				let finalized = env.finalized_stream();
 				let voter = Voter::new(
 					env.clone(),
+					None,
 					voters.clone(),
 					network.make_global_comms(),
 					0,
@@ -746,6 +748,7 @@ mod tests {
 			// run voter in background. scheduling it to shut down at the end.
 			let voter = Voter::new(
 				env.clone(),
+				None,
 				voters.clone(),
 				global_comms,
 				0,
@@ -811,6 +814,7 @@ mod tests {
 			// run voter in background. scheduling it to shut down at the end.
 			let voter = Voter::new(
 				env.clone(),
+				None,
 				voters.clone(),
 				global_comms,
 				0,
@@ -898,6 +902,7 @@ mod tests {
 			// run voter in background. scheduling it to shut down at the end.
 			let voter = Voter::new(
 				env.clone(),
+				None,
 				voters.clone(),
 				global_comms,
 				1,
@@ -945,6 +950,7 @@ mod tests {
 
 				Voter::new(
 					env.clone(),
+					None,
 					voters.clone(),
 					network.make_global_comms(),
 					0,
@@ -978,6 +984,7 @@ mod tests {
 				// run voter in background starting at round 5. scheduling it to shut down when signalled.
 				let voter = Voter::new(
 					env.clone(),
+					None,
 					voters.clone(),
 					network.make_global_comms(),
 					5,
