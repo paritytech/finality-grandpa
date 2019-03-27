@@ -31,8 +31,8 @@ use std::sync::Arc;
 
 use crate::round::State as RoundState;
 use crate::{
-	Chain, Commit, CompactCommit, Equivocation, Message, Prevote, Precommit, SignedMessage,
-	BlockNumberOps, validate_commit
+	Chain, Commit, CompactCommit, Equivocation, Message, Prevote, Precommit, PrimaryPropose,
+	SignedMessage, BlockNumberOps, validate_commit
 };
 use crate::voter_set::VoterSet;
 use past_rounds::PastRounds;
@@ -79,6 +79,9 @@ pub trait Environment<H: Eq, N: BlockNumberOps>: Chain<H, N> {
 	/// message. This delay should not be static to minimize the amount of
 	/// commit messages that are sent (e.g. random value in [0, 1] seconds).
 	fn round_commit_timer(&self) -> Self::Timer;
+
+	/// Note that we've done a primary proposal in the given round.
+	fn proposed(&self, round: u64, primary: PrimaryPropose<H, N>) -> Result<(), Self::Error>;
 
 	/// Note that we have prevoted in the given round.
 	fn prevoted(&self, round: u64, prevote: Prevote<H, N>) -> Result<(), Self::Error>;
