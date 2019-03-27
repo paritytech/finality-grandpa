@@ -324,12 +324,12 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 					let should_send_primary = maybe_finalized.map_or(true, |f| last_round_estimate.1 < f.1);
 					if should_send_primary {
 						debug!(target: "afg", "Sending primary block hint for round {}", self.votes.number());
-						self.outgoing.push(Message::PrimaryPropose(
-							PrimaryPropose {
-								target_hash: last_round_estimate.0,
-								target_number: last_round_estimate.1,
-							})
-						);
+						let primary = PrimaryPropose {
+							target_hash: last_round_estimate.0,
+							target_number: last_round_estimate.1,
+						};
+						self.env.proposed(self.round_number(), primary.clone())?;
+						self.outgoing.push(Message::PrimaryPropose(primary));
 						self.state = Some(State::Proposed(prevote_timer, precommit_timer));
 
 						return Ok(());

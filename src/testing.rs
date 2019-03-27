@@ -26,7 +26,7 @@ use tokio::timer::Delay;
 use parking_lot::Mutex;
 use futures::prelude::*;
 use futures::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
-use super::{Chain, Commit, Error, Equivocation, Message, Prevote, Precommit, SignedMessage};
+use super::{Chain, Commit, Error, Equivocation, Message, Prevote, Precommit, PrimaryPropose, SignedMessage};
 
 pub const GENESIS_HASH: &str = "genesis";
 const NULL_HASH: &str = "NULL";
@@ -233,6 +233,10 @@ impl crate::voter::Environment<&'static str, u32> for Environment {
 		chain.finalized = (hash, number as _);
 		self.listeners.lock().retain(|s| s.unbounded_send((hash, number as _, commit.clone())).is_ok());
 
+		Ok(())
+	}
+
+	fn proposed(&self, _round: u64, _propose: PrimaryPropose<&'static str, u32>) -> Result<(), Self::Error> {
 		Ok(())
 	}
 
