@@ -268,14 +268,17 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 							})
 						);
 						self.state = Some(State::Proposed(prevote_timer, precommit_timer));
+
+						return Ok(());
 					}
-				} else {
-					if our_turn {
-						debug!(target: "afg", "Last round estimate does not exist, \
-							not sending primary block hint for round {}", self.votes.number());
-					}
-					self.state = Some(State::Start(prevote_timer, precommit_timer));
 				}
+
+				if our_turn {
+					debug!(target: "afg", "Last round estimate does not exist, \
+						not sending primary block hint for round {}", self.votes.number());
+				}
+
+				self.state = Some(State::Start(prevote_timer, precommit_timer));
 			},
 			x => { self.state = x; }
 		}
