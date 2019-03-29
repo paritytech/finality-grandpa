@@ -106,17 +106,42 @@ pub enum CommunicationOut<H, N, S, Id> {
 	Auxiliary(AuxiliaryCommunication<H, N, Id>),
 }
 
-/// Number of precommits in the commit. 
-/// More commits imply a worst outcome because of the processing time.
-type NumOfPrecommits = usize;
-
+/// The outcome of processing a commit.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "derive-codec", derive(Encode, Decode))]
 pub enum CommitProcessingOutcome {
 	/// It was beneficial to process this commit.
-	Good,
+	Good(GoodCommit),
 	/// It wasn't beneficial to process this commit. We wasted resources.
-	Bad(NumOfPrecommits),
+	Bad(BadCommit),
+}
+
+/// The result of processing for a good commit.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "derive-codec", derive(Encode, Decode))]
+pub struct GoodCommit {
+	_priv: (), // lets us add stuff without breaking API.
+}
+
+impl GoodCommit {
+	fn new() -> Self {
+		GoodCommit { _priv: () }
+	}
+}
+
+/// The result of processing for a bad commit
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "derive-codec", derive(Encode, Decode))]
+pub struct BadCommit {
+	_priv: (), // lets us add stuff without breaking API.
+	num_precommits: usize,
+}
+
+impl BadCommit {
+	/// Get the number of precommits
+	pub fn num_precommits(&self) -> usize {
+		self.num_precommits
+	}
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -415,14 +440,26 @@ impl<H, N, E: Environment<H, N>, GlobalIn, GlobalOut, F> Voter<H, N, E, GlobalIn
 								*last_finalized_number = finalized_number.clone();
 								self.env.finalize_block(finalized_hash, finalized_number, round_number, commit)?;
 							}
-							call_with(process_commit_outcome, CommitProcessingOutcome::Good);
+							call_with(
+								process_commit_outcome,
+								CommitProcessingOutcome::Good(GoodCommit::new()),
+							);
 						} else {
 							// Failing validation of a commit is bad.
-							call_with(process_commit_outcome, CommitProcessingOutcome::Bad(commit.precommits.len()));
+							call_with(
+								process_commit_outcome,
+								CommitProcessingOutcome::Bad(BadCommit {
+									num_precommits: commit.precommits.len(),
+									_priv: (),
+								}),
+							);
 						}
 					} else {
 						// Import to backgrounded round is good.
-						call_with(process_commit_outcome, CommitProcessingOutcome::Good);
+						call_with(
+							process_commit_outcome,
+							CommitProcessingOutcome::Good(GoodCommit::new()),
+						);
 					}
 				}
 				CommunicationIn::Auxiliary(_aux) => {}, // Do nothing.
