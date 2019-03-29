@@ -21,6 +21,7 @@
 //!   - incoming vote streams
 //!   - providing voter weights.
 
+use crate::CommitValidationResult;
 use futures::prelude::*;
 use futures::sync::mpsc::{self, UnboundedReceiver};
 
@@ -428,7 +429,11 @@ impl<H, N, E: Environment<H, N>, GlobalIn, GlobalOut> Voter<H, N, E, GlobalIn, G
 						// otherwise validate the commit and signal the finalized block
 						// (if any) to the environment
 						
-						let (ghost, num_duplicated) = validate_commit(&commit, &self.voters, &*self.env)?;
+						let CommitValidationResult {
+							ghost,
+							num_duplicated_precommits
+						} = validate_commit(&commit, &self.voters, &*self.env)?;
+						
 						if let Some((finalized_hash, finalized_number)) = ghost {
 							highest_incoming_foreign_commit = Some(highest_incoming_foreign_commit
 								.map_or(round_number, |n| cmp::max(n, round_number)));
@@ -452,7 +457,7 @@ impl<H, N, E: Environment<H, N>, GlobalIn, GlobalOut> Voter<H, N, E, GlobalIn, G
 								process_commit_outcome,
 								CommitProcessingOutcome::Bad(BadCommit {
 									num_precommits: commit.precommits.len(),
-									num_precommits_duplicated: num_duplicated,
+									num_precommits_duplicated: num_duplicated_precommits,
 									_priv: (),
 								}),
 							);

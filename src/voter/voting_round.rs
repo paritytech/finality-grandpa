@@ -166,7 +166,7 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 		&mut self,
 		commit: &Commit<H, N, E::Signature, E::Id>
 	) -> Result<Option<(H, N)>, E::Error> {
-		let (base, _) = validate_commit(&commit, self.voters(), &*self.env)?;
+		let base = validate_commit(&commit, self.voters(), &*self.env)?.ghost;
 		if base.is_none() { return Ok(None) }
 
 		for SignedPrecommit { precommit, signature, id } in commit.precommits.iter().cloned() {
