@@ -317,8 +317,7 @@ pub struct Network {
 	global_messages: Arc<Mutex<GlobalMessageNetwork>>,
 }
 
-impl Network
-{
+impl Network {
 	pub fn make_round_comms(&self, round_number: u64, node_id: Id) -> (
 		impl Stream<Item=SignedMessage<&'static str, u32, Signature, Id>,Error=Error>,
 		impl Sink<SinkItem=Message<&'static str, u32>,SinkError=Error>
