@@ -17,9 +17,15 @@
 //! A voter in GRANDPA. This transitions between rounds and casts votes.
 //!
 //! Voters rely on some external context to function:
-//!   - setting timers to cast votes
-//!   - incoming vote streams
+//!   - setting timers to cast votes.
+//!   - incoming vote streams.
 //!   - providing voter weights.
+//!   - getting the local voter id.
+//!
+//!  The local voter id is used to check whether to cast votes for a given
+//!  round. If no local id is defined or if it's not part of the voter set then
+//!  votes will not be pushed to the sink. The protocol state machine still
+//!  transitions state as if the votes had been pushed out.
 
 use futures::prelude::*;
 use futures::sync::mpsc::{self, UnboundedReceiver};
@@ -70,9 +76,10 @@ pub trait Environment<H: Eq, N: BlockNumberOps>: Chain<H, N> {
 	/// Furthermore, this means that actual logic of creating and verifying
 	/// signatures is flexible and can be maintained outside this crate.
 	fn round_data(&self, round: u64) -> RoundData<
+		Self::Id,
 		Self::Timer,
 		Self::In,
-		Self::Out
+		Self::Out,
 	>;
 
 	/// Return a timer that will be used to delay the broadcast of a commit
@@ -153,7 +160,9 @@ pub struct CatchUp<H, N> {
 }
 
 /// Data necessary to participate in a round.
-pub struct RoundData<Timer, Input, Output> {
+pub struct RoundData<Id, Timer, Input, Output> {
+	/// Local voter id (if any.)
+	pub voter_id: Option<Id>,
 	/// Timer before prevotes can be cast. This should be Start + 2T
 	/// where T is the gossip time estimate.
 	pub prevote_timer: Timer,
