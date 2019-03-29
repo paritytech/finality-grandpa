@@ -21,7 +21,7 @@ use std::sync::Arc;
 use std::time::{Instant, Duration};
 
 use crate::round::State as RoundState;
-use crate::voter::{RoundData, CommunicationIn, CommunicationOut, Callback, CommitProcessingOutcome};
+use crate::voter::{RoundData, CommunicationIn, CommunicationOut, Callback};
 use tokio::timer::Delay;
 use parking_lot::Mutex;
 use futures::prelude::*;
@@ -308,7 +308,7 @@ pub fn make_network() -> (Network, NetworkRouting) {
 }
 
 type RoundNetwork = BroadcastNetwork<SignedMessage<&'static str, u32, Signature, Id>>;
-type GlobalMessageNetwork = BroadcastNetwork<CommunicationIn<&'static str, u32, Signature, Id, fn(CommitProcessingOutcome)>>;
+type GlobalMessageNetwork = BroadcastNetwork<CommunicationIn<&'static str, u32, Signature, Id>>;
 
 /// A test network. Instantiate this with `make_network`,
 #[derive(Clone)]
@@ -334,7 +334,7 @@ impl Network
 	}
 
 	pub fn make_global_comms(&self) -> (
-		impl Stream<Item=CommunicationIn<&'static str, u32, Signature, Id, fn(CommitProcessingOutcome)>,Error=Error>,
+		impl Stream<Item=CommunicationIn<&'static str, u32, Signature, Id>,Error=Error>,
 		impl Sink<SinkItem=CommunicationOut<&'static str, u32, Signature, Id>,SinkError=Error>
 	) {
 		let mut global_messages = self.global_messages.lock();
