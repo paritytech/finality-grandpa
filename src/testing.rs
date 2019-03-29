@@ -187,12 +187,13 @@ impl crate::voter::Environment<&'static str, u32> for Environment {
 	type Out = Box<Sink<SinkItem=Message<&'static str, u32>,SinkError=Error> + Send + 'static>;
 	type Error = Error;
 
-	fn round_data(&self, round: u64) -> RoundData<Self::Timer, Self::In, Self::Out> {
+	fn round_data(&self, round: u64) -> RoundData<Self::Id, Self::Timer, Self::In, Self::Out> {
 		const GOSSIP_DURATION: Duration = Duration::from_millis(500);
 
 		let now = Instant::now();
 		let (incoming, outgoing) = self.network.make_round_comms(round, self.local_id);
 		RoundData {
+			voter_id: Some(self.local_id),
 			prevote_timer: Box::new(Delay::new(now + GOSSIP_DURATION)
 				.map_err(|_| panic!("Timer failed"))),
 			precommit_timer: Box::new(Delay::new(now + GOSSIP_DURATION + GOSSIP_DURATION)

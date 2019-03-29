@@ -17,9 +17,15 @@
 //! A voter in GRANDPA. This transitions between rounds and casts votes.
 //!
 //! Voters rely on some external context to function:
-//!   - setting timers to cast votes
-//!   - incoming vote streams
+//!   - setting timers to cast votes.
+//!   - incoming vote streams.
 //!   - providing voter weights.
+//!   - getting the local voter id.
+//!
+//!  The local voter id is used to check whether to cast votes for a given
+//!  round. If no local id is defined or if it's not part of the voter set then
+//!  votes will not be pushed to the sink. The protocol state machine still
+//!  transitions state as if the votes had been pushed out.
 
 use futures::prelude::*;
 use futures::sync::mpsc::{self, UnboundedReceiver};
@@ -70,9 +76,10 @@ pub trait Environment<H: Eq, N: BlockNumberOps>: Chain<H, N> {
 	/// Furthermore, this means that actual logic of creating and verifying
 	/// signatures is flexible and can be maintained outside this crate.
 	fn round_data(&self, round: u64) -> RoundData<
+		Self::Id,
 		Self::Timer,
 		Self::In,
-		Self::Out
+		Self::Out,
 	>;
 
 	/// Return a timer that will be used to delay the broadcast of a commit
@@ -153,7 +160,9 @@ pub struct CatchUp<H, N> {
 }
 
 /// Data necessary to participate in a round.
-pub struct RoundData<Timer, Input, Output> {
+pub struct RoundData<Id, Timer, Input, Output> {
+	/// Local voter id (if any.)
+	pub voter_id: Option<Id>,
 	/// Timer before prevotes can be cast. This should be Start + 2T
 	/// where T is the gossip time estimate.
 	pub prevote_timer: Timer,
@@ -242,7 +251,6 @@ pub struct Voter<H, N, E: Environment<H, N>, GlobalIn, GlobalOut> where
 	GlobalOut: Sink<SinkItem=CommunicationOut<H, N, E::Signature, E::Id>, SinkError=E::Error>,
 {
 	env: Arc<E>,
-	voter_id: Option<E::Id>,
 	voters: VoterSet<E::Id>,
 	best_round: VotingRound<H, N, E>,
 	past_rounds: PastRounds<H, N, E>,
@@ -275,7 +283,6 @@ impl<H, N, E: Environment<H, N>, GlobalIn, GlobalOut> Voter<H, N, E, GlobalIn, G
 	/// messages.
 	pub fn new(
 		env: Arc<E>,
-		voter_id: Option<E::Id>,
 		voters: VoterSet<E::Id>,
 		global_comms: (GlobalIn, GlobalOut),
 		last_round_number: u64,
@@ -288,7 +295,6 @@ impl<H, N, E: Environment<H, N>, GlobalIn, GlobalOut> Voter<H, N, E, GlobalIn, G
 
 		let best_round = VotingRound::new(
 			last_round_number + 1,
-			voter_id.clone(),
 			voters.clone(),
 			last_finalized.clone(),
 			Some(last_round_state),
@@ -303,7 +309,6 @@ impl<H, N, E: Environment<H, N>, GlobalIn, GlobalOut> Voter<H, N, E, GlobalIn, G
 
 		Voter {
 			env,
-			voter_id,
 			voters,
 			best_round,
 			past_rounds: PastRounds::new(),
@@ -439,7 +444,6 @@ impl<H, N, E: Environment<H, N>, GlobalIn, GlobalOut> Voter<H, N, E, GlobalIn, G
 			// we set `last_round_state` to `None` so that no votes are cast
 			self.prospective_round = Some(VotingRound::new(
 				round_number + 1,
-				self.voter_id.clone(),
 				self.voters.clone(),
 				ghost_base,
 				None,
@@ -557,7 +561,6 @@ impl<H, N, E: Environment<H, N>, GlobalIn, GlobalOut> Voter<H, N, E, GlobalIn, G
 		let next_round = next_round.unwrap_or_else(||
 			VotingRound::new(
 				old_round_number + 1,
-				self.voter_id.clone(),
 				self.voters.clone(),
 				self.last_finalized_in_rounds.clone(),
 				Some(self.best_round.bridge_state()),
@@ -578,7 +581,6 @@ impl<H, N, E: Environment<H, N>, GlobalIn, GlobalOut> Voter<H, N, E, GlobalIn, G
 
 		self.best_round = VotingRound::new(
 			prospective_round.round_number() + 1,
-			self.voter_id.clone(),
 			self.voters.clone(),
 			// the finalized commit target that triggered
 			// the prospective round was used as base.
@@ -657,7 +659,6 @@ mod tests {
 			let finalized = env.finalized_stream();
 			let voter = Voter::new(
 				env.clone(),
-				None,
 				voters,
 				global_comms,
 				0,
@@ -704,7 +705,6 @@ mod tests {
 				let finalized = env.finalized_stream();
 				let voter = Voter::new(
 					env.clone(),
-					None,
 					voters.clone(),
 					network.make_global_comms(),
 					0,
@@ -748,7 +748,6 @@ mod tests {
 			// run voter in background. scheduling it to shut down at the end.
 			let voter = Voter::new(
 				env.clone(),
-				None,
 				voters.clone(),
 				global_comms,
 				0,
@@ -814,7 +813,6 @@ mod tests {
 			// run voter in background. scheduling it to shut down at the end.
 			let voter = Voter::new(
 				env.clone(),
-				None,
 				voters.clone(),
 				global_comms,
 				0,
@@ -902,7 +900,6 @@ mod tests {
 			// run voter in background. scheduling it to shut down at the end.
 			let voter = Voter::new(
 				env.clone(),
-				None,
 				voters.clone(),
 				global_comms,
 				1,
@@ -950,7 +947,6 @@ mod tests {
 
 				Voter::new(
 					env.clone(),
-					None,
 					voters.clone(),
 					network.make_global_comms(),
 					0,
@@ -984,7 +980,6 @@ mod tests {
 				// run voter in background starting at round 5. scheduling it to shut down when signalled.
 				let voter = Voter::new(
 					env.clone(),
-					None,
 					voters.clone(),
 					network.make_global_comms(),
 					5,
