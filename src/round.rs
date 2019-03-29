@@ -120,30 +120,30 @@ impl<Id: Hash + Eq + Clone, Vote: Clone + Eq, Signature: Clone + Eq> VoteTracker
 	// since this struct doesn't track the round-number of votes, that must be set
 	// by the caller.
 	fn add_vote(&mut self, id: Id, vote: Vote, signature: Signature, weight: u64)
-		-> Option<&VoteMultiplicity<Vote, Signature>>
+		-> (Option<&VoteMultiplicity<Vote, Signature>>, bool)
 	{
 		match self.votes.entry(id) {
 			Entry::Vacant(vacant) => {
 				self.current_weight += weight;
-				return Some(&*vacant.insert(VoteMultiplicity::Single(vote, signature)));
+				return (Some(&*vacant.insert(VoteMultiplicity::Single(vote, signature))), false);
 			}
 			Entry::Occupied(mut occupied) => {
 				if occupied.get().contains(&vote, &signature) {
-					return None;
+					return (None, true);
 				}
 
 				// import, but ignore further equivocations.
 				let new_val = match *occupied.get_mut() {
 					VoteMultiplicity::Single(ref v, ref s) =>
 						Some(VoteMultiplicity::Equivocated((v.clone(), s.clone()), (vote, signature))),
-					VoteMultiplicity::Equivocated(_, _) => return None,
+					VoteMultiplicity::Equivocated(_, _) => return (None, false),
 				};
 
 				if let Some(new_val) = new_val {
 					*occupied.get_mut() = new_val;
 				}
 
-				Some(&*occupied.into_mut())
+				(Some(&*occupied.into_mut()), false)
 			}
 		}
 	}
@@ -263,17 +263,17 @@ impl<Id, H, N, Signature> Round<Id, H, N, Signature> where
 		vote: Prevote<H, N>,
 		signer: Id,
 		signature: Signature,
-	) -> Result<Option<Equivocation<Id, Prevote<H, N>, Signature>>, crate::Error> {
+	) -> Result<(Option<Equivocation<Id, Prevote<H, N>, Signature>>, bool), crate::Error> {
 		let info = match self.voters.info(&signer) {
 			Some(info) => info,
-			None => return Ok(None),
+			None => return Ok((None, false)),
 		};
 		let weight = info.weight();
 
 		let equivocation = {
 			let multiplicity = match self.prevote.add_vote(signer.clone(), vote, signature, weight) {
-				Some(m) => m,
-				None => return Ok(None),
+				(Some(m), _) => m,
+				(None, is_duplicated) => return Ok((None, is_duplicated)),
 			};
 			let round_number = self.round_number;
 
@@ -320,7 +320,7 @@ impl<Id, H, N, Signature> Round<Id, H, N, Signature> where
 		}
 
 		self.update();
-		Ok(equivocation)
+		Ok((equivocation, false))
 	}
 
 	/// Import a precommit. Returns an equivocation proof if the vote is an
@@ -333,17 +333,17 @@ impl<Id, H, N, Signature> Round<Id, H, N, Signature> where
 		vote: Precommit<H, N>,
 		signer: Id,
 		signature: Signature,
-	) -> Result<Option<Equivocation<Id, Precommit<H, N>, Signature>>, crate::Error> {
+	) -> Result<(Option<Equivocation<Id, Precommit<H, N>, Signature>>, bool), crate::Error> {
 		let info = match self.voters.info(&signer) {
 			Some(info) => info,
-			None => return Ok(None),
+			None => return Ok((None, false)),
 		};
 		let weight = info.weight();
 
 		let equivocation = {
 			let multiplicity = match self.precommit.add_vote(signer.clone(), vote, signature, weight) {
-				Some(m) => m,
-				None => return Ok(None),
+				(Some(m), _) => m,
+				(None, is_duplicated) => return Ok((None, is_duplicated)),
 			};
 			let round_number = self.round_number;
 
@@ -379,7 +379,7 @@ impl<Id, H, N, Signature> Round<Id, H, N, Signature> where
 		};
 
 		self.update();
-		Ok(equivocation)
+		Ok((equivocation, false))
 	}
 
 	// Get current
@@ -764,7 +764,7 @@ mod tests {
 			Prevote::new("FC", 10),
 			"Eve", // 3 on F, E
 			Signature("Eve-1"),
-		).unwrap().is_none());
+		).unwrap().0.is_none());
 
 
 		assert!(round.prevote_ghost.is_none());
@@ -775,7 +775,7 @@ mod tests {
 			Prevote::new("ED", 10),
 			"Eve", // still 3 on E
 			Signature("Eve-2"),
-		).unwrap().is_some());
+		).unwrap().0.is_some());
 
 		// third prevote: returns nothing.
 		assert!(round.import_prevote(
@@ -783,7 +783,7 @@ mod tests {
 			Prevote::new("F", 7),
 			"Eve", // still 3 on F and E
 			Signature("Eve-2"),
-		).unwrap().is_none());
+		).unwrap().0.is_none());
 
 		// three eves together would be enough.
 
@@ -794,7 +794,7 @@ mod tests {
 			Prevote::new("FA", 8),
 			"Bob", // add 7 to FA and you get FA.
 			Signature("Bob-1"),
-		).unwrap().is_none());
+		).unwrap().0.is_none());
 
 		assert_eq!(round.prevote_ghost, Some(("FA", 8)));
 	}

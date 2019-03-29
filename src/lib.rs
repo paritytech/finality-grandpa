@@ -346,7 +346,7 @@ pub fn validate_commit<H, N, S, I, C: Chain<H, N>>(
 	commit: &Commit<H, N, S, I>,
 	voters: &VoterSet<I>,
 	chain: &C,
-) -> Result<Option<(H, N)>, crate::Error>
+) -> Result<(Option<(H, N)>, usize), crate::Error>
 	where
 	H: std::hash::Hash + Clone + Eq + Ord + std::fmt::Debug,
 	N: Copy + BlockNumberOps + std::fmt::Debug,
@@ -362,7 +362,7 @@ pub fn validate_commit<H, N, S, I, C: Chain<H, N>>(
 				signed.precommit.target_hash.clone(),
 			)
 	}) {
-		return Ok(None);
+		return Ok((None, 0));
 	}
 
 	let mut equivocated = crate::collections::HashSet::new();
@@ -375,16 +375,24 @@ pub fn validate_commit<H, N, S, I, C: Chain<H, N>>(
 		base: (commit.target_hash.clone(), commit.target_number),
 	});
 
+	let mut duplicates = 0;
 	for SignedPrecommit { precommit, id, signature } in commit.precommits.iter() {
-		if let Some(_) = round.import_precommit(chain, precommit.clone(), id.clone(), signature.clone())? {
-			// allow only one equivocation per voter, as extras are redundant.
-			if !equivocated.insert(id) { return Ok(None) }
+		match round.import_precommit(chain, precommit.clone(), id.clone(), signature.clone())? {
+			(Some(_), _) => {
+				// allow only one equivocation per voter, as extras are redundant.
+				if !equivocated.insert(id) { return Ok((None, duplicates)) }
+			},
+			(None, is_duplicate) => {
+				if is_duplicate {
+					duplicates += 1;
+				}
+			}
 		}
 	}
 
 	// if a ghost is found then it must be equal or higher than the commit
 	// target, otherwise the commit is invalid
-	Ok(round.precommit_ghost())
+	Ok((round.precommit_ghost(), duplicates))
 }
 
 /// Get the threshold weight given the total voting weight.

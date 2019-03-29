@@ -135,6 +135,7 @@ impl GoodCommit {
 pub struct BadCommit {
 	_priv: (), // lets us add stuff without breaking API.
 	num_precommits: usize,
+	num_precommits_duplicated: usize,
 }
 
 impl BadCommit {
@@ -426,11 +427,9 @@ impl<H, N, E: Environment<H, N>, GlobalIn, GlobalOut> Voter<H, N, E, GlobalIn, G
 					if let Some(commit) = self.past_rounds.import_commit(round_number, commit) {
 						// otherwise validate the commit and signal the finalized block
 						// (if any) to the environment
-						if let Some((finalized_hash, finalized_number)) = validate_commit(
-							&commit,
-							&self.voters,
-							&*self.env,
-						)? {
+						
+						let (ghost, num_duplicated) = validate_commit(&commit, &self.voters, &*self.env)?;
+						if let Some((finalized_hash, finalized_number)) = ghost {
 							highest_incoming_foreign_commit = Some(highest_incoming_foreign_commit
 								.map_or(round_number, |n| cmp::max(n, round_number)));
 
@@ -453,6 +452,7 @@ impl<H, N, E: Environment<H, N>, GlobalIn, GlobalOut> Voter<H, N, E, GlobalIn, G
 								process_commit_outcome,
 								CommitProcessingOutcome::Bad(BadCommit {
 									num_precommits: commit.precommits.len(),
+									num_precommits_duplicated: num_duplicated,
 									_priv: (),
 								}),
 							);

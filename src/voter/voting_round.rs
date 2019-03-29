@@ -166,11 +166,11 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 		&mut self,
 		commit: &Commit<H, N, E::Signature, E::Id>
 	) -> Result<Option<(H, N)>, E::Error> {
-		let base = validate_commit(&commit, self.voters(), &*self.env)?;
+		let (base, _) = validate_commit(&commit, self.voters(), &*self.env)?;
 		if base.is_none() { return Ok(None) }
 
 		for SignedPrecommit { precommit, signature, id } in commit.precommits.iter().cloned() {
-			if let Some(e) = self.votes.import_precommit(&*self.env, precommit, id, signature)? {
+			if let (Some(e), _) = self.votes.import_precommit(&*self.env, precommit, id, signature)? {
 				self.env.precommit_equivocation(self.round_number(), e);
 			}
 		}
@@ -222,12 +222,12 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 
 			match message {
 				Message::Prevote(prevote) => {
-					if let Some(e) = self.votes.import_prevote(&*self.env, prevote, id, signature)? {
+					if let (Some(e), _) = self.votes.import_prevote(&*self.env, prevote, id, signature)? {
 						self.env.prevote_equivocation(self.votes.number(), e);
 					}
 				}
 				Message::Precommit(precommit) => {
-					if let Some(e) = self.votes.import_precommit(&*self.env, precommit, id, signature)? {
+					if let (Some(e), _) = self.votes.import_precommit(&*self.env, precommit, id, signature)? {
 						self.env.precommit_equivocation(self.votes.number(), e);
 					}
 				}
