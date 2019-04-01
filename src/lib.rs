@@ -335,6 +335,8 @@ impl<H: Clone, N: Clone, S, Id> From<Commit<H, N, S, Id>> for CompactCommit<H, N
 	}
 }
 
+/// Struct returned from `validate_commit` function with information
+/// about the validation result.
 pub struct CommitValidationResult<H, N> {
 	ghost: Option<(H, N)>,
 	num_duplicated_precommits: usize,
