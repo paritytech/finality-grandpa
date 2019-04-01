@@ -32,7 +32,7 @@ use std::sync::Arc;
 use crate::round::State as RoundState;
 use crate::{
 	Chain, Commit, CompactCommit, Equivocation, Message, Prevote, Precommit, SignedMessage,
-	BlockNumberOps, validate_commit
+	BlockNumberOps, validate_commit, CommitValidationResult,
 };
 use crate::voter_set::VoterSet;
 use past_rounds::PastRounds;
@@ -159,6 +159,18 @@ impl BadCommit {
 	/// Get the number of invalid voters in the precommits
 	pub fn num_invalid_voters(&self) -> usize {
 		self.num_invalid_voters
+	}
+}
+
+impl<H, N> From<CommitValidationResult<H, N>> for BadCommit {
+	fn from(r: CommitValidationResult<H, N>) -> Self {
+		BadCommit {
+			num_precommits: r.num_precommits,
+			num_duplicated_precommits: r.num_duplicated_precommits,
+			num_equivocations: r.num_equivocations,
+			num_invalid_voters: r.num_invalid_voters,
+			_priv: (),
+		}
 	}
 }
 
@@ -468,13 +480,7 @@ impl<H, N, E: Environment<H, N>, GlobalIn, GlobalOut> Voter<H, N, E, GlobalIn, G
 						} else {
 							// Failing validation of a commit is bad.
 							process_commit_outcome.run(
-								CommitProcessingOutcome::Bad(BadCommit {
-									num_precommits: commit.precommits.len(),
-									num_duplicated_precommits: validation_result.num_duplicated_precommits,
-									num_equivocations: validation_result.num_equivocations,
-									num_invalid_voters: validation_result.num_invalid_voters,
-									_priv: (),
-								}),
+								CommitProcessingOutcome::Bad(BadCommit::from(validation_result)),
 							);
 						}
 					} else {

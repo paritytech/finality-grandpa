@@ -339,6 +339,7 @@ impl<H: Clone, N: Clone, S, Id> From<Commit<H, N, S, Id>> for CompactCommit<H, N
 /// about the validation result.
 pub struct CommitValidationResult<H, N> {
 	ghost: Option<(H, N)>,
+	num_precommits: usize,
 	num_duplicated_precommits: usize,
 	num_equivocations: usize,
 	num_invalid_voters: usize,
@@ -348,6 +349,7 @@ impl<H, N> Default for CommitValidationResult<H, N> {
 	fn default() -> Self {
 		CommitValidationResult {
 			ghost: None,
+			num_precommits: 0,
 			num_duplicated_precommits: 0,
 			num_equivocations: 0,
 			num_invalid_voters: 0,
@@ -375,6 +377,7 @@ pub fn validate_commit<H, N, S, I, C: Chain<H, N>>(
 	S: Eq,
 {
 	let mut validation_result = CommitValidationResult::default();
+	validation_result.num_precommits = commit.precommits.len();
 
 	// check that all precommits are for blocks higher than the target
 	// commit block, and that they're its descendents
