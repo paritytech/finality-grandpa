@@ -160,6 +160,15 @@ impl Clone for Callback {
 	}
 }
 
+impl Callback {
+	fn run(&mut self, o: CommitProcessingOutcome) {
+		match self {
+			Callback::Blank => {},
+			Callback::Work(cb) => cb(o),
+		}
+	}
+}
+
 /// Communication between nodes that is not round-localized.
 #[derive(Clone)]
 #[cfg_attr(feature = "derive-codec", derive(Encode, Decode))]
@@ -408,7 +417,7 @@ impl<H, N, E: Environment<H, N>, GlobalIn, GlobalOut> Voter<H, N, E, GlobalIn, G
 		let mut highest_incoming_foreign_commit = None;
 		while let Async::Ready(Some(item)) = self.global_in.poll()? {
 			match item {
-				CommunicationIn::Commit(round_number, commit, process_commit_outcome) => {
+				CommunicationIn::Commit(round_number, commit, mut process_commit_outcome) => {
 					trace!(target: "afg", "Got commit for round_number {:?}: target_number: {:?}, target_hash: {:?}",
 						round_number,
 						commit.target_number,
@@ -416,12 +425,6 @@ impl<H, N, E: Environment<H, N>, GlobalIn, GlobalOut> Voter<H, N, E, GlobalIn, G
 					);
 
 					let commit: Commit<_, _, _, _> = commit.into();
-
-					let call_with = |callback: Callback, outcome| {
-						if let Callback::Work(mut with_call) = callback {
-							(with_call)(outcome);
-						}
-					};
 
 					// if the commit is for a background round dispatch to round committer.
 					// that returns Some if there wasn't one.
@@ -447,14 +450,10 @@ impl<H, N, E: Environment<H, N>, GlobalIn, GlobalOut> Voter<H, N, E, GlobalIn, G
 								*last_finalized_number = finalized_number.clone();
 								self.env.finalize_block(finalized_hash, finalized_number, round_number, commit)?;
 							}
-							call_with(
-								process_commit_outcome,
-								CommitProcessingOutcome::Good(GoodCommit::new()),
-							);
+							process_commit_outcome.run(CommitProcessingOutcome::Good(GoodCommit::new()));
 						} else {
 							// Failing validation of a commit is bad.
-							call_with(
-								process_commit_outcome,
+							process_commit_outcome.run(
 								CommitProcessingOutcome::Bad(BadCommit {
 									num_precommits: commit.precommits.len(),
 									num_precommits_duplicated: num_duplicated_precommits,
@@ -464,10 +463,7 @@ impl<H, N, E: Environment<H, N>, GlobalIn, GlobalOut> Voter<H, N, E, GlobalIn, G
 						}
 					} else {
 						// Import to backgrounded round is good.
-						call_with(
-							process_commit_outcome,
-							CommitProcessingOutcome::Good(GoodCommit::new()),
-						);
+						process_commit_outcome.run(CommitProcessingOutcome::Good(GoodCommit::new()));
 					}
 				}
 				CommunicationIn::Auxiliary(_aux) => {}, // Do nothing.
