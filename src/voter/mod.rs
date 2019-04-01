@@ -151,7 +151,7 @@ pub enum Callback {
 	/// Default value.
 	Blank,
 	/// Callback to execute given a commit processing outcome.
-	Work(Box<Fn(CommitProcessingOutcome) + Send>),
+	Work(Box<FnMut(CommitProcessingOutcome) + Send>),
 }
 
 impl Clone for Callback {
@@ -418,7 +418,7 @@ impl<H, N, E: Environment<H, N>, GlobalIn, GlobalOut> Voter<H, N, E, GlobalIn, G
 					let commit: Commit<_, _, _, _> = commit.into();
 
 					let call_with = |callback: Callback, outcome| {
-						if let Callback::Work(with_call) = callback {
+						if let Callback::Work(mut with_call) = callback {
 							(with_call)(outcome);
 						}
 					};
