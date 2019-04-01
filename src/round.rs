@@ -84,6 +84,8 @@ enum VoteMultiplicity<Vote, Signature> {
 	Equivocated((Vote, Signature), (Vote, Signature)),
 }
 
+
+
 impl<Vote: Eq, Signature: Eq> VoteMultiplicity<Vote, Signature> {
 	fn contains(&self, vote: &Vote, signature: &Signature) -> bool {
 		match self {
@@ -100,6 +102,11 @@ impl<Vote: Eq, Signature: Eq> VoteMultiplicity<Vote, Signature> {
 struct VoteTracker<Id: Hash + Eq, Vote, Signature> {
 	votes: HashMap<Id, VoteMultiplicity<Vote, Signature>>,
 	current_weight: u64,
+}
+
+pub struct AddVoteResult<'a, Vote, Signature> {
+	multiplicity: Option<&'a VoteMultiplicity<Vote, Signature>>,
+	duplicated: bool,
 }
 
 impl<Id: Hash + Eq + Clone, Vote: Clone + Eq, Signature: Clone + Eq> VoteTracker<Id, Vote, Signature> {
@@ -121,30 +128,39 @@ impl<Id: Hash + Eq + Clone, Vote: Clone + Eq, Signature: Clone + Eq> VoteTracker
 	// since this struct doesn't track the round-number of votes, that must be set
 	// by the caller.
 	fn add_vote(&mut self, id: Id, vote: Vote, signature: Signature, weight: u64)
-		-> (Option<&VoteMultiplicity<Vote, Signature>>, bool)
+		-> AddVoteResult<Vote, Signature>
 	{
 		match self.votes.entry(id) {
 			Entry::Vacant(vacant) => {
 				self.current_weight += weight;
-				return (Some(&*vacant.insert(VoteMultiplicity::Single(vote, signature))), false);
+				let multiplicity = vacant.insert(VoteMultiplicity::Single(vote, signature));
+				return AddVoteResult {
+					multiplicity: Some(multiplicity),
+					duplicated: false,
+				};
 			}
 			Entry::Occupied(mut occupied) => {
 				if occupied.get().contains(&vote, &signature) {
-					return (None, true);
+					return AddVoteResult { multiplicity: None, duplicated: true };
 				}
 
 				// import, but ignore further equivocations.
 				let new_val = match *occupied.get_mut() {
 					VoteMultiplicity::Single(ref v, ref s) =>
 						Some(VoteMultiplicity::Equivocated((v.clone(), s.clone()), (vote, signature))),
-					VoteMultiplicity::Equivocated(_, _) => return (None, false),
+					VoteMultiplicity::Equivocated(_, _) => {
+						return AddVoteResult { multiplicity: None, duplicated: false }
+					}
 				};
 
 				if let Some(new_val) = new_val {
 					*occupied.get_mut() = new_val;
 				}
 
-				(Some(&*occupied.into_mut()), false)
+				AddVoteResult {
+					multiplicity: Some(&*occupied.into_mut()),
+					duplicated: false
+				}
 			}
 		}
 	}
@@ -287,11 +303,11 @@ impl<Id, H, N, Signature> Round<Id, H, N, Signature> where
 
 		let equivocation = {
 			let multiplicity = match self.prevote.add_vote(signer.clone(), vote, signature, weight) {
-				(Some(m), _) => m,
-				(None, duplicated) => {
+				AddVoteResult { multiplicity: Some(m), .. } => m,
+				AddVoteResult { duplicated, .. } => {
 					return Ok(ImportResult {
-						valid_voter,
 						equivocation: None,
+						valid_voter,
 						duplicated,
 					})
 				},
@@ -374,8 +390,8 @@ impl<Id, H, N, Signature> Round<Id, H, N, Signature> where
 
 		let equivocation = {
 			let multiplicity = match self.precommit.add_vote(signer.clone(), vote, signature, weight) {
-				(Some(m), _) => m,
-				(None, duplicated) => {
+				AddVoteResult { multiplicity: Some(m), .. } => m,
+				AddVoteResult { duplicated, .. } => {
 					return Ok(ImportResult {
 						valid_voter,
 						equivocation: None,

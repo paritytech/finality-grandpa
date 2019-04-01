@@ -136,7 +136,7 @@ impl GoodCommit {
 pub struct BadCommit {
 	_priv: (), // lets us add stuff without breaking API.
 	num_precommits: usize,
-	duplicated_precommits: usize,
+	num_duplicated_precommits: usize,
 }
 
 impl BadCommit {
@@ -147,7 +147,7 @@ impl BadCommit {
 
 	/// Get the number of duplicated precommits
 	pub fn num_duplicated(&self) -> usize {
-		self.duplicated_precommits
+		self.num_duplicated_precommits
 	}
 }
 
@@ -461,7 +461,7 @@ impl<H, N, E: Environment<H, N>, GlobalIn, GlobalOut> Voter<H, N, E, GlobalIn, G
 							process_commit_outcome.run(
 								CommitProcessingOutcome::Bad(BadCommit {
 									num_precommits: commit.precommits.len(),
-									num_precommits_duplicated: num_duplicated_precommits,
+									num_duplicated_precommits: num_duplicated_precommits,
 									_priv: (),
 								}),
 							);
