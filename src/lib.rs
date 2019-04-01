@@ -76,6 +76,7 @@ mod testing;
 use collections::Vec;
 use std::fmt;
 use crate::voter_set::VoterSet;
+use round::ImportResult;
 
 #[cfg(not(feature = "std"))]
 mod collections {
@@ -386,7 +387,7 @@ pub fn validate_commit<H, N, S, I, C: Chain<H, N>>(
 	let mut num_duplicated_precommits = 0;
 	for SignedPrecommit { precommit, id, signature } in commit.precommits.iter() {
 		match round.import_precommit(chain, precommit.clone(), id.clone(), signature.clone())? {
-			(Some(_), _) => {
+			ImportResult { equivocation: Some(_), .. } => {
 				// allow only one equivocation per voter, as extras are redundant.
 				if !equivocated.insert(id) {
 					return Ok(CommitValidationResult {
@@ -395,8 +396,8 @@ pub fn validate_commit<H, N, S, I, C: Chain<H, N>>(
 					}) 
 				}
 			},
-			(None, is_duplicate) => {
-				if is_duplicate {
+			ImportResult { duplicated, .. } => {
+				if duplicated {
 					num_duplicated_precommits += 1;
 				}
 			}

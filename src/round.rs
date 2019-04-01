@@ -221,6 +221,12 @@ pub struct Round<Id: Hash + Eq, H: Hash + Eq, N, Signature> {
 	completable: bool, // whether the round is completable
 }
 
+pub struct ImportResult<Id, P, Signature> {
+	pub valid_voter: bool,
+	pub duplicated: bool,
+	pub equivocation: Option<Equivocation<Id, P, Signature>>,
+}
+
 impl<Id, H, N, Signature> Round<Id, H, N, Signature> where
 	Id: Hash + Clone + Eq + ::std::fmt::Debug,
 	H: Hash + Clone + Eq + Ord + ::std::fmt::Debug,
@@ -255,7 +261,8 @@ impl<Id, H, N, Signature> Round<Id, H, N, Signature> where
 		self.round_number
 	}
 
-	/// Import a prevote. Returns an equivocation proof if the vote is an equivocation.
+	/// Import a prevote. Returns an equivocation proof, if the vote is an equivocation,
+	/// and a bool indicating if the vote is duplicated.
 	///
 	/// Ignores duplicate prevotes (not equivocations).
 	pub fn import_prevote<C: Chain<H, N>>(
@@ -264,17 +271,30 @@ impl<Id, H, N, Signature> Round<Id, H, N, Signature> where
 		vote: Prevote<H, N>,
 		signer: Id,
 		signature: Signature,
-	) -> Result<(Option<Equivocation<Id, Prevote<H, N>, Signature>>, bool), crate::Error> {
+	) -> Result<ImportResult<Id, Prevote<H, N>, Signature>, crate::Error> {
 		let info = match self.voters.info(&signer) {
 			Some(info) => info,
-			None => return Ok((None, false)),
+			None => {
+				return Ok(ImportResult {
+					valid_voter: false,
+					equivocation: None,
+					duplicated: false,
+				})
+			},
 		};
+		let valid_voter = true;
 		let weight = info.weight();
 
 		let equivocation = {
 			let multiplicity = match self.prevote.add_vote(signer.clone(), vote, signature, weight) {
 				(Some(m), _) => m,
-				(None, is_duplicated) => return Ok((None, is_duplicated)),
+				(None, duplicated) => {
+					return Ok(ImportResult {
+						valid_voter,
+						equivocation: None,
+						duplicated,
+					})
+				},
 			};
 			let round_number = self.round_number;
 
@@ -321,11 +341,15 @@ impl<Id, H, N, Signature> Round<Id, H, N, Signature> where
 		}
 
 		self.update();
-		Ok((equivocation, false))
+		Ok(ImportResult {
+			valid_voter,
+			equivocation,
+			duplicated: false,
+		})
 	}
 
-	/// Import a precommit. Returns an equivocation proof if the vote is an
-	/// equivocation.
+	/// Import a precommit. Returns an equivocation proof, if the vote is an
+	/// equivocation, and a bool indicating if the vote is duplicated.
 	///
 	/// Ignores duplicate precommits (not equivocations).
 	pub fn import_precommit<C: Chain<H, N>>(
@@ -334,17 +358,30 @@ impl<Id, H, N, Signature> Round<Id, H, N, Signature> where
 		vote: Precommit<H, N>,
 		signer: Id,
 		signature: Signature,
-	) -> Result<(Option<Equivocation<Id, Precommit<H, N>, Signature>>, bool), crate::Error> {
+	) -> Result<ImportResult<Id, Precommit<H, N>, Signature>, crate::Error> {
 		let info = match self.voters.info(&signer) {
 			Some(info) => info,
-			None => return Ok((None, false)),
+			None => {
+				return Ok(ImportResult {
+					valid_voter: false,
+					equivocation: None,
+					duplicated: false,
+				})
+			},
 		};
+		let valid_voter = true;
 		let weight = info.weight();
 
 		let equivocation = {
 			let multiplicity = match self.precommit.add_vote(signer.clone(), vote, signature, weight) {
 				(Some(m), _) => m,
-				(None, is_duplicated) => return Ok((None, is_duplicated)),
+				(None, duplicated) => {
+					return Ok(ImportResult {
+						valid_voter,
+						equivocation: None,
+						duplicated,
+					})
+				},
 			};
 			let round_number = self.round_number;
 
@@ -380,7 +417,11 @@ impl<Id, H, N, Signature> Round<Id, H, N, Signature> where
 		};
 
 		self.update();
-		Ok((equivocation, false))
+		Ok(ImportResult {
+			valid_voter,
+			equivocation,
+			duplicated: false,
+		})
 	}
 
 	// Get current
@@ -765,7 +806,7 @@ mod tests {
 			Prevote::new("FC", 10),
 			"Eve", // 3 on F, E
 			Signature("Eve-1"),
-		).unwrap().0.is_none());
+		).unwrap().equivocation.is_none());
 
 
 		assert!(round.prevote_ghost.is_none());
@@ -776,7 +817,7 @@ mod tests {
 			Prevote::new("ED", 10),
 			"Eve", // still 3 on E
 			Signature("Eve-2"),
-		).unwrap().0.is_some());
+		).unwrap().equivocation.is_some());
 
 		// third prevote: returns nothing.
 		assert!(round.import_prevote(
@@ -784,7 +825,7 @@ mod tests {
 			Prevote::new("F", 7),
 			"Eve", // still 3 on F and E
 			Signature("Eve-2"),
-		).unwrap().0.is_none());
+		).unwrap().equivocation.is_none());
 
 		// three eves together would be enough.
 
@@ -795,7 +836,7 @@ mod tests {
 			Prevote::new("FA", 8),
 			"Bob", // add 7 to FA and you get FA.
 			Signature("Bob-1"),
-		).unwrap().0.is_none());
+		).unwrap().equivocation.is_none());
 
 		assert_eq!(round.prevote_ghost, Some(("FA", 8)));
 	}
