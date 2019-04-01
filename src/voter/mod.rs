@@ -21,7 +21,6 @@
 //!   - incoming vote streams
 //!   - providing voter weights.
 
-use crate::CommitValidationResult;
 use futures::prelude::*;
 use futures::sync::mpsc::{self, UnboundedReceiver};
 
@@ -137,6 +136,8 @@ pub struct BadCommit {
 	_priv: (), // lets us add stuff without breaking API.
 	num_precommits: usize,
 	num_duplicated_precommits: usize,
+	num_equivocations: usize,
+	num_invalid_voters: usize,
 }
 
 impl BadCommit {
@@ -148,6 +149,16 @@ impl BadCommit {
 	/// Get the number of duplicated precommits
 	pub fn num_duplicated(&self) -> usize {
 		self.num_duplicated_precommits
+	}
+
+	/// Get the number of equivocations in the precommits
+	pub fn num_equivocations(&self) -> usize {
+		self.num_equivocations
+	}
+
+	/// Get the number of invalid voters in the precommits
+	pub fn num_invalid_voters(&self) -> usize {
+		self.num_invalid_voters
 	}
 }
 
@@ -436,13 +447,10 @@ impl<H, N, E: Environment<H, N>, GlobalIn, GlobalOut> Voter<H, N, E, GlobalIn, G
 					if let Some(commit) = self.past_rounds.import_commit(round_number, commit) {
 						// otherwise validate the commit and signal the finalized block
 						// (if any) to the environment
-						
-						let CommitValidationResult {
-							ghost,
-							num_duplicated_precommits
-						} = validate_commit(&commit, &self.voters, &*self.env)?;
-						
-						if let Some((finalized_hash, finalized_number)) = ghost {
+
+						let validation_result = validate_commit(&commit, &self.voters, &*self.env)?;
+
+						if let Some((finalized_hash, finalized_number)) = validation_result.ghost {
 							highest_incoming_foreign_commit = Some(highest_incoming_foreign_commit
 								.map_or(round_number, |n| cmp::max(n, round_number)));
 
@@ -461,7 +469,9 @@ impl<H, N, E: Environment<H, N>, GlobalIn, GlobalOut> Voter<H, N, E, GlobalIn, G
 							process_commit_outcome.run(
 								CommitProcessingOutcome::Bad(BadCommit {
 									num_precommits: commit.precommits.len(),
-									num_duplicated_precommits: num_duplicated_precommits,
+									num_duplicated_precommits: validation_result.num_duplicated_precommits,
+									num_equivocations: validation_result.num_equivocations,
+									num_invalid_voters: validation_result.num_invalid_voters,
 									_priv: (),
 								}),
 							);

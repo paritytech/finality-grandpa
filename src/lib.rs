@@ -340,6 +340,19 @@ impl<H: Clone, N: Clone, S, Id> From<Commit<H, N, S, Id>> for CompactCommit<H, N
 pub struct CommitValidationResult<H, N> {
 	ghost: Option<(H, N)>,
 	num_duplicated_precommits: usize,
+	num_equivocations: usize,
+	num_invalid_voters: usize,
+}
+
+impl<H, N> CommitValidationResult<H, N> {
+	fn new() -> Self {
+		CommitValidationResult {
+			ghost: None,
+			num_duplicated_precommits: 0,
+			num_equivocations: 0,
+			num_invalid_voters: 0,
+		}
+	}
 }
 
 /// Validates a GRANDPA commit message and returns the ghost calculated using
@@ -361,6 +374,8 @@ pub fn validate_commit<H, N, S, I, C: Chain<H, N>>(
 	I: Clone + std::hash::Hash + Eq + std::fmt::Debug,
 	S: Eq,
 {
+	let mut validation_result = CommitValidationResult::new();
+
 	// check that all precommits are for blocks higher than the target
 	// commit block, and that they're its descendents
 	if !commit.precommits.iter().all(|signed| {
@@ -370,10 +385,7 @@ pub fn validate_commit<H, N, S, I, C: Chain<H, N>>(
 				signed.precommit.target_hash.clone(),
 			)
 	}) {
-		return Ok(CommitValidationResult{ 
-			ghost: None,
-			num_duplicated_precommits: 0,
-		});
+		return Ok(validation_result);
 	}
 
 	let mut equivocated = crate::collections::HashSet::new();
@@ -386,21 +398,21 @@ pub fn validate_commit<H, N, S, I, C: Chain<H, N>>(
 		base: (commit.target_hash.clone(), commit.target_number),
 	});
 
-	let mut num_duplicated_precommits = 0;
 	for SignedPrecommit { precommit, id, signature } in commit.precommits.iter() {
 		match round.import_precommit(chain, precommit.clone(), id.clone(), signature.clone())? {
 			ImportResult { equivocation: Some(_), .. } => {
+				validation_result.num_equivocations += 1;
 				// allow only one equivocation per voter, as extras are redundant.
 				if !equivocated.insert(id) {
-					return Ok(CommitValidationResult {
-						ghost: None,
-						num_duplicated_precommits
-					}) 
+					return Ok(validation_result) 
 				}
 			},
-			ImportResult { duplicated, .. } => {
+			ImportResult { duplicated, valid_voter, .. } => {
 				if duplicated {
-					num_duplicated_precommits += 1;
+					validation_result.num_duplicated_precommits += 1;
+				}
+				if !valid_voter {
+					validation_result.num_invalid_voters += 1;
 				}
 			}
 		}
@@ -408,10 +420,8 @@ pub fn validate_commit<H, N, S, I, C: Chain<H, N>>(
 
 	// if a ghost is found then it must be equal or higher than the commit
 	// target, otherwise the commit is invalid
-	Ok(CommitValidationResult {
-		ghost: round.precommit_ghost(),
-		num_duplicated_precommits,
-	})
+	validation_result.ghost = round.precommit_ghost();
+	Ok(validation_result)
 }
 
 /// Get the threshold weight given the total voting weight.
