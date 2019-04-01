@@ -344,8 +344,8 @@ pub struct CommitValidationResult<H, N> {
 	num_invalid_voters: usize,
 }
 
-impl<H, N> CommitValidationResult<H, N> {
-	fn new() -> Self {
+impl<H, N> Default for CommitValidationResult<H, N> {
+	fn default() -> Self {
 		CommitValidationResult {
 			ghost: None,
 			num_duplicated_precommits: 0,
@@ -374,7 +374,7 @@ pub fn validate_commit<H, N, S, I, C: Chain<H, N>>(
 	I: Clone + std::hash::Hash + Eq + std::fmt::Debug,
 	S: Eq,
 {
-	let mut validation_result = CommitValidationResult::new();
+	let mut validation_result = CommitValidationResult::default();
 
 	// check that all precommits are for blocks higher than the target
 	// commit block, and that they're its descendents

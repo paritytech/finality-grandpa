@@ -162,6 +162,7 @@ impl BadCommit {
 	}
 }
 
+/// Callback used to propagate the commit in case the outcome is good.
 #[cfg_attr(feature = "derive-codec", derive(Encode, Decode))]
 pub enum Callback {
 	/// Default value.

@@ -84,8 +84,6 @@ enum VoteMultiplicity<Vote, Signature> {
 	Equivocated((Vote, Signature), (Vote, Signature)),
 }
 
-
-
 impl<Vote: Eq, Signature: Eq> VoteMultiplicity<Vote, Signature> {
 	fn contains(&self, vote: &Vote, signature: &Signature) -> bool {
 		match self {
@@ -119,7 +117,7 @@ impl<Id: Hash + Eq + Clone, Vote: Clone + Eq, Signature: Clone + Eq> VoteTracker
 	}
 
 	// track a vote, returning a value containing the multiplicity of all votes from this ID
-	// and a boolean indicating if the vote is duplicated.
+	// and a bool indicating if the vote is duplicated.
 	// if the vote is the first equivocation, returns a value indicating
 	// it as such (the new vote is always the last in the multiplicity).
 	//

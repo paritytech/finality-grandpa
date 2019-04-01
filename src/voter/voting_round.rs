@@ -229,7 +229,6 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 					}
 				}
 				Message::Precommit(precommit) => {
-
 					let import_result = self.votes.import_precommit(&*self.env, precommit, id, signature)?;
 					if let ImportResult { equivocation: Some(e), .. } = import_result {
 						self.env.precommit_equivocation(self.votes.number(), e);
