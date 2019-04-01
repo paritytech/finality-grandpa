@@ -136,13 +136,18 @@ impl GoodCommit {
 pub struct BadCommit {
 	_priv: (), // lets us add stuff without breaking API.
 	num_precommits: usize,
-	num_precommits_duplicated: usize,
+	duplicated_precommits: usize,
 }
 
 impl BadCommit {
 	/// Get the number of precommits
 	pub fn num_precommits(&self) -> usize {
 		self.num_precommits
+	}
+
+	/// Get the number of duplicated precommits
+	pub fn num_duplicated(&self) -> usize {
+		self.duplicated_precommits
 	}
 }
 
