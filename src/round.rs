@@ -102,6 +102,12 @@ struct VoteTracker<Id: Hash + Eq, Vote, Signature> {
 	current_weight: u64,
 }
 
+/// Result of adding a vote.
+pub(crate) struct AddVoteResult<'a, Vote, Signature> {
+	multiplicity: Option<&'a VoteMultiplicity<Vote, Signature>>,
+	duplicated: bool,
+}
+
 impl<Id: Hash + Eq + Clone, Vote: Clone + Eq, Signature: Clone + Eq> VoteTracker<Id, Vote, Signature> {
 	fn new() -> Self {
 		VoteTracker {
@@ -110,7 +116,8 @@ impl<Id: Hash + Eq + Clone, Vote: Clone + Eq, Signature: Clone + Eq> VoteTracker
 		}
 	}
 
-	// track a vote, returning a value containing the multiplicity of all votes from this ID.
+	// track a vote, returning a value containing the multiplicity of all votes from this ID
+	// and a bool indicating if the vote is duplicated.
 	// if the vote is the first equivocation, returns a value indicating
 	// it as such (the new vote is always the last in the multiplicity).
 	//
@@ -120,30 +127,39 @@ impl<Id: Hash + Eq + Clone, Vote: Clone + Eq, Signature: Clone + Eq> VoteTracker
 	// since this struct doesn't track the round-number of votes, that must be set
 	// by the caller.
 	fn add_vote(&mut self, id: Id, vote: Vote, signature: Signature, weight: u64)
-		-> Option<&VoteMultiplicity<Vote, Signature>>
+		-> AddVoteResult<Vote, Signature>
 	{
 		match self.votes.entry(id) {
 			Entry::Vacant(vacant) => {
 				self.current_weight += weight;
-				return Some(&*vacant.insert(VoteMultiplicity::Single(vote, signature)));
+				let multiplicity = vacant.insert(VoteMultiplicity::Single(vote, signature));
+				return AddVoteResult {
+					multiplicity: Some(multiplicity),
+					duplicated: false,
+				};
 			}
 			Entry::Occupied(mut occupied) => {
 				if occupied.get().contains(&vote, &signature) {
-					return None;
+					return AddVoteResult { multiplicity: None, duplicated: true };
 				}
 
 				// import, but ignore further equivocations.
 				let new_val = match *occupied.get_mut() {
 					VoteMultiplicity::Single(ref v, ref s) =>
 						Some(VoteMultiplicity::Equivocated((v.clone(), s.clone()), (vote, signature))),
-					VoteMultiplicity::Equivocated(_, _) => return None,
+					VoteMultiplicity::Equivocated(_, _) => {
+						return AddVoteResult { multiplicity: None, duplicated: false }
+					}
 				};
 
 				if let Some(new_val) = new_val {
 					*occupied.get_mut() = new_val;
 				}
 
-				Some(&*occupied.into_mut())
+				AddVoteResult {
+					multiplicity: Some(&*occupied.into_mut()),
+					duplicated: false
+				}
 			}
 		}
 	}
@@ -220,6 +236,26 @@ pub struct Round<Id: Hash + Eq, H: Hash + Eq, N, Signature> {
 	completable: bool, // whether the round is completable
 }
 
+/// Result of importing a Prevote or Precommit.
+pub(crate) struct ImportResult<Id, P, Signature> {
+	/// Indicates if the voter is part of the voter set.
+	pub(crate) valid_voter: bool,
+	/// Indicates if the vote is duplicated.
+	pub(crate) duplicated: bool,
+	/// An equivocation proof, if the vote is an equivocation.
+	pub(crate) equivocation: Option<Equivocation<Id, P, Signature>>,
+}
+
+impl<Id, P, Signature> Default for ImportResult<Id, P, Signature> {
+	fn default() -> Self {
+		ImportResult {
+			valid_voter: false,
+			duplicated: false,
+			equivocation: None,
+		}
+	}
+}
+
 impl<Id, H, N, Signature> Round<Id, H, N, Signature> where
 	Id: Hash + Clone + Eq + ::std::fmt::Debug,
 	H: Hash + Clone + Eq + Ord + ::std::fmt::Debug,
@@ -254,26 +290,33 @@ impl<Id, H, N, Signature> Round<Id, H, N, Signature> where
 		self.round_number
 	}
 
-	/// Import a prevote. Returns an equivocation proof if the vote is an equivocation.
+	/// Import a prevote. Returns an equivocation proof, if the vote is an equivocation,
+	/// and a bool indicating if the vote is duplicated (see `ImportResult`).
 	///
 	/// Ignores duplicate prevotes (not equivocations).
-	pub fn import_prevote<C: Chain<H, N>>(
+	pub(crate) fn import_prevote<C: Chain<H, N>>(
 		&mut self,
 		chain: &C,
 		vote: Prevote<H, N>,
 		signer: Id,
 		signature: Signature,
-	) -> Result<Option<Equivocation<Id, Prevote<H, N>, Signature>>, crate::Error> {
+	) -> Result<ImportResult<Id, Prevote<H, N>, Signature>, crate::Error> {
+		let mut import_result = ImportResult::default();
+
 		let info = match self.voters.info(&signer) {
 			Some(info) => info,
-			None => return Ok(None),
+			None => return Ok(import_result),
 		};
+		import_result.valid_voter = true;
 		let weight = info.weight();
 
 		let equivocation = {
 			let multiplicity = match self.prevote.add_vote(signer.clone(), vote, signature, weight) {
-				Some(m) => m,
-				None => return Ok(None),
+				AddVoteResult { multiplicity: Some(m), .. } => m,
+				AddVoteResult { duplicated, .. } => {
+					import_result.duplicated = duplicated;
+					return Ok(import_result)
+				},
 			};
 			let round_number = self.round_number;
 
@@ -320,30 +363,37 @@ impl<Id, H, N, Signature> Round<Id, H, N, Signature> where
 		}
 
 		self.update();
-		Ok(equivocation)
+		import_result.equivocation = equivocation;
+		Ok(import_result)
 	}
 
-	/// Import a precommit. Returns an equivocation proof if the vote is an
-	/// equivocation.
+	/// Import a precommit. Returns an equivocation proof, if the vote is an
+	/// equivocation, and a bool indicating if the vote is duplicated (see `ImportResult`).
 	///
 	/// Ignores duplicate precommits (not equivocations).
-	pub fn import_precommit<C: Chain<H, N>>(
+	pub(crate) fn import_precommit<C: Chain<H, N>>(
 		&mut self,
 		chain: &C,
 		vote: Precommit<H, N>,
 		signer: Id,
 		signature: Signature,
-	) -> Result<Option<Equivocation<Id, Precommit<H, N>, Signature>>, crate::Error> {
+	) -> Result<ImportResult<Id, Precommit<H, N>, Signature>, crate::Error> {
+		let mut import_result = ImportResult::default();
+
 		let info = match self.voters.info(&signer) {
 			Some(info) => info,
-			None => return Ok(None),
+			None => return Ok(import_result),
 		};
+		import_result.valid_voter = true;
 		let weight = info.weight();
 
 		let equivocation = {
 			let multiplicity = match self.precommit.add_vote(signer.clone(), vote, signature, weight) {
-				Some(m) => m,
-				None => return Ok(None),
+				AddVoteResult { multiplicity: Some(m), .. } => m,
+				AddVoteResult { duplicated, .. } => {
+					import_result.duplicated = duplicated;
+					return Ok(import_result)
+				},
 			};
 			let round_number = self.round_number;
 
@@ -379,7 +429,8 @@ impl<Id, H, N, Signature> Round<Id, H, N, Signature> where
 		};
 
 		self.update();
-		Ok(equivocation)
+		import_result.equivocation = equivocation;
+		Ok(import_result)
 	}
 
 	// Get current
@@ -769,7 +820,7 @@ mod tests {
 			Prevote::new("FC", 10),
 			"Eve", // 3 on F, E
 			Signature("Eve-1"),
-		).unwrap().is_none());
+		).unwrap().equivocation.is_none());
 
 
 		assert!(round.prevote_ghost.is_none());
@@ -780,7 +831,7 @@ mod tests {
 			Prevote::new("ED", 10),
 			"Eve", // still 3 on E
 			Signature("Eve-2"),
-		).unwrap().is_some());
+		).unwrap().equivocation.is_some());
 
 		// third prevote: returns nothing.
 		assert!(round.import_prevote(
@@ -788,7 +839,7 @@ mod tests {
 			Prevote::new("F", 7),
 			"Eve", // still 3 on F and E
 			Signature("Eve-2"),
-		).unwrap().is_none());
+		).unwrap().equivocation.is_none());
 
 		// three eves together would be enough.
 
@@ -799,7 +850,7 @@ mod tests {
 			Prevote::new("FA", 8),
 			"Bob", // add 7 to FA and you get FA.
 			Signature("Bob-1"),
-		).unwrap().is_none());
+		).unwrap().equivocation.is_none());
 
 		assert_eq!(round.prevote_ghost, Some(("FA", 8)));
 	}

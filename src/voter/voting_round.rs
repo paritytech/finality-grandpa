@@ -25,7 +25,7 @@ use std::sync::Arc;
 use crate::round::{Round, State as RoundState};
 use crate::{
 	Commit, Message, Prevote, Precommit, PrimaryPropose, SignedMessage,
-	SignedPrecommit, BlockNumberOps, validate_commit
+	SignedPrecommit, BlockNumberOps, validate_commit, ImportResult,
 };
 use crate::voter_set::VoterSet;
 use super::{Environment, Buffered};
@@ -214,11 +214,12 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 		&mut self,
 		commit: &Commit<H, N, E::Signature, E::Id>
 	) -> Result<Option<(H, N)>, E::Error> {
-		let base = validate_commit(&commit, self.voters(), &*self.env)?;
+		let base = validate_commit(&commit, self.voters(), &*self.env)?.ghost;
 		if base.is_none() { return Ok(None) }
 
 		for SignedPrecommit { precommit, signature, id } in commit.precommits.iter().cloned() {
-			if let Some(e) = self.votes.import_precommit(&*self.env, precommit, id, signature)? {
+			let import_result = self.votes.import_precommit(&*self.env, precommit, id, signature)?;
+			if let ImportResult { equivocation: Some(e), .. } = import_result {
 				self.env.precommit_equivocation(self.round_number(), e);
 			}
 		}
@@ -291,12 +292,14 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 
 			match message {
 				Message::Prevote(prevote) => {
-					if let Some(e) = self.votes.import_prevote(&*self.env, prevote, id, signature)? {
+					let import_result = self.votes.import_prevote(&*self.env, prevote, id, signature)?;
+					if let ImportResult { equivocation: Some(e), .. } = import_result {
 						self.env.prevote_equivocation(self.votes.number(), e);
 					}
 				}
 				Message::Precommit(precommit) => {
-					if let Some(e) = self.votes.import_precommit(&*self.env, precommit, id, signature)? {
+					let import_result = self.votes.import_precommit(&*self.env, precommit, id, signature)?;
+					if let ImportResult { equivocation: Some(e), .. } = import_result {
 						self.env.precommit_equivocation(self.votes.number(), e);
 					}
 				}

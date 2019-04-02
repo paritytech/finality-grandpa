@@ -38,7 +38,7 @@ use std::sync::Arc;
 use crate::round::State as RoundState;
 use crate::{
 	Chain, Commit, CompactCommit, Equivocation, Message, Prevote, Precommit, PrimaryPropose,
-	SignedMessage, BlockNumberOps, validate_commit
+	SignedMessage, BlockNumberOps, validate_commit, CommitValidationResult
 };
 use crate::voter_set::VoterSet;
 use past_rounds::PastRounds;
@@ -128,13 +128,105 @@ pub enum CommunicationOut<H, N, S, Id> {
 	Auxiliary(AuxiliaryCommunication<H, N, Id>),
 }
 
-/// Communication between nodes that is not round-localized.
+/// The outcome of processing a commit.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "derive-codec", derive(Encode, Decode))]
+pub enum CommitProcessingOutcome {
+	/// It was beneficial to process this commit.
+	Good(GoodCommit),
+	/// It wasn't beneficial to process this commit. We wasted resources.
+	Bad(BadCommit),
+}
+
+/// The result of processing for a good commit.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "derive-codec", derive(Encode, Decode))]
+pub struct GoodCommit {
+	_priv: (), // lets us add stuff without breaking API.
+}
+
+impl GoodCommit {
+	fn new() -> Self {
+		GoodCommit { _priv: () }
+	}
+}
+
+/// The result of processing for a bad commit
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "derive-codec", derive(Encode, Decode))]
+pub struct BadCommit {
+	_priv: (), // lets us add stuff without breaking API.
+	num_precommits: usize,
+	num_duplicated_precommits: usize,
+	num_equivocations: usize,
+	num_invalid_voters: usize,
+}
+
+impl BadCommit {
+	/// Get the number of precommits
+	pub fn num_precommits(&self) -> usize {
+		self.num_precommits
+	}
+
+	/// Get the number of duplicated precommits
+	pub fn num_duplicated(&self) -> usize {
+		self.num_duplicated_precommits
+	}
+
+	/// Get the number of equivocations in the precommits
+	pub fn num_equivocations(&self) -> usize {
+		self.num_equivocations
+	}
+
+	/// Get the number of invalid voters in the precommits
+	pub fn num_invalid_voters(&self) -> usize {
+		self.num_invalid_voters
+	}
+}
+
+impl<H, N> From<CommitValidationResult<H, N>> for BadCommit {
+	fn from(r: CommitValidationResult<H, N>) -> Self {
+		BadCommit {
+			num_precommits: r.num_precommits,
+			num_duplicated_precommits: r.num_duplicated_precommits,
+			num_equivocations: r.num_equivocations,
+			num_invalid_voters: r.num_invalid_voters,
+			_priv: (),
+		}
+	}
+}
+
+/// Callback used to propagate the commit in case the outcome is good.
+#[cfg_attr(feature = "derive-codec", derive(Encode, Decode))]
+pub enum Callback {
+	/// Default value.
+	Blank,
+	/// Callback to execute given a commit processing outcome.
+	Work(Box<FnMut(CommitProcessingOutcome) + Send>),
+}
+
+impl Clone for Callback {
+	fn clone(&self) -> Self {
+		Callback::Blank
+	}
+}
+
+impl Callback {
+	fn run(&mut self, o: CommitProcessingOutcome) {
+		match self {
+			Callback::Blank => {},
+			Callback::Work(cb) => cb(o),
+		}
+	}
+}
+
+/// Communication between nodes that is not round-localized.
+#[derive(Clone)]
 #[cfg_attr(feature = "derive-codec", derive(Encode, Decode))]
 pub enum CommunicationIn<H, N, S, Id> {
 	/// A commit message.
 	#[cfg_attr(feature = "derive-codec", codec(index = "0"))]
-	Commit(u64, CompactCommit<H, N, S, Id>),
+	Commit(u64, CompactCommit<H, N, S, Id>, Callback),
 	/// Auxiliary messages out.
 	#[cfg_attr(feature = "derive-codec", codec(index = "1"))]
 	Auxiliary(AuxiliaryCommunication<H, N, Id>),
@@ -378,7 +470,7 @@ impl<H, N, E: Environment<H, N>, GlobalIn, GlobalOut> Voter<H, N, E, GlobalIn, G
 		let mut highest_incoming_foreign_commit = None;
 		while let Async::Ready(Some(item)) = self.global_in.poll()? {
 			match item {
-				CommunicationIn::Commit(round_number, commit) => {
+				CommunicationIn::Commit(round_number, commit, mut process_commit_outcome) => {
 					trace!(target: "afg", "Got commit for round_number {:?}: target_number: {:?}, target_hash: {:?}",
 						round_number,
 						commit.target_number,
@@ -392,11 +484,10 @@ impl<H, N, E: Environment<H, N>, GlobalIn, GlobalOut> Voter<H, N, E, GlobalIn, G
 					if let Some(commit) = self.past_rounds.import_commit(round_number, commit) {
 						// otherwise validate the commit and signal the finalized block
 						// (if any) to the environment
-						if let Some((finalized_hash, finalized_number)) = validate_commit(
-							&commit,
-							&self.voters,
-							&*self.env,
-						)? {
+
+						let validation_result = validate_commit(&commit, &self.voters, &*self.env)?;
+
+						if let Some((finalized_hash, finalized_number)) = validation_result.ghost {
 							highest_incoming_foreign_commit = Some(highest_incoming_foreign_commit
 								.map_or(round_number, |n| cmp::max(n, round_number)));
 
@@ -409,7 +500,16 @@ impl<H, N, E: Environment<H, N>, GlobalIn, GlobalOut> Voter<H, N, E, GlobalIn, G
 								*last_finalized_number = finalized_number.clone();
 								self.env.finalize_block(finalized_hash, finalized_number, round_number, commit)?;
 							}
+							process_commit_outcome.run(CommitProcessingOutcome::Good(GoodCommit::new()));
+						} else {
+							// Failing validation of a commit is bad.
+							process_commit_outcome.run(
+								CommitProcessingOutcome::Bad(BadCommit::from(validation_result)),
+							);
 						}
+					} else {
+						// Import to backgrounded round is good.
+						process_commit_outcome.run(CommitProcessingOutcome::Good(GoodCommit::new()));
 					}
 				}
 				CommunicationIn::Auxiliary(_aux) => {}, // Do nothing.

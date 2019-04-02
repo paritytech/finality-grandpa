@@ -76,6 +76,7 @@ mod testing;
 use collections::Vec;
 use std::fmt;
 use crate::voter_set::VoterSet;
+use round::ImportResult;
 
 #[cfg(not(feature = "std"))]
 mod collections {
@@ -334,6 +335,28 @@ impl<H: Clone, N: Clone, S, Id> From<Commit<H, N, S, Id>> for CompactCommit<H, N
 	}
 }
 
+/// Struct returned from `validate_commit` function with information
+/// about the validation result.
+pub struct CommitValidationResult<H, N> {
+	ghost: Option<(H, N)>,
+	num_precommits: usize,
+	num_duplicated_precommits: usize,
+	num_equivocations: usize,
+	num_invalid_voters: usize,
+}
+
+impl<H, N> Default for CommitValidationResult<H, N> {
+	fn default() -> Self {
+		CommitValidationResult {
+			ghost: None,
+			num_precommits: 0,
+			num_duplicated_precommits: 0,
+			num_equivocations: 0,
+			num_invalid_voters: 0,
+		}
+	}
+}
+
 /// Validates a GRANDPA commit message and returns the ghost calculated using
 /// the precommits in the commit message and using the commit target as a
 /// base.
@@ -346,13 +369,16 @@ pub fn validate_commit<H, N, S, I, C: Chain<H, N>>(
 	commit: &Commit<H, N, S, I>,
 	voters: &VoterSet<I>,
 	chain: &C,
-) -> Result<Option<(H, N)>, crate::Error>
+) -> Result<CommitValidationResult<H, N>, crate::Error>
 	where
 	H: std::hash::Hash + Clone + Eq + Ord + std::fmt::Debug,
 	N: Copy + BlockNumberOps + std::fmt::Debug,
 	I: Clone + std::hash::Hash + Eq + std::fmt::Debug,
 	S: Eq,
 {
+	let mut validation_result = CommitValidationResult::default();
+	validation_result.num_precommits = commit.precommits.len();
+
 	// check that all precommits are for blocks higher than the target
 	// commit block, and that they're its descendents
 	if !commit.precommits.iter().all(|signed| {
@@ -362,7 +388,7 @@ pub fn validate_commit<H, N, S, I, C: Chain<H, N>>(
 				signed.precommit.target_hash.clone(),
 			)
 	}) {
-		return Ok(None);
+		return Ok(validation_result);
 	}
 
 	let mut equivocated = crate::collections::HashSet::new();
@@ -376,15 +402,29 @@ pub fn validate_commit<H, N, S, I, C: Chain<H, N>>(
 	});
 
 	for SignedPrecommit { precommit, id, signature } in commit.precommits.iter() {
-		if let Some(_) = round.import_precommit(chain, precommit.clone(), id.clone(), signature.clone())? {
-			// allow only one equivocation per voter, as extras are redundant.
-			if !equivocated.insert(id) { return Ok(None) }
+		match round.import_precommit(chain, precommit.clone(), id.clone(), signature.clone())? {
+			ImportResult { equivocation: Some(_), .. } => {
+				validation_result.num_equivocations += 1;
+				// allow only one equivocation per voter, as extras are redundant.
+				if !equivocated.insert(id) {
+					return Ok(validation_result) 
+				}
+			},
+			ImportResult { duplicated, valid_voter, .. } => {
+				if duplicated {
+					validation_result.num_duplicated_precommits += 1;
+				}
+				if !valid_voter {
+					validation_result.num_invalid_voters += 1;
+				}
+			}
 		}
 	}
 
 	// if a ghost is found then it must be equal or higher than the commit
 	// target, otherwise the commit is invalid
-	Ok(round.precommit_ghost())
+	validation_result.ghost = round.precommit_ghost();
+	Ok(validation_result)
 }
 
 /// Get the threshold weight given the total voting weight.

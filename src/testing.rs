@@ -21,7 +21,7 @@ use std::sync::Arc;
 use std::time::{Instant, Duration};
 
 use crate::round::State as RoundState;
-use crate::voter::{RoundData, CommunicationIn, CommunicationOut};
+use crate::voter::{RoundData, CommunicationIn, CommunicationOut, Callback};
 use tokio::timer::Delay;
 use parking_lot::Mutex;
 use futures::prelude::*;
@@ -357,7 +357,7 @@ impl Network {
 	) {
 		let mut global_messages = self.global_messages.lock();
 		global_messages.add_node(|message| match message {
-			CommunicationOut::Commit(r, commit) => CommunicationIn::Commit(r, commit.into()),
+			CommunicationOut::Commit(r, commit) => CommunicationIn::Commit(r, commit.into(), Callback::Blank),
 			CommunicationOut::Auxiliary(aux) => CommunicationIn::Auxiliary(aux),
 		})
 	}
