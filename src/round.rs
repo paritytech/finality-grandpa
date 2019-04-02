@@ -616,6 +616,11 @@ impl<Id, H, N, Signature> Round<Id, H, N, Signature> where
 		self.voters.voter_by_index(self.round_number as usize % self.voters.len())
 	}
 
+	/// Return all imported prevotes.
+	pub fn prevotes(&self) -> Vec<(Id, Prevote<H, N>, Signature)> {
+		self.prevote.votes()
+	}
+
 	/// Return all imported precommits.
 	pub fn precommits(&self) -> Vec<(Id, Precommit<H, N>, Signature)> {
 		self.precommit.votes()

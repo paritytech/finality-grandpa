@@ -256,6 +256,27 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 		self.best_finalized.as_ref()
 	}
 
+	/// Return all imported votes for the round (prevotes and precommits).
+	pub(super) fn votes(&self) -> Vec<SignedMessage<H, N, E::Signature, E::Id>> {
+		let prevotes = self.votes.prevotes().into_iter().map(|(id, prevote, signature)| {
+			SignedMessage {
+				id,
+				signature,
+				message: Message::Prevote(prevote),
+			}
+		});
+
+		let precommits = self.votes.precommits().into_iter().map(|(id, precommit, signature)| {
+			SignedMessage {
+				id,
+				signature,
+				message: Message::Precommit(precommit),
+			}
+		});
+
+		prevotes.chain(precommits).collect()
+	}
+
 	fn process_incoming(&mut self) -> Result<(), E::Error> {
 		while let Async::Ready(Some(incoming)) = self.incoming.poll()? {
 			trace!(target: "afg", "Got incoming message");
@@ -303,12 +324,12 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 					let should_send_primary = maybe_finalized.map_or(true, |f| last_round_estimate.1 < f.1);
 					if should_send_primary {
 						debug!(target: "afg", "Sending primary block hint for round {}", self.votes.number());
-						self.outgoing.push(Message::PrimaryPropose(
-							PrimaryPropose {
-								target_hash: last_round_estimate.0,
-								target_number: last_round_estimate.1,
-							})
-						);
+						let primary = PrimaryPropose {
+							target_hash: last_round_estimate.0,
+							target_number: last_round_estimate.1,
+						};
+						self.env.proposed(self.round_number(), primary.clone())?;
+						self.outgoing.push(Message::PrimaryPropose(primary));
 						self.state = Some(State::Proposed(prevote_timer, precommit_timer));
 
 						return Ok(());
@@ -342,6 +363,7 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 				if self.voting.is_active() {
 					if let Some(prevote) = self.construct_prevote(last_round_state)? {
 						debug!(target: "afg", "Casting prevote for round {}", self.votes.number());
+						self.env.prevoted(self.round_number(), prevote.clone())?;
 						self.outgoing.push(Message::Prevote(prevote));
 					}
 				}
@@ -393,6 +415,7 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 					if self.voting.is_active() {
 						debug!(target: "afg", "Casting precommit for round {}", self.votes.number());
 						let precommit = self.construct_precommit();
+						self.env.precommitted(self.round_number(), precommit.clone())?;
 						self.outgoing.push(Message::Precommit(precommit));
 					}
 					self.state = Some(State::Precommitted);
