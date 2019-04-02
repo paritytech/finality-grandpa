@@ -26,7 +26,7 @@ use tokio::timer::Delay;
 use parking_lot::Mutex;
 use futures::prelude::*;
 use futures::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
-use super::{Chain, Commit, Error, Equivocation, Message, Prevote, Precommit, SignedMessage};
+use super::{Chain, Commit, Error, Equivocation, Message, Prevote, Precommit, PrimaryPropose, SignedMessage};
 
 pub const GENESIS_HASH: &str = "genesis";
 const NULL_HASH: &str = "NULL";
@@ -187,12 +187,13 @@ impl crate::voter::Environment<&'static str, u32> for Environment {
 	type Out = Box<Sink<SinkItem=Message<&'static str, u32>,SinkError=Error> + Send + 'static>;
 	type Error = Error;
 
-	fn round_data(&self, round: u64) -> RoundData<Self::Timer, Self::In, Self::Out> {
+	fn round_data(&self, round: u64) -> RoundData<Self::Id, Self::Timer, Self::In, Self::Out> {
 		const GOSSIP_DURATION: Duration = Duration::from_millis(500);
 
 		let now = Instant::now();
 		let (incoming, outgoing) = self.network.make_round_comms(round, self.local_id);
 		RoundData {
+			voter_id: Some(self.local_id),
 			prevote_timer: Box::new(Delay::new(now + GOSSIP_DURATION)
 				.map_err(|_| panic!("Timer failed"))),
 			precommit_timer: Box::new(Delay::new(now + GOSSIP_DURATION + GOSSIP_DURATION)
@@ -214,7 +215,13 @@ impl crate::voter::Environment<&'static str, u32> for Environment {
 		Box::new(Delay::new(now + delay).map_err(|_| panic!("Timer failed")))
 	}
 
-	fn completed(&self, _round: u64, _state: RoundState<&'static str, u32>) -> Result<(), Error> {
+	fn completed(
+		&self,
+		_round: u64,
+		_state: RoundState<&'static str, u32>,
+		_base: (&'static str, u32),
+		_votes: Vec<SignedMessage<&'static str, u32, Signature, Id>>,
+	) -> Result<(), Error> {
 		Ok(())
 	}
 
@@ -226,6 +233,18 @@ impl crate::voter::Environment<&'static str, u32> for Environment {
 		chain.finalized = (hash, number as _);
 		self.listeners.lock().retain(|s| s.unbounded_send((hash, number as _, commit.clone())).is_ok());
 
+		Ok(())
+	}
+
+	fn proposed(&self, _round: u64, _propose: PrimaryPropose<&'static str, u32>) -> Result<(), Self::Error> {
+		Ok(())
+	}
+
+	fn prevoted(&self, _round: u64, _prevote: Prevote<&'static str, u32>) -> Result<(), Self::Error> {
+		Ok(())
+	}
+
+	fn precommitted(&self, _round: u64, _precommit: Precommit<&'static str, u32>) -> Result<(), Self::Error> {
 		Ok(())
 	}
 

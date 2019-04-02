@@ -17,9 +17,15 @@
 //! A voter in GRANDPA. This transitions between rounds and casts votes.
 //!
 //! Voters rely on some external context to function:
-//!   - setting timers to cast votes
-//!   - incoming vote streams
+//!   - setting timers to cast votes.
+//!   - incoming vote streams.
 //!   - providing voter weights.
+//!   - getting the local voter id.
+//!
+//!  The local voter id is used to check whether to cast votes for a given
+//!  round. If no local id is defined or if it's not part of the voter set then
+//!  votes will not be pushed to the sink. The protocol state machine still
+//!  transitions state as if the votes had been pushed out.
 
 use futures::prelude::*;
 use futures::sync::mpsc::{self, UnboundedReceiver};
@@ -31,8 +37,8 @@ use std::sync::Arc;
 
 use crate::round::State as RoundState;
 use crate::{
-	Chain, Commit, CompactCommit, Equivocation, Message, Prevote, Precommit, SignedMessage,
-	BlockNumberOps, validate_commit, CommitValidationResult,
+	Chain, Commit, CompactCommit, Equivocation, Message, Prevote, Precommit, PrimaryPropose,
+	SignedMessage, BlockNumberOps, validate_commit, CommitValidationResult
 };
 use crate::voter_set::VoterSet;
 use past_rounds::PastRounds;
@@ -70,9 +76,10 @@ pub trait Environment<H: Eq, N: BlockNumberOps>: Chain<H, N> {
 	/// Furthermore, this means that actual logic of creating and verifying
 	/// signatures is flexible and can be maintained outside this crate.
 	fn round_data(&self, round: u64) -> RoundData<
+		Self::Id,
 		Self::Timer,
 		Self::In,
-		Self::Out
+		Self::Out,
 	>;
 
 	/// Return a timer that will be used to delay the broadcast of a commit
@@ -80,9 +87,24 @@ pub trait Environment<H: Eq, N: BlockNumberOps>: Chain<H, N> {
 	/// commit messages that are sent (e.g. random value in [0, 1] seconds).
 	fn round_commit_timer(&self) -> Self::Timer;
 
+	/// Note that we've done a primary proposal in the given round.
+	fn proposed(&self, round: u64, propose: PrimaryPropose<H, N>) -> Result<(), Self::Error>;
+
+	/// Note that we have prevoted in the given round.
+	fn prevoted(&self, round: u64, prevote: Prevote<H, N>) -> Result<(), Self::Error>;
+
+	/// Note that we have precommitted in the given round.
+	fn precommitted(&self, round: u64, precommit: Precommit<H, N>) -> Result<(), Self::Error>;
+
 	/// Note that a round was completed. This is called when a round has been
 	/// voted in. Should return an error when something fatal occurs.
-	fn completed(&self, round: u64, state: RoundState<H, N>) -> Result<(), Self::Error>;
+	fn completed(
+		&self,
+		round: u64,
+		state: RoundState<H, N>,
+		base: (H, N),
+		votes: Vec<SignedMessage<H, N, Self::Signature, Self::Id>>,
+	) -> Result<(), Self::Error>;
 
 	/// Called when a block should be finalized.
 	// TODO: make this a future that resolves when it's e.g. written to disk?
@@ -245,7 +267,9 @@ pub struct CatchUp<H, N> {
 }
 
 /// Data necessary to participate in a round.
-pub struct RoundData<Timer, Input, Output> {
+pub struct RoundData<Id, Timer, Input, Output> {
+	/// Local voter id (if any.)
+	pub voter_id: Option<Id>,
 	/// Timer before prevotes can be cast. This should be Start + 2T
 	/// where T is the gossip time estimate.
 	pub prevote_timer: Timer,
@@ -645,7 +669,12 @@ impl<H, N, E: Environment<H, N>, GlobalIn, GlobalOut> Voter<H, N, E, GlobalIn, G
 	}
 
 	fn completed_best_round(&mut self, next_round: Option<VotingRound<H, N, E>>) -> Result<(), E::Error> {
-		self.env.completed(self.best_round.round_number(), self.best_round.round_state())?;
+		self.env.completed(
+			self.best_round.round_number(),
+			self.best_round.round_state(),
+			self.best_round.dag_base(),
+			self.best_round.votes(),
+		)?;
 
 		let old_round_number = self.best_round.round_number();
 
@@ -668,7 +697,12 @@ impl<H, N, E: Environment<H, N>, GlobalIn, GlobalOut> Voter<H, N, E, GlobalIn, G
 	fn completed_prospective_round(&mut self, mut prospective_round: VotingRound<H, N, E>)
 		-> Result<(), E::Error>
 	{
-		self.env.completed(prospective_round.round_number(), prospective_round.round_state())?;
+		self.env.completed(
+			prospective_round.round_number(),
+			prospective_round.round_state(),
+			prospective_round.dag_base(),
+			prospective_round.votes(),
+		)?;
 
 		self.best_round = VotingRound::new(
 			prospective_round.round_number() + 1,
