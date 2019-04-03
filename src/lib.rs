@@ -338,11 +338,40 @@ impl<H: Clone, N: Clone, S, Id> From<Commit<H, N, S, Id>> for CompactCommit<H, N
 /// Struct returned from `validate_commit` function with information
 /// about the validation result.
 pub struct CommitValidationResult<H, N> {
-	pub ghost: Option<(H, N)>,
-	pub num_precommits: usize,
-	pub num_duplicated_precommits: usize,
-	pub num_equivocations: usize,
-	pub num_invalid_voters: usize,
+	ghost: Option<(H, N)>,
+	num_precommits: usize,
+	num_duplicated_precommits: usize,
+	num_equivocations: usize,
+	num_invalid_voters: usize,
+}
+
+impl<H, N> CommitValidationResult<H, N> {
+	/// Returns the commit GHOST i.e. the block with highest number for which
+	/// the cumulative votes of descendents and itself reach finalization
+	/// threshold.
+	pub fn ghost(&self) -> Option<&(H, N)> {
+		self.ghost.as_ref()
+	}
+
+	/// Returns the number of precommits in the commit.
+	pub fn num_precommits(&self) -> usize {
+		self.num_precommits
+	}
+
+	/// Returns the number of duplicate precommits in the commit.
+	pub fn num_duplicated_precommits(&self) -> usize {
+		self.num_duplicated_precommits
+	}
+
+	/// Returns the number of equivocated precommits in the commit.
+	pub fn num_equivocations(&self) -> usize {
+		self.num_equivocations
+	}
+
+	/// Returns the number of invalid voters in the commit.
+	pub fn num_invalid_voters(&self) -> usize {
+		self.num_invalid_voters
+	}
 }
 
 impl<H, N> Default for CommitValidationResult<H, N> {
