@@ -118,19 +118,15 @@ pub trait Environment<H: Eq, N: BlockNumberOps>: Chain<H, N> {
 
 /// Communication between nodes that is not round-localized.
 #[derive(Debug, Clone, PartialEq, Eq)]
-#[cfg_attr(feature = "derive-codec", derive(Encode, Decode))]
 pub enum CommunicationOut<H, N, S, Id> {
 	/// A commit message.
-	#[cfg_attr(feature = "derive-codec", codec(index = "0"))]
 	Commit(u64, Commit<H, N, S, Id>),
 	/// Auxiliary messages out.
-	#[cfg_attr(feature = "derive-codec", codec(index = "1"))]
 	Auxiliary(AuxiliaryCommunication<H, N, Id>),
 }
 
 /// The outcome of processing a commit.
 #[derive(Debug, Clone, PartialEq, Eq)]
-#[cfg_attr(feature = "derive-codec", derive(Encode, Decode))]
 pub enum CommitProcessingOutcome {
 	/// It was beneficial to process this commit.
 	Good(GoodCommit),
@@ -140,7 +136,6 @@ pub enum CommitProcessingOutcome {
 
 /// The result of processing for a good commit.
 #[derive(Debug, Clone, PartialEq, Eq)]
-#[cfg_attr(feature = "derive-codec", derive(Encode, Decode))]
 pub struct GoodCommit {
 	_priv: (), // lets us add stuff without breaking API.
 }
@@ -153,7 +148,6 @@ impl GoodCommit {
 
 /// The result of processing for a bad commit
 #[derive(Debug, Clone, PartialEq, Eq)]
-#[cfg_attr(feature = "derive-codec", derive(Encode, Decode))]
 pub struct BadCommit {
 	_priv: (), // lets us add stuff without breaking API.
 	num_precommits: usize,
@@ -197,7 +191,6 @@ impl<H, N> From<CommitValidationResult<H, N>> for BadCommit {
 }
 
 /// Callback used to propagate the commit in case the outcome is good.
-#[cfg_attr(feature = "derive-codec", derive(Encode, Decode))]
 pub enum Callback {
 	/// Default value.
 	Blank,
@@ -222,13 +215,10 @@ impl Callback {
 
 /// Communication between nodes that is not round-localized.
 #[derive(Clone)]
-#[cfg_attr(feature = "derive-codec", derive(Encode, Decode))]
 pub enum CommunicationIn<H, N, S, Id> {
 	/// A commit message.
-	#[cfg_attr(feature = "derive-codec", codec(index = "0"))]
 	Commit(u64, CompactCommit<H, N, S, Id>, Callback),
 	/// Auxiliary messages out.
-	#[cfg_attr(feature = "derive-codec", codec(index = "1"))]
 	Auxiliary(AuxiliaryCommunication<H, N, Id>),
 }
 
