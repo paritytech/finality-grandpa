@@ -198,6 +198,7 @@ pub enum Callback {
 	Work(Box<FnMut(CommitProcessingOutcome) + Send>),
 }
 
+#[cfg(test)]
 impl Clone for Callback {
 	fn clone(&self) -> Self {
 		Callback::Blank
@@ -214,7 +215,7 @@ impl Callback {
 }
 
 /// Communication between nodes that is not round-localized.
-#[derive(Clone)]
+#[cfg_attr(test, derive(Clone))]
 pub enum CommunicationIn<H, N, S, Id> {
 	/// A commit message.
 	Commit(u64, CompactCommit<H, N, S, Id>, Callback),
