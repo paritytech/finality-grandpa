@@ -338,11 +338,11 @@ impl<H: Clone, N: Clone, S, Id> From<Commit<H, N, S, Id>> for CompactCommit<H, N
 /// Struct returned from `validate_commit` function with information
 /// about the validation result.
 pub struct CommitValidationResult<H, N> {
-	ghost: Option<(H, N)>,
-	num_precommits: usize,
-	num_duplicated_precommits: usize,
-	num_equivocations: usize,
-	num_invalid_voters: usize,
+	pub ghost: Option<(H, N)>,
+	pub num_precommits: usize,
+	pub num_duplicated_precommits: usize,
+	pub num_equivocations: usize,
+	pub num_invalid_voters: usize,
 }
 
 impl<H, N> Default for CommitValidationResult<H, N> {
@@ -407,7 +407,7 @@ pub fn validate_commit<H, N, S, I, C: Chain<H, N>>(
 				validation_result.num_equivocations += 1;
 				// allow only one equivocation per voter, as extras are redundant.
 				if !equivocated.insert(id) {
-					return Ok(validation_result) 
+					return Ok(validation_result)
 				}
 			},
 			ImportResult { duplicated, valid_voter, .. } => {
