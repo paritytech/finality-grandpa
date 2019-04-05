@@ -345,6 +345,35 @@ pub struct CommitValidationResult<H, N> {
 	num_invalid_voters: usize,
 }
 
+impl<H, N> CommitValidationResult<H, N> {
+	/// Returns the commit GHOST i.e. the block with highest number for which
+	/// the cumulative votes of descendents and itself reach finalization
+	/// threshold.
+	pub fn ghost(&self) -> Option<&(H, N)> {
+		self.ghost.as_ref()
+	}
+
+	/// Returns the number of precommits in the commit.
+	pub fn num_precommits(&self) -> usize {
+		self.num_precommits
+	}
+
+	/// Returns the number of duplicate precommits in the commit.
+	pub fn num_duplicated_precommits(&self) -> usize {
+		self.num_duplicated_precommits
+	}
+
+	/// Returns the number of equivocated precommits in the commit.
+	pub fn num_equivocations(&self) -> usize {
+		self.num_equivocations
+	}
+
+	/// Returns the number of invalid voters in the commit.
+	pub fn num_invalid_voters(&self) -> usize {
+		self.num_invalid_voters
+	}
+}
+
 impl<H, N> Default for CommitValidationResult<H, N> {
 	fn default() -> Self {
 		CommitValidationResult {
@@ -407,7 +436,7 @@ pub fn validate_commit<H, N, S, I, C: Chain<H, N>>(
 				validation_result.num_equivocations += 1;
 				// allow only one equivocation per voter, as extras are redundant.
 				if !equivocated.insert(id) {
-					return Ok(validation_result) 
+					return Ok(validation_result)
 				}
 			},
 			ImportResult { duplicated, valid_voter, .. } => {
