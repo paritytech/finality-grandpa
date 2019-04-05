@@ -64,7 +64,7 @@ impl<Id: Hash + Eq> VoterSet<Id> {
 	}
 
 	/// Get the voters.
-	pub fn voters(&self) -> &Vec<(Id, u64)> {
+	pub fn voters(&self) -> &[(Id, u64)] {
 		&self.voters
 	}
 }
