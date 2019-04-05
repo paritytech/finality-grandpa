@@ -62,6 +62,11 @@ impl<Id: Hash + Eq> VoterSet<Id> {
 	pub fn total_weight(&self) -> u64 {
 		self.voters.iter().map(|&(_, weight)| weight).sum()
 	}
+
+	/// Get the voters.
+	pub fn voters(&self) -> &Vec<(Id, u64)> {
+		&self.voters
+	}
 }
 
 impl<Id: Hash + Eq + Clone + Ord> std::iter::FromIterator<(Id, u64)> for VoterSet<Id> {
