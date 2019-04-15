@@ -324,7 +324,7 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 					let maybe_finalized = last_round_state.finalized.clone();
 
 					// Last round estimate has not been finalized.
-					let should_send_primary = maybe_finalized.map_or(true, |f| last_round_estimate.1 < f.1);
+					let should_send_primary = maybe_finalized.map_or(true, |f| last_round_estimate.1 > f.1);
 					if should_send_primary {
 						debug!(target: "afg", "Sending primary block hint for round {}", self.votes.number());
 						let primary = PrimaryPropose {
