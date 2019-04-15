@@ -141,7 +141,7 @@ pub struct GoodCommit {
 }
 
 impl GoodCommit {
-	fn new() -> Self {
+	pub fn new() -> Self {
 		GoodCommit { _priv: () }
 	}
 }
