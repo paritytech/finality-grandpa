@@ -462,6 +462,24 @@ pub fn threshold(total_weight: u64) -> u64 {
 	total_weight - faulty
 }
 
+/// Runs the callback with the appropriate `CommitProcessingOutcome` based on
+/// the given `CommitValidationResult`. Outcome is bad if ghost is undefined,
+/// good otherwise.
+pub fn process_commit_validation_result<H, N>(
+	validation_result: CommitValidationResult<H, N>,
+	mut callback: voter::Callback,
+) {
+	if let Some(_) = validation_result.ghost {
+		callback.run(
+			voter::CommitProcessingOutcome::Good(voter::GoodCommit::new())
+		)
+	} else {
+		callback.run(
+			voter::CommitProcessingOutcome::Bad(voter::BadCommit::from(validation_result))
+		)
+	}
+}
+
 #[cfg(test)]
 mod tests {
 	use super::threshold;

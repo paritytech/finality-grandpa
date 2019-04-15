@@ -141,7 +141,7 @@ pub struct GoodCommit {
 }
 
 impl GoodCommit {
-	pub fn new() -> Self {
+	pub(crate) fn new() -> Self {
 		GoodCommit { _priv: () }
 	}
 }
@@ -206,7 +206,7 @@ impl Clone for Callback {
 }
 
 impl Callback {
-	pub fn run(&mut self, o: CommitProcessingOutcome) {
+	pub(crate) fn run(&mut self, o: CommitProcessingOutcome) {
 		match self {
 			Callback::Blank => {},
 			Callback::Work(cb) => cb(o),
