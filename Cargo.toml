@@ -1,6 +1,6 @@
 [package]
 name = "finality-grandpa"
-version = "0.7.1"
+version = "0.7.2"
 description = "PBFT-based finality gadget for blockchains"
 authors = ["Parity Technologies <admin@parity.io>"]
 license = "GPL-3.0"
