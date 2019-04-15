@@ -320,28 +320,33 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 			Some(State::Start(prevote_timer, precommit_timer)) => {
 				let maybe_estimate = last_round_state.estimate.clone();
 
-				if let (Some(last_round_estimate), true) = (maybe_estimate, self.voting.is_primary()) {
-					let maybe_finalized = last_round_state.finalized.clone();
+				match (maybe_estimate, self.voting.is_primary()) {
+					(Some(last_round_estimate), true) => {
+						let maybe_finalized = last_round_state.finalized.clone();
 
-					// Last round estimate has not been finalized.
-					let should_send_primary = maybe_finalized.map_or(true, |f| last_round_estimate.1 > f.1);
-					if should_send_primary {
-						debug!(target: "afg", "Sending primary block hint for round {}", self.votes.number());
-						let primary = PrimaryPropose {
-							target_hash: last_round_estimate.0,
-							target_number: last_round_estimate.1,
-						};
-						self.env.proposed(self.round_number(), primary.clone())?;
-						self.outgoing.push(Message::PrimaryPropose(primary));
-						self.state = Some(State::Proposed(prevote_timer, precommit_timer));
+						// Last round estimate has not been finalized.
+						let should_send_primary = maybe_finalized.map_or(true, |f| last_round_estimate.1 > f.1);
+						if should_send_primary {
+							debug!(target: "afg", "Sending primary block hint for round {}", self.votes.number());
+							let primary = PrimaryPropose {
+								target_hash: last_round_estimate.0,
+								target_number: last_round_estimate.1,
+							};
+							self.env.proposed(self.round_number(), primary.clone())?;
+							self.outgoing.push(Message::PrimaryPropose(primary));
+							self.state = Some(State::Proposed(prevote_timer, precommit_timer));
 
-						return Ok(());
-					}
-				}
-
-				if self.voting.is_primary() {
-					debug!(target: "afg", "Last round estimate does not exist, \
-						not sending primary block hint for round {}", self.votes.number());
+							return Ok(());
+						} else {
+							debug!(target: "afg", "Last round estimate has been finalized, \
+								not sending primary block hint for round {}", self.votes.number());
+						}
+					},
+					(None, true) => {
+						debug!(target: "afg", "Last round estimate does not exist, \
+							not sending primary block hint for round {}", self.votes.number());
+					},
+					_ => {},
 				}
 
 				self.state = Some(State::Start(prevote_timer, precommit_timer));
