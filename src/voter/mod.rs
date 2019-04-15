@@ -206,7 +206,7 @@ impl Clone for Callback {
 }
 
 impl Callback {
-	fn run(&mut self, o: CommitProcessingOutcome) {
+	pub fn run(&mut self, o: CommitProcessingOutcome) {
 		match self {
 			Callback::Blank => {},
 			Callback::Work(cb) => cb(o),
