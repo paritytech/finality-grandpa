@@ -314,12 +314,11 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
             }
             let id = signers.next().expect("Infinite iterator should not end;");
             println!("Checking for {:?}", id);
-            let equivocation_handling = if self.equivocators.contains(&id) && buffer_size > 10 && equivocations_handled < 6 {
-                println!("Skipping {:?}", id);
-                continue
-            } else {
+            let equivocation_handling = if self.equivocators.contains(&id) {
                 // If the buffer size is small, we can handle up to 6 equivocations.
-                true
+                buffer_size < 10 && equivocations_handled < 6
+            } else {
+                false
             };
             let buffer = self.message_buffer.get_mut(&id).expect("Ids are in the buffer;");
             let SignedMessage { message, signature, id } = match buffer.pop_front() {
