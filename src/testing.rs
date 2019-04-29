@@ -144,15 +144,17 @@ pub struct Environment {
 	local_id: Id,
 	network: Network,
 	listeners: Mutex<Vec<UnboundedSender<(&'static str, u32, Commit<&'static str, u32, Signature, Id>)>>>,
+    allow_equivocation: bool,
 }
 
 impl Environment {
-	pub fn new(network: Network, local_id: Id) -> Self {
+	pub fn new(network: Network, local_id: Id, allow_equivocation: bool) -> Self {
 		Environment {
 			chain: Mutex::new(DummyChain::new()),
 			local_id,
 			network,
 			listeners: Mutex::new(Vec::new()),
+            allow_equivocation,
 		}
 	}
 
@@ -249,11 +251,16 @@ impl crate::voter::Environment<&'static str, u32> for Environment {
 	}
 
 	fn prevote_equivocation(&self, round: u64, equivocation: Equivocation<Id, Prevote<&'static str, u32>, Signature>) {
-		panic!("Encountered equivocation in round {}: {:?}", round, equivocation);
+        if !self.allow_equivocation {
+            panic!("Encountered equivocation in round {}: {:?}", round, equivocation);
+        }
+        println!("Encountered equivocation in round {}: {:?}", round, equivocation);
 	}
 
 	fn precommit_equivocation(&self, round: u64, equivocation: Equivocation<Id, Precommit<&'static str, u32>, Signature>) {
-		panic!("Encountered equivocation in round {}: {:?}", round, equivocation);
+        if !self.allow_equivocation {
+            panic!("Encountered equivocation in round {}: {:?}", round, equivocation);
+        }
 	}
 }
 

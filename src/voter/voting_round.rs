@@ -19,6 +19,7 @@
 use futures::prelude::*;
 use futures::sync::mpsc::UnboundedSender;
 
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::hash::Hash;
 use std::sync::Arc;
 
@@ -57,6 +58,8 @@ pub(super) struct VotingRound<H, N, E: Environment<H, N>> where
 	env: Arc<E>,
 	voting: Voting,
 	votes: Round<E::Id, H, N, E::Signature>,
+    equivocators: HashSet<E::Id>,
+    message_buffer: HashMap<E::Id, VecDeque<SignedMessage<H, N, E::Signature, E::Id>>>,
 	incoming: E::In,
 	outgoing: Buffered<E::Out>,
 	state: Option<State<E::Timer>>, // state machine driving votes.
@@ -134,6 +137,8 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 		VotingRound {
 			votes,
 			voting,
+            equivocators: HashSet::new(),
+            message_buffer: HashMap::new(),
 			incoming: round_data.incoming,
 			outgoing: Buffered::new(round_data.outgoing),
 			state: Some(
@@ -282,6 +287,39 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 		while let Async::Ready(Some(incoming)) = self.incoming.poll()? {
 			trace!(target: "afg", "Got incoming message");
 			let SignedMessage { message, signature, id } = incoming;
+            let buffer = self.message_buffer.entry(id.clone()).or_insert(VecDeque::new());
+            buffer.push_back(SignedMessage { message, signature, id });
+            if buffer.len() > 6 {
+                // Once any signer sent us more than 6 messages, stop polling incoming,
+                // and first handle messages received so far.
+                break;
+            }
+		}
+
+        let buffer_size: usize = self.message_buffer.values().map(|queue| queue.len()).sum();
+        let signer_ids : Vec<E::Id> = self.message_buffer.keys().map(|key| key.clone()).collect();
+        let mut signers = signer_ids.into_iter().cycle();
+        let mut handled = 0;
+        loop {
+            if handled == buffer_size {
+                break;
+            }
+            let id = signers.next().expect("Infinite iterator should not end;");
+            println!("Checking for {:?}", id);
+            if self.equivocators.contains(&id) {
+                println!("Skipping {:?}", id);
+                let buffer = self.message_buffer.get(&id).expect("Ids are in the buffer;");
+                handled += buffer.len();
+                continue
+            }
+            let buffer = self.message_buffer.get_mut(&id).expect("Ids are in the buffer;");
+            let SignedMessage { message, signature, id } = match buffer.pop_front() {
+                Some(buffered) => {
+                    handled += 1;
+                    buffered.clone()
+                },
+                None => continue,
+            };
 			if !self.env.is_equal_or_descendent_of(self.votes.base().0, message.target().0.clone()) {
 				trace!(target: "afg", "Ignoring message targeting {:?} lower than round base {:?}",
 					   message.target(),
@@ -289,17 +327,21 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 				);
 				continue;
 			}
-
 			match message {
 				Message::Prevote(prevote) => {
-					let import_result = self.votes.import_prevote(&*self.env, prevote, id, signature)?;
+                    println!("Got prevote message from {:?}", id);
+					let import_result = self.votes.import_prevote(&*self.env, prevote, id.clone(), signature)?;
 					if let ImportResult { equivocation: Some(e), .. } = import_result {
+                        println!("Got equivocation message from {:?}", id);
+                        self.equivocators.insert(id);
 						self.env.prevote_equivocation(self.votes.number(), e);
 					}
 				}
 				Message::Precommit(precommit) => {
-					let import_result = self.votes.import_precommit(&*self.env, precommit, id, signature)?;
+					let import_result = self.votes.import_precommit(&*self.env, precommit, id.clone(), signature)?;
 					if let ImportResult { equivocation: Some(e), .. } = import_result {
+                        println!("Got equivocation message from {:?}", id);
+                        self.equivocators.insert(id);
 						self.env.precommit_equivocation(self.votes.number(), e);
 					}
 				}
@@ -310,7 +352,7 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 					}
 				}
 			};
-		}
+        }
 
 		Ok(())
 	}

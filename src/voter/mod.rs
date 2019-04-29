@@ -752,6 +752,113 @@ mod tests {
 	use crate::testing::{self, GENESIS_HASH, Environment, Id};
 	use std::time::Duration;
 
+    #[test]
+    fn equivocation_dos_prevention() {
+		let local_id = Id(5);
+		let test_id = Id(42);
+		let voters: VoterSet<_> = [
+			(local_id, 100),
+			(test_id, 201),
+		].iter().cloned().collect();
+
+		let (network, routing_task) = testing::make_network();
+		let (commits_stream, commits_sink) = network.make_global_comms();
+		let (round_stream, round_sink) = network.make_round_comms(1, test_id);
+
+		let prevote = Message::Prevote(Prevote {
+			target_hash: "E",
+			target_number: 6,
+		});
+
+		let prevote_equivocation_1 = Message::Prevote(Prevote {
+			target_hash: "E",
+			target_number: 7,
+		});
+
+		let prevote_equivocation_2 = Message::Prevote(Prevote {
+			target_hash: "E",
+			target_number: 8,
+		});
+
+		let precommit = Message::Precommit(Precommit {
+			target_hash: "E",
+			target_number: 6,
+		});
+
+		let commit = (1, Commit {
+			target_hash: "E",
+			target_number: 6,
+			precommits: vec![SignedPrecommit {
+				precommit: Precommit { target_hash: "E", target_number: 6 },
+				signature: testing::Signature(test_id.0),
+				id: test_id
+			}],
+		});
+
+		let (signal, exit) = ::exit_future::signal();
+
+		let global_comms = network.make_global_comms();
+		let env = Arc::new(Environment::new(network, local_id, true));
+		current_thread::block_on_all(::futures::future::lazy(move || {
+			// initialize chain
+			let last_finalized = env.with_chain(|chain| {
+				chain.push_blocks(GENESIS_HASH, &["A", "B", "C", "D", "E"]);
+				chain.last_finalized()
+			});
+
+			let last_round_state = RoundState::genesis((GENESIS_HASH, 1));
+
+			// run voter in background. scheduling it to shut down at the end.
+			let voter = Voter::new(
+				env.clone(),
+				voters.clone(),
+				global_comms,
+				0,
+				last_round_state,
+				last_finalized,
+			);
+			::tokio::spawn(exit.clone()
+				.until(voter.map_err(|e| panic!("Error voting: {:?}", e))).map(|_| ()));
+
+			::tokio::spawn(exit.clone().until(routing_task).map(|_| ()));
+
+			::tokio::spawn(exit.until(::futures::future::lazy(|| {
+				round_stream.into_future().map_err(|(e, _)| e)
+					.and_then(|(value, stream)| { // wait for a prevote
+						assert!(match value {
+							Some(SignedMessage { message: Message::Prevote(_), id: Id(5), .. }) => true,
+							_ => false,
+						});
+						let votes = vec![prevote, precommit, prevote_equivocation_1, prevote_equivocation_2].into_iter().map(Result::Ok);
+						round_sink.send_all(futures::stream::iter_result(votes)).map(|_| stream) // send our prevote
+					})
+					.and_then(|stream| {
+						stream.take_while(|value| match value { // wait for a precommit
+							SignedMessage { message: Message::Precommit(_), id: Id(5), .. } => Ok(false),
+							_ => Ok(true),
+						}).for_each(|_| Ok(()))
+					})
+					.and_then(|_| {
+						// send our commit
+						commits_sink.send(CommunicationOut::Commit(commit.0, commit.1))
+					})
+					.map_err(|_| ())
+			})).map(|_| ()));
+
+			// wait for the first commit (ours)
+			commits_stream.into_future().map_err(|_| ())
+				.and_then(|(_, stream)| {
+					stream.take(1).for_each(|_| Ok(())) // the second commit should never arrive
+						.timeout(Duration::from_millis(500)).map_err(|_| ())
+				})
+				.then(|res| {
+					assert!(res.is_err()); // so the previous future times out
+					signal.fire();
+					futures::future::ok::<(), ()>(())
+				})
+		})).unwrap();
+    }
+
 	#[test]
 	fn talking_to_myself() {
 		let local_id = Id(5);
@@ -761,7 +868,7 @@ mod tests {
 		let (signal, exit) = ::exit_future::signal();
 
 		let global_comms = network.make_global_comms();
-		let env = Arc::new(Environment::new(network, local_id));
+		let env = Arc::new(Environment::new(network, local_id, false));
 		current_thread::block_on_all(::futures::future::lazy(move || {
 			// initialize chain
 			let last_finalized = env.with_chain(|chain| {
@@ -809,7 +916,7 @@ mod tests {
 			let finalized_streams = (0..7).map(move |i| {
 				let local_id = Id(i);
 				// initialize chain
-				let env = Arc::new(Environment::new(network.clone(), local_id));
+				let env = Arc::new(Environment::new(network.clone(), local_id, false));
 				let last_finalized = env.with_chain(|chain| {
 					chain.push_blocks(GENESIS_HASH, &["A", "B", "C", "D", "E"]);
 					chain.last_finalized()
@@ -851,7 +958,7 @@ mod tests {
 		let (signal, exit) = ::exit_future::signal();
 
 		let global_comms = network.make_global_comms();
-		let env = Arc::new(Environment::new(network, local_id));
+		let env = Arc::new(Environment::new(network, local_id, false));
 		current_thread::block_on_all(::futures::future::lazy(move || {
 			// initialize chain
 			let last_finalized = env.with_chain(|chain| {
@@ -898,6 +1005,11 @@ mod tests {
 			target_number: 6,
 		});
 
+		let prevote_2 = Message::Prevote(Prevote {
+			target_hash: "A",
+			target_number: 6,
+		});
+
 		let precommit = Message::Precommit(Precommit {
 			target_hash: "E",
 			target_number: 6,
@@ -916,7 +1028,7 @@ mod tests {
 		let (signal, exit) = ::exit_future::signal();
 
 		let global_comms = network.make_global_comms();
-		let env = Arc::new(Environment::new(network, local_id));
+		let env = Arc::new(Environment::new(network, local_id, false));
 		current_thread::block_on_all(::futures::future::lazy(move || {
 			// initialize chain
 			let last_finalized = env.with_chain(|chain| {
@@ -947,7 +1059,7 @@ mod tests {
 							Some(SignedMessage { message: Message::Prevote(_), id: Id(5), .. }) => true,
 							_ => false,
 						});
-						let votes = vec![prevote, precommit].into_iter().map(Result::Ok);
+						let votes = vec![prevote, precommit, prevote_2].into_iter().map(Result::Ok);
 						round_sink.send_all(futures::stream::iter_result(votes)).map(|_| stream) // send our prevote
 					})
 					.and_then(|stream| {
@@ -1003,7 +1115,7 @@ mod tests {
 		});
 
 		let global_comms = network.make_global_comms();
-		let env = Arc::new(Environment::new(network, local_id));
+		let env = Arc::new(Environment::new(network, local_id, false));
 		current_thread::block_on_all(::futures::future::lazy(move || {
 			// initialize chain
 			let last_finalized = env.with_chain(|chain| {
@@ -1053,7 +1165,7 @@ mod tests {
 			let mut unsynced_voter = {
 				let local_id = Id(4);
 
-				let env = Arc::new(Environment::new(network.clone(), local_id));
+				let env = Arc::new(Environment::new(network.clone(), local_id, false));
 				let last_finalized = env.with_chain(|chain| {
 					chain.push_blocks(GENESIS_HASH, &["A", "B", "C", "D", "E"]);
 					chain.last_finalized()
@@ -1085,7 +1197,7 @@ mod tests {
 				let local_id = Id(i);
 
 				// initialize chain
-				let env = Arc::new(Environment::new(network.clone(), local_id));
+				let env = Arc::new(Environment::new(network.clone(), local_id, false));
 				let last_finalized = env.with_chain(|chain| {
 					chain.push_blocks(GENESIS_HASH, &["A", "B", "C", "D", "E"]);
 					chain.last_finalized()
