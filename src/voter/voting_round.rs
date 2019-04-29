@@ -302,16 +302,16 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
         let signer_ids : Vec<E::Id> = self.message_buffer.keys().map(|key| key.clone()).collect();
         let mut signers = signer_ids.into_iter().cycle();
         let mut handled = 0;
-        let mut equivocations_handled = 0;
+        let mut equivocator_message_handled = 0;
         loop {
             if handled == buffer_size {
                 break;
             }
             let id = signers.next().expect("Infinite iterator should not end;");
             println!("Checking for {:?}", id);
-            let equivocation_handling = if self.equivocators.contains(&id) {
-                // If the buffer size is small, we can handle up to 6 equivocations.
-                buffer_size < 10 && equivocations_handled < 6
+            let equivocatior_handling = if self.equivocators.contains(&id) {
+                // If the buffer size is small, we can handle up to 6 messages from equivocators.
+                buffer_size < 10 && equivocator_message_handled < 6
             } else {
                 false
             };
@@ -319,8 +319,8 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
             let SignedMessage { message, signature, id } = match buffer.pop_front() {
                 Some(buffered) => {
                     handled += 1;
-                    if equivocation_handling {
-                        equivocations_handled += 1;
+                    if equivocatior_handling {
+                        equivocator_message_handled += 1;
                     }
                     buffered.clone()
                 },
