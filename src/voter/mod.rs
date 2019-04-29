@@ -1005,11 +1005,6 @@ mod tests {
 			target_number: 6,
 		});
 
-		let prevote_2 = Message::Prevote(Prevote {
-			target_hash: "A",
-			target_number: 6,
-		});
-
 		let precommit = Message::Precommit(Precommit {
 			target_hash: "E",
 			target_number: 6,
@@ -1059,7 +1054,7 @@ mod tests {
 							Some(SignedMessage { message: Message::Prevote(_), id: Id(5), .. }) => true,
 							_ => false,
 						});
-						let votes = vec![prevote, precommit, prevote_2].into_iter().map(Result::Ok);
+						let votes = vec![prevote, precommit].into_iter().map(Result::Ok);
 						round_sink.send_all(futures::stream::iter_result(votes)).map(|_| stream) // send our prevote
 					})
 					.and_then(|stream| {
