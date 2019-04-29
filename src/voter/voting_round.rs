@@ -288,9 +288,9 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 			trace!(target: "afg", "Got incoming message");
 			let SignedMessage { message, signature, id } = incoming;
             let buffer = self.message_buffer.entry(id.clone()).or_insert(VecDeque::new());
-            buffer.push_back(SignedMessage { message, signature, id });
-            if buffer.len() > 6 {
-                // Once any signer sent us more than 6 messages, stop polling incoming,
+            buffer.push_back(SignedMessage { message, signature, id: id.clone() });
+            if buffer.len() > 6 && !self.equivocators.contains(&id) {
+                // Once any non-equivocating signer sent us more than 6 messages, stop polling incoming,
                 // and first handle messages received so far.
                 break;
             }
