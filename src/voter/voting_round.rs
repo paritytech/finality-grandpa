@@ -291,19 +291,16 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
             buffer.push_back(SignedMessage { message, signature, id: id.clone() });
 		}
 
-        let buffer_size: usize = self.message_buffer.iter().map(|(id, queue)| {
-            // Only count non-equivocators for a measure of "business".
-            if !self.equivocators.contains(&id) {
-                queue.len()
-            } else {
-                0
-            }
-        }).sum();
+        let mut buffer_size: usize = self.message_buffer.iter()
+            .filter(|(id, _queue)| !self.equivocators.contains(&id))
+            .map(|(_id, queue)| { queue.len() })
+            .sum();
         let signer_ids : Vec<E::Id> = self.message_buffer.keys().map(|key| key.clone()).collect();
         let mut signers = signer_ids.into_iter().cycle();
         let mut handled = 0;
         let mut equivocator_message_handled = 0;
         loop {
+            println!("Handled: {:?}, equiv handled: {:?} total: {:?}", handled, equivocator_message_handled, buffer_size);
             if handled == buffer_size {
                 break;
             }
@@ -318,9 +315,10 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
             let buffer = self.message_buffer.get_mut(&id).expect("Ids are in the buffer;");
             let SignedMessage { message, signature, id } = match buffer.pop_front() {
                 Some(buffered) => {
-                    handled += 1;
                     if equivocatior_handling {
                         equivocator_message_handled += 1;
+                    } else {
+                        handled += 1;
                     }
                     buffered.clone()
                 },
@@ -339,7 +337,9 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 					let import_result = self.votes.import_prevote(&*self.env, prevote, id.clone(), signature)?;
 					if let ImportResult { equivocation: Some(e), .. } = import_result {
                         println!("Got equivocation message from {:?}", id);
+                        let num_messages = self.message_buffer.get(&id).expect("Should have an entry").len();
                         self.equivocators.insert(id);
+                        buffer_size -= num_messages;
 						self.env.prevote_equivocation(self.votes.number(), e);
 					}
 				}
@@ -347,7 +347,9 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 					let import_result = self.votes.import_precommit(&*self.env, precommit, id.clone(), signature)?;
 					if let ImportResult { equivocation: Some(e), .. } = import_result {
                         println!("Got equivocation message from {:?}", id);
+                        let num_messages = self.message_buffer.get(&id).expect("Should have an entry").len();
                         self.equivocators.insert(id);
+                        buffer_size -= num_messages;
 						self.env.precommit_equivocation(self.votes.number(), e);
 					}
 				}
