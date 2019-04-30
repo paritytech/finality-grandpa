@@ -296,15 +296,12 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
         let mut signers = signer_ids.into_iter().cycle();
         let mut handled = HashMap::new();
         loop {
-            println!("{:?} {:?}", num_signers_fully_handled, num_signers);
             if num_signers_fully_handled == num_signers {
                 // We're done for now.
                 break;
             }
             let id = signers.next().expect("Infinite iterator should not end;");
-            println!("Checking for {:?}", id);
             if self.equivocators.contains(&id) {
-                println!("Skipping {:?}", id);
                 // Ignore messages from equivocators.
                 continue;
             };
@@ -335,10 +332,8 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 			}
 			match message {
 				Message::Prevote(prevote) => {
-                    println!("Got prevote message from {:?}", id);
 					let import_result = self.votes.import_prevote(&*self.env, prevote, id.clone(), signature)?;
 					if let ImportResult { equivocation: Some(e), .. } = import_result {
-                        println!("Got equivocation message from {:?}", id);
                         self.equivocators.insert(id);
                         num_signers_fully_handled += 1;
 						self.env.prevote_equivocation(self.votes.number(), e);
@@ -347,7 +342,6 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 				Message::Precommit(precommit) => {
 					let import_result = self.votes.import_precommit(&*self.env, precommit, id.clone(), signature)?;
 					if let ImportResult { equivocation: Some(e), .. } = import_result {
-                        println!("Got equivocation message from {:?}", id);
                         self.equivocators.insert(id);
                         num_signers_fully_handled += 1;
 						self.env.precommit_equivocation(self.votes.number(), e);
