@@ -290,37 +290,39 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
             let buffer = self.message_buffer.entry(id.clone()).or_insert(VecDeque::new());
             buffer.push_back(SignedMessage { message, signature, id: id.clone() });
 		}
-
-        let mut buffer_size: usize = self.message_buffer.iter()
-            .filter(|(id, _queue)| !self.equivocators.contains(&id))
-            .map(|(_id, queue)| { queue.len() })
-            .sum();
         let signer_ids : Vec<E::Id> = self.message_buffer.keys().map(|key| key.clone()).collect();
+        let num_signers = signer_ids.iter().filter(|id| !self.equivocators.contains(&id)).count();
+        let mut num_signers_fully_handled = 0;
         let mut signers = signer_ids.into_iter().cycle();
-        let mut handled = 0;
-        let mut equivocator_message_handled = 0;
+        let mut handled = HashMap::new();
         loop {
-            println!("Handled: {:?}, equiv handled: {:?} total: {:?}", handled, equivocator_message_handled, buffer_size);
-            if handled == buffer_size {
+            println!("{:?} {:?}", num_signers_fully_handled, num_signers);
+            if num_signers_fully_handled == num_signers {
+                // We're done for now.
                 break;
             }
             let id = signers.next().expect("Infinite iterator should not end;");
             println!("Checking for {:?}", id);
-            let equivocatior_handling = if self.equivocators.contains(&id) {
-                // If the buffer size is small, we can handle up to 6 messages from equivocators.
-                buffer_size < 10 && equivocator_message_handled < 6
-            } else {
-                false
+            if self.equivocators.contains(&id) {
+                println!("Skipping {:?}", id);
+                // Ignore messages from equivocators.
+                continue;
             };
+            let num_handled = handled.entry(id.clone()).or_insert(0);
+            // Handle up to 6 messages from non-equivocating signers.
+            if *num_handled == 6 {
+                continue;
+            } else {
+                *num_handled += 1;
+                if *num_handled == 6 {
+                    num_signers_fully_handled += 1;
+                }
+            }
             let buffer = self.message_buffer.get_mut(&id).expect("Ids are in the buffer;");
             let SignedMessage { message, signature, id } = match buffer.pop_front() {
                 Some(buffered) => {
-                    if equivocatior_handling {
-                        equivocator_message_handled += 1;
-                    } else {
-                        handled += 1;
-                    }
-                    buffered.clone()
+
+                    buffered
                 },
                 None => continue,
             };
@@ -337,9 +339,8 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 					let import_result = self.votes.import_prevote(&*self.env, prevote, id.clone(), signature)?;
 					if let ImportResult { equivocation: Some(e), .. } = import_result {
                         println!("Got equivocation message from {:?}", id);
-                        let num_messages = self.message_buffer.get(&id).expect("Should have an entry").len();
                         self.equivocators.insert(id);
-                        buffer_size -= num_messages;
+                        num_signers_fully_handled += 1;
 						self.env.prevote_equivocation(self.votes.number(), e);
 					}
 				}
@@ -347,9 +348,8 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 					let import_result = self.votes.import_precommit(&*self.env, precommit, id.clone(), signature)?;
 					if let ImportResult { equivocation: Some(e), .. } = import_result {
                         println!("Got equivocation message from {:?}", id);
-                        let num_messages = self.message_buffer.get(&id).expect("Should have an entry").len();
                         self.equivocators.insert(id);
-                        buffer_size -= num_messages;
+                        num_signers_fully_handled += 1;
 						self.env.precommit_equivocation(self.votes.number(), e);
 					}
 				}
