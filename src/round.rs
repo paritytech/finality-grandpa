@@ -98,6 +98,7 @@ impl<Vote: Eq, Signature: Eq> VoteMultiplicity<Vote, Signature> {
 struct VoteTracker<Id: Hash + Eq, Vote, Signature> {
 	votes: HashMap<Id, VoteMultiplicity<Vote, Signature>>,
 	current_weight: u64,
+	voted_at: Option<usize>,
 }
 
 /// Result of adding a vote.
@@ -111,6 +112,7 @@ impl<Id: Hash + Eq + Clone, Vote: Clone + Eq, Signature: Clone + Eq> VoteTracker
 		VoteTracker {
 			votes: HashMap::new(),
 			current_weight: 0,
+			voted_at: None,
 		}
 	}
 
@@ -673,6 +675,18 @@ impl<Id, H, N, Signature> Round<Id, H, N, Signature> where
 	/// Return all imported precommits.
 	pub fn precommits(&self) -> Vec<(Id, Precommit<H, N>, Signature)> {
 		self.precommit.votes()
+	}
+
+	/// Return all imported prevotes.
+	pub fn set_prevote_idx(&mut self, idx: usize) -> bool {
+		self.prevote.voted_at = Some(idx);
+		true
+	}
+
+	/// Return all imported precommits.
+	pub fn set_precommit_idx(&mut self, idx: usize) -> bool {
+		self.precommit.voted_at = Some(idx);
+		true
 	}
 }
 

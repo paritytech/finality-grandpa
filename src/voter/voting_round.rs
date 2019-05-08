@@ -202,6 +202,16 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 	}
 
 	/// Get the best block finalized in this round.
+	pub(super) fn set_precommit_idx(&mut self, idx: usize) -> bool {
+		self.votes.set_precommit_idx(idx)
+	}
+
+	/// Get the best block finalized in this round.
+	pub(super) fn set_prevote_idx(&mut self, idx: usize) -> bool {
+		self.votes.set_prevote_idx(idx)
+	}
+
+	/// Get the best block finalized in this round.
 	pub(super) fn finalized(&self) -> Option<&(H, N)> {
 		self.votes.finalized()
 	}
