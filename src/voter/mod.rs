@@ -40,7 +40,7 @@ use crate::{
 };
 use crate::voter_set::VoterSet;
 use past_rounds::PastRounds;
-use voting_round::{VotingRound, State as VotingRoundState};
+use voting_round::{VotingRound, State as VotingRoundState, HistoricalVotes};
 
 mod past_rounds;
 mod voting_round;
@@ -101,7 +101,7 @@ pub trait Environment<H: Eq, N: BlockNumberOps>: Chain<H, N> {
 		round: u64,
 		state: RoundState<H, N>,
 		base: (H, N),
-		votes: Vec<SignedMessage<H, N, Self::Signature, Self::Id>>,
+		votes: HistoricalVotes<SignedMessage<H, N, Self::Signature, Self::Id>>,
 	) -> Result<(), Self::Error>;
 
 	/// Called when a block should be finalized.

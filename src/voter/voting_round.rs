@@ -95,6 +95,12 @@ impl Voting {
 	}
 }
 
+pub struct HistoricalVotes<M> {
+	seen: Vec<M>,
+	prevote_idx: Option<usize>,
+	precommit_idx: Option<usize>,
+}
+
 impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 	H: Hash + Clone + Eq + Ord + ::std::fmt::Debug,
 	N: Copy + BlockNumberOps + ::std::fmt::Debug,
@@ -256,7 +262,7 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 	}
 
 	/// Return all imported votes for the round (prevotes and precommits).
-	pub(super) fn votes(&self) -> Vec<SignedMessage<H, N, E::Signature, E::Id>> {
+	pub(super) fn votes(&self) -> HistoricalVotes<SignedMessage<H, N, E::Signature, E::Id>> {
 		let prevotes = self.votes.prevotes().into_iter().map(|(id, prevote, signature)| {
 			SignedMessage {
 				id,
@@ -273,7 +279,13 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 			}
 		});
 
-		prevotes.chain(precommits).collect()
+		let prevotes_len = prevotes.len();
+
+		HistoricalVotes {
+			seen: prevotes.chain(precommits).collect(),
+			prevote_idx: self.votes.prevote_idx(),
+			precommit_idx: self.votes.precommit_idx().map(|idx| idx + prevotes_len),
+		}
 	}
 
 	fn process_incoming(&mut self) -> Result<(), E::Error> {
@@ -422,8 +434,8 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 					if self.voting.is_active() {
 						debug!(target: "afg", "Casting precommit for round {}", self.votes.number());
 						let precommit = self.construct_precommit();
-						self.votes.set_precommit_idx();
 						self.env.precommitted(self.round_number(), precommit.clone())?;
+						self.votes.set_precommit_idx();
 						self.outgoing.push(Message::Precommit(precommit));
 					}
 					self.state = Some(State::Precommitted);

@@ -677,18 +677,28 @@ impl<Id, H, N, Signature> Round<Id, H, N, Signature> where
 		self.precommit.votes()
 	}
 
-	/// Save the len of prevotes received at the moment of prevoting.
+	/// Set the length of prevotes received at the moment of prevoting.
 	pub fn set_prevote_idx(&mut self) -> bool {
 		self.prevote.voted_at = Some(self.prevote.votes().len());
 		println!("set prevote idx to {:?}", self.prevote.voted_at);
 		true
 	}
 
-	/// Save the len of precommits received at the moment of precommiting.
+	/// Set the length of precommits received at the moment of precommiting.
 	pub fn set_precommit_idx(&mut self) -> bool {
 		self.precommit.voted_at = Some(self.precommit.votes().len());
 		println!("set precommit idx to {:?}", self.precommit.voted_at);
 		true
+	}
+
+		/// Get the length of prevotes received at the moment of prevoting.
+	pub fn prevote_idx(&self) -> Option<usize> {
+		self.prevote.voted_at
+	}
+
+	/// Get the length of precommits received at the moment of precommiting.
+	pub fn precommit_idx(&self) -> Option<usize> {
+		self.precommit.voted_at
 	}
 }
 
