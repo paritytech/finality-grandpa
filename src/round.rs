@@ -691,7 +691,7 @@ impl<Id, H, N, Signature> Round<Id, H, N, Signature> where
 		true
 	}
 
-		/// Get the length of prevotes received at the moment of prevoting.
+	/// Get the length of prevotes received at the moment of prevoting.
 	pub fn prevote_idx(&self) -> Option<usize> {
 		self.prevote.voted_at
 	}
