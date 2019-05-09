@@ -24,6 +24,7 @@ use crate::round::{Round, State as RoundState};
 use crate::{
 	Commit, Message, Prevote, Precommit, PrimaryPropose, SignedMessage,
 	SignedPrecommit, BlockNumberOps, validate_commit, ImportResult,
+	HistoricalVotes,
 };
 use crate::voter_set::VoterSet;
 use super::{Environment, Buffered};
@@ -93,12 +94,6 @@ impl Voting {
 			_ => false,
 		}
 	}
-}
-
-pub struct HistoricalVotes<M> {
-	seen: Vec<M>,
-	prevote_idx: usize,
-	precommit_idx: usize,
 }
 
 impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
