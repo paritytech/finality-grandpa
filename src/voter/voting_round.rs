@@ -48,13 +48,14 @@ impl<T> std::fmt::Debug for State<T> {
 }
 
 /// Logic for a voter on a specific round.
-pub(super) struct VotingRound<H, N, E: Environment<H, N>> where
+pub(super) struct VotingRound<H, N, E: Environment<H, N>, M> where
 	H: Hash + Clone + Eq + Ord + ::std::fmt::Debug,
 	N: Copy + BlockNumberOps + ::std::fmt::Debug,
 {
 	env: Arc<E>,
 	voting: Voting,
 	votes: Round<E::Id, H, N, E::Signature>,
+	historical_votes: HistoricalVotes<M>,
 	incoming: E::In,
 	outgoing: Buffered<E::Out>,
 	state: Option<State<E::Timer>>, // state machine driving votes.
@@ -101,7 +102,7 @@ pub struct HistoricalVotes<M> {
 	precommit_idx: Option<usize>,
 }
 
-impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
+impl<H, N, E: Environment<H, N>, M> VotingRound<H, N, E, M> where
 	H: Hash + Clone + Eq + Ord + ::std::fmt::Debug,
 	N: Copy + BlockNumberOps + ::std::fmt::Debug,
 {
@@ -113,7 +114,7 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 		last_round_state: Option<crate::bridge_state::LatterView<H, N>>,
 		finalized_sender: UnboundedSender<(H, N, u64, Commit<H, N, E::Signature, E::Id>)>,
 		env: Arc<E>,
-	) -> VotingRound<H, N, E> {
+	) -> VotingRound<H, N, E, M> {
 		let round_data = env.round_data(round_number);
 		let round_params = crate::round::RoundParams {
 			voters,
@@ -138,6 +139,11 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 		VotingRound {
 			votes,
 			voting,
+			historical_votes: HistoricalVotes {
+				seen: Vec::new(),
+				prevote_idx: None,
+				precommit_idx: None,
+			},
 			incoming: round_data.incoming,
 			outgoing: Buffered::new(round_data.outgoing),
 			state: Some(
@@ -273,28 +279,46 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 
 	/// Return all imported votes for the round (prevotes and precommits).
 	pub(super) fn votes(&self) -> HistoricalVotes<SignedMessage<H, N, E::Signature, E::Id>> {
-		let prevotes = self.votes.prevotes().into_iter().map(|(id, prevote, signature)| {
+		let prevotes_before_prevote = self.votes.prevotes().into_iter().map(|(id, prevote, signature)| {
 			SignedMessage {
 				id,
 				signature,
 				message: Message::Prevote(prevote),
 			}
-		});
+		}).collect();
 
-		let precommits = self.votes.precommits().into_iter().map(|(id, precommit, signature)| {
+		let precommits_before_prevote = self.votes.precommits().into_iter().map(|(id, precommit, signature)| {
 			SignedMessage {
 				id,
 				signature,
 				message: Message::Precommit(precommit),
 			}
-		});
+		}).collect();
 
-		let prevotes_len = prevotes.len();
+		// Indices when prevoted.
+		let (pv_pv_len, pv_pc_len) = self.votes.prevoted_indices().unwrap_or_default();
+		
+		// Indices when precommited.
+		let (pc_pv_len, pc_pc_len) = self.votes.precommited_indices().unwrap_or_default();
+
+		let prevotes_before_precommit = prevotes_before_prevote.split_off(pv_pv_len);
+		let prevotes_after_precommit = prevotes_before_precommit.split_off(pc_pv_len - pv_pv_len);
+
+		let precommits_before_precommit = precommits_before_prevote.split_off(pv_pc_len);
+		let precommits_after_precommit = precommits_before_precommit.split_off(pc_pc_len - pv_pc_len);
+
+		let prevote_idx = prevotes_before_prevote.len() + precommits_before_prevote.len();
+		let precommit_idx = prevote_idx + prevotes_before_precommit.len() + precommits_before_precommit.len();
 
 		HistoricalVotes {
-			seen: prevotes.chain(precommits).collect(),
-			prevote_idx: self.votes.prevote_idx(),
-			precommit_idx: self.votes.precommit_idx().map(|idx| idx + prevotes_len),
+			seen: prevotes_before_prevote
+					.chain(precommits_before_prevote)
+					.chain(prevotes_before_precommit)
+					.chain(precommits_before_precommit)
+					.chain(prevotes_after_precommit)
+					.chain(precommits_after_precommit).collect(),
+			prevote_idx,
+			precommit_idx,
 		}
 	}
 
