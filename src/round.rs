@@ -98,7 +98,6 @@ impl<Vote: Eq, Signature: Eq> VoteMultiplicity<Vote, Signature> {
 struct VoteTracker<Id: Hash + Eq, Vote, Signature> {
 	votes: HashMap<Id, VoteMultiplicity<Vote, Signature>>,
 	current_weight: u64,
-	voted_at: Option<usize>,
 }
 
 /// Result of adding a vote.
@@ -112,7 +111,6 @@ impl<Id: Hash + Eq + Clone, Vote: Clone + Eq, Signature: Clone + Eq> VoteTracker
 		VoteTracker {
 			votes: HashMap::new(),
 			current_weight: 0,
-			voted_at: None,
 		}
 	}
 
@@ -225,6 +223,8 @@ pub struct Round<Id: Hash + Eq, H: Hash + Eq, N, Signature> {
 	graph: VoteGraph<H, N, VoteWeight>, // DAG of blocks which have been voted on.
 	prevote: VoteTracker<Id, Prevote<H, N>, Signature>, // tracks prevotes that have been counted
 	precommit: VoteTracker<Id, Precommit<H, N>, Signature>, // tracks precommits
+	prevoted_indices: Option<(usize, usize)>,
+	precommited_indices: Option<(usize, usize)>,
 	round_number: u64,
 	voters: VoterSet<Id>,
 	total_weight: u64,
@@ -276,6 +276,8 @@ impl<Id, H, N, Signature> Round<Id, H, N, Signature> where
 			graph: VoteGraph::new(base_hash, base_number),
 			prevote: VoteTracker::new(),
 			precommit: VoteTracker::new(),
+			prevoted_indices: None,
+			precommited_indices: None,
 			bitfield_context: BitfieldContext::new(n_validators),
 			prevote_ghost: None,
 			precommit_ghost: None,
@@ -677,28 +679,26 @@ impl<Id, H, N, Signature> Round<Id, H, N, Signature> where
 		self.precommit.votes()
 	}
 
-	/// Set the length of prevotes received at the moment of prevoting.
-	pub fn set_prevote_idx(&mut self) -> bool {
-		self.prevote.voted_at = Some(self.prevote.votes().len());
-		println!("set prevote idx to {:?}", self.prevote.voted_at);
-		true
+	/// Set the length of prevotes and precommits received at the moment of prevoting.
+	pub fn set_prevoted_indices(&mut self) {
+		self.prevoted_indices = Some((self.prevote.votes().len(), self.precommit.votes().len()));
+		println!("set prevoted indices to {:?}", self.prevoted_indices)
 	}
 
-	/// Set the length of precommits received at the moment of precommiting.
-	pub fn set_precommit_idx(&mut self) -> bool {
-		self.precommit.voted_at = Some(self.precommit.votes().len());
-		println!("set precommit idx to {:?}", self.precommit.voted_at);
-		true
+	/// Set the length of prevotes and precommits received at the moment of precommiting.
+	pub fn set_precommited_indices(&mut self) {
+		self.precommited_indices = Some((self.prevote.votes().len(), self.precommit.votes().len()));
+		println!("set precommited indices to {:?}", self.precommited_indices)
 	}
 
-	/// Get the length of prevotes received at the moment of prevoting.
-	pub fn prevote_idx(&self) -> Option<usize> {
-		self.prevote.voted_at
+	/// Get the length of prevotes and precommits received at the moment of prevoting.
+	pub fn prevoted_indices(&self) -> Option<(usize, usize)> {
+		self.prevoted_indices
 	}
 
-	/// Get the length of precommits received at the moment of precommiting.
-	pub fn precommit_idx(&self) -> Option<usize> {
-		self.precommit.voted_at
+	/// Get the length of prevotes and precommits received at the moment of precommiting.
+	pub fn precommited_indices(&self) -> Option<(usize, usize)> {
+		self.precommited_indices
 	}
 }
 

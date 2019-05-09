@@ -48,14 +48,13 @@ impl<T> std::fmt::Debug for State<T> {
 }
 
 /// Logic for a voter on a specific round.
-pub(super) struct VotingRound<H, N, E: Environment<H, N>, M> where
+pub(super) struct VotingRound<H, N, E: Environment<H, N>> where
 	H: Hash + Clone + Eq + Ord + ::std::fmt::Debug,
 	N: Copy + BlockNumberOps + ::std::fmt::Debug,
 {
 	env: Arc<E>,
 	voting: Voting,
 	votes: Round<E::Id, H, N, E::Signature>,
-	historical_votes: HistoricalVotes<M>,
 	incoming: E::In,
 	outgoing: Buffered<E::Out>,
 	state: Option<State<E::Timer>>, // state machine driving votes.
@@ -98,11 +97,11 @@ impl Voting {
 
 pub struct HistoricalVotes<M> {
 	seen: Vec<M>,
-	prevote_idx: Option<usize>,
-	precommit_idx: Option<usize>,
+	prevote_idx: usize,
+	precommit_idx: usize,
 }
 
-impl<H, N, E: Environment<H, N>, M> VotingRound<H, N, E, M> where
+impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 	H: Hash + Clone + Eq + Ord + ::std::fmt::Debug,
 	N: Copy + BlockNumberOps + ::std::fmt::Debug,
 {
@@ -114,7 +113,7 @@ impl<H, N, E: Environment<H, N>, M> VotingRound<H, N, E, M> where
 		last_round_state: Option<crate::bridge_state::LatterView<H, N>>,
 		finalized_sender: UnboundedSender<(H, N, u64, Commit<H, N, E::Signature, E::Id>)>,
 		env: Arc<E>,
-	) -> VotingRound<H, N, E, M> {
+	) -> VotingRound<H, N, E> {
 		let round_data = env.round_data(round_number);
 		let round_params = crate::round::RoundParams {
 			voters,
@@ -139,11 +138,6 @@ impl<H, N, E: Environment<H, N>, M> VotingRound<H, N, E, M> where
 		VotingRound {
 			votes,
 			voting,
-			historical_votes: HistoricalVotes {
-				seen: Vec::new(),
-				prevote_idx: None,
-				precommit_idx: None,
-			},
 			incoming: round_data.incoming,
 			outgoing: Buffered::new(round_data.outgoing),
 			state: Some(
@@ -214,16 +208,6 @@ impl<H, N, E: Environment<H, N>, M> VotingRound<H, N, E, M> where
 	}
 
 	/// Get the best block finalized in this round.
-	pub(super) fn set_precommit_idx(&mut self, idx: usize) -> bool {
-		self.votes.set_precommit_idx(idx)
-	}
-
-	/// Get the best block finalized in this round.
-	pub(super) fn set_prevote_idx(&mut self, idx: usize) -> bool {
-		self.votes.set_prevote_idx(idx)
-	}
-
-	/// Get the best block finalized in this round.
 	pub(super) fn finalized(&self) -> Option<&(H, N)> {
 		self.votes.finalized()
 	}
@@ -279,7 +263,7 @@ impl<H, N, E: Environment<H, N>, M> VotingRound<H, N, E, M> where
 
 	/// Return all imported votes for the round (prevotes and precommits).
 	pub(super) fn votes(&self) -> HistoricalVotes<SignedMessage<H, N, E::Signature, E::Id>> {
-		let prevotes_before_prevote = self.votes.prevotes().into_iter().map(|(id, prevote, signature)| {
+		let mut prevotes_before_prevote: Vec<_> = self.votes.prevotes().into_iter().map(|(id, prevote, signature)| {
 			SignedMessage {
 				id,
 				signature,
@@ -287,7 +271,7 @@ impl<H, N, E: Environment<H, N>, M> VotingRound<H, N, E, M> where
 			}
 		}).collect();
 
-		let precommits_before_prevote = self.votes.precommits().into_iter().map(|(id, precommit, signature)| {
+		let mut precommits_before_prevote: Vec<_> = self.votes.precommits().into_iter().map(|(id, precommit, signature)| {
 			SignedMessage {
 				id,
 				signature,
@@ -301,22 +285,22 @@ impl<H, N, E: Environment<H, N>, M> VotingRound<H, N, E, M> where
 		// Indices when precommited.
 		let (pc_pv_len, pc_pc_len) = self.votes.precommited_indices().unwrap_or_default();
 
-		let prevotes_before_precommit = prevotes_before_prevote.split_off(pv_pv_len);
+		let mut prevotes_before_precommit = prevotes_before_prevote.split_off(pv_pv_len);
 		let prevotes_after_precommit = prevotes_before_precommit.split_off(pc_pv_len - pv_pv_len);
 
-		let precommits_before_precommit = precommits_before_prevote.split_off(pv_pc_len);
+		let mut precommits_before_precommit = precommits_before_prevote.split_off(pv_pc_len);
 		let precommits_after_precommit = precommits_before_precommit.split_off(pc_pc_len - pv_pc_len);
 
 		let prevote_idx = prevotes_before_prevote.len() + precommits_before_prevote.len();
 		let precommit_idx = prevote_idx + prevotes_before_precommit.len() + precommits_before_precommit.len();
 
 		HistoricalVotes {
-			seen: prevotes_before_prevote
-					.chain(precommits_before_prevote)
-					.chain(prevotes_before_precommit)
-					.chain(precommits_before_precommit)
-					.chain(prevotes_after_precommit)
-					.chain(precommits_after_precommit).collect(),
+			seen: prevotes_before_prevote.into_iter()
+					.chain(precommits_before_prevote.into_iter())
+					.chain(prevotes_before_precommit.into_iter())
+					.chain(precommits_before_precommit.into_iter())
+					.chain(prevotes_after_precommit.into_iter())
+					.chain(precommits_after_precommit.into_iter()).collect(),
 			prevote_idx,
 			precommit_idx,
 		}
@@ -416,7 +400,7 @@ impl<H, N, E: Environment<H, N>, M> VotingRound<H, N, E, M> where
 					if let Some(prevote) = self.construct_prevote(last_round_state)? {
 						debug!(target: "afg", "Casting prevote for round {}", self.votes.number());
 						self.env.prevoted(self.round_number(), prevote.clone())?;
-						self.votes.set_prevote_idx();
+						self.votes.set_prevoted_indices();
 						self.outgoing.push(Message::Prevote(prevote));
 					}
 				}
@@ -469,7 +453,7 @@ impl<H, N, E: Environment<H, N>, M> VotingRound<H, N, E, M> where
 						debug!(target: "afg", "Casting precommit for round {}", self.votes.number());
 						let precommit = self.construct_precommit();
 						self.env.precommitted(self.round_number(), precommit.clone())?;
-						self.votes.set_precommit_idx();
+						self.votes.set_precommited_indices();
 						self.outgoing.push(Message::Precommit(precommit));
 					}
 					self.state = Some(State::Precommitted);
