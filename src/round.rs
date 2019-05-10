@@ -173,7 +173,8 @@ impl<Id: Hash + Eq + Clone, Vote: Clone + Eq, Signature: Clone + Eq> VoteTracker
 	// Returns all imported votes.
 	fn votes(&self) -> Vec<(Id, Vote, Signature)> {
 		let mut votes = Vec::new();
-
+		// TODO: I think it should be faster to initialized votes to default values
+		// and then do votes[n] = (). But i need to find the default...
 		for (id, vote) in self.votes.iter() {
 			match vote {
 				VoteMultiplicity::Single(v, s, n) => {
