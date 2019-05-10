@@ -495,6 +495,18 @@ impl<H, N> HistoricalVotes<H, N> {
 			precommit_idx: None,
 		}
 	}
+
+	pub fn seen(&self) -> &Vec<Message<H, N>> {
+		&self.seen
+	}
+
+	pub fn prevote_idx(&self) -> Option<usize> {
+		self.prevote_idx
+	}
+
+	pub fn precommit_idx(&self) -> Option<usize> {
+		self.precommit_idx
+	}
 }
 
 #[cfg(test)]
