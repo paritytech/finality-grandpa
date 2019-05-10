@@ -284,11 +284,7 @@ impl<Id, H, N, Signature> Round<Id, H, N, Signature> where
 			graph: VoteGraph::new(base_hash, base_number),
 			prevote: VoteTracker::new(),
 			precommit: VoteTracker::new(),
-			historical_votes: HistoricalVotes {
-				seen: Vec::new(),
-				prevote_idx: None,
-				precommit_idx: None,
-			},
+			historical_votes: HistoricalVotes::new(),
 			bitfield_context: BitfieldContext::new(n_validators),
 			prevote_ghost: None,
 			precommit_ghost: None,

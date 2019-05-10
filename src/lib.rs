@@ -487,6 +487,16 @@ pub struct HistoricalVotes<H, N> {
 	precommit_idx: Option<usize>,
 }
 
+impl<H, N> HistoricalVotes<H, N> {
+	pub fn new() -> Self {
+		HistoricalVotes {
+			seen: Vec::new(),
+			prevote_idx: None,
+			precommit_idx: None,
+		}
+	}
+}
+
 #[cfg(test)]
 mod tests {
 	use super::threshold;
