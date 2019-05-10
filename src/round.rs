@@ -77,17 +77,17 @@ impl AddAssign for VoteWeight {
 // votes from a single validator
 enum VoteMultiplicity<Vote, Signature> {
 	// validator voted once.
-	Single(Vote, Signature),
+	Single(Vote, Signature, usize),
  	// validator equivocated at least once.
-	Equivocated((Vote, Signature), (Vote, Signature)),
+	Equivocated((Vote, Signature, usize), (Vote, Signature, usize)),
 }
 
 impl<Vote: Eq, Signature: Eq> VoteMultiplicity<Vote, Signature> {
 	fn contains(&self, vote: &Vote, signature: &Signature) -> bool {
 		match self {
-			VoteMultiplicity::Single(v, s) =>
+			VoteMultiplicity::Single(v, s, _) =>
 				v == vote && s == signature,
-			VoteMultiplicity::Equivocated((v1, s1), (v2, s2)) => {
+			VoteMultiplicity::Equivocated((v1, s1, _), (v2, s2, _)) => {
 				v1 == vote && s1 == signature ||
 					v2 == vote && s2 == signature
 			},
@@ -98,6 +98,7 @@ impl<Vote: Eq, Signature: Eq> VoteMultiplicity<Vote, Signature> {
 struct VoteTracker<Id: Hash + Eq, Vote, Signature> {
 	votes: HashMap<Id, VoteMultiplicity<Vote, Signature>>,
 	current_weight: u64,
+	num_votes: usize,
 }
 
 /// Result of adding a vote.
@@ -111,6 +112,7 @@ impl<Id: Hash + Eq + Clone, Vote: Clone + Eq, Signature: Clone + Eq> VoteTracker
 		VoteTracker {
 			votes: HashMap::new(),
 			current_weight: 0,
+			num_votes: 0,
 		}
 	}
 
@@ -130,7 +132,9 @@ impl<Id: Hash + Eq + Clone, Vote: Clone + Eq, Signature: Clone + Eq> VoteTracker
 		match self.votes.entry(id) {
 			Entry::Vacant(vacant) => {
 				self.current_weight += weight;
-				let multiplicity = vacant.insert(VoteMultiplicity::Single(vote, signature));
+				let multiplicity = vacant.insert(VoteMultiplicity::Single(vote, signature, self.num_votes));
+				self.num_votes += 1;
+
 				return AddVoteResult {
 					multiplicity: Some(multiplicity),
 					duplicated: false,
@@ -143,8 +147,11 @@ impl<Id: Hash + Eq + Clone, Vote: Clone + Eq, Signature: Clone + Eq> VoteTracker
 
 				// import, but ignore further equivocations.
 				let new_val = match *occupied.get_mut() {
-					VoteMultiplicity::Single(ref v, ref s) =>
-						Some(VoteMultiplicity::Equivocated((v.clone(), s.clone()), (vote, signature))),
+					VoteMultiplicity::Single(ref v, ref s, n) =>
+						Some(VoteMultiplicity::Equivocated(
+							(v.clone(), s.clone(), n),
+							(vote, signature, self.num_votes)
+						)),
 					VoteMultiplicity::Equivocated(_, _) => {
 						return AddVoteResult { multiplicity: None, duplicated: false }
 					}
@@ -152,6 +159,7 @@ impl<Id: Hash + Eq + Clone, Vote: Clone + Eq, Signature: Clone + Eq> VoteTracker
 
 				if let Some(new_val) = new_val {
 					*occupied.get_mut() = new_val;
+					self.num_votes += 1;
 				}
 
 				AddVoteResult {
@@ -168,12 +176,12 @@ impl<Id: Hash + Eq + Clone, Vote: Clone + Eq, Signature: Clone + Eq> VoteTracker
 
 		for (id, vote) in self.votes.iter() {
 			match vote {
-				VoteMultiplicity::Single(v, s) => {
-					votes.push((id.clone(), v.clone(), s.clone()))
+				VoteMultiplicity::Single(v, s, n) => {
+					votes.insert(*n, (id.clone(), v.clone(), s.clone()));
 				},
-				VoteMultiplicity::Equivocated((v1, s1), (v2, s2)) => {
-					votes.push((id.clone(), v1.clone(), s1.clone()));
-					votes.push((id.clone(), v2.clone(), s2.clone()));
+				VoteMultiplicity::Equivocated((v1, s1, n1), (v2, s2, n2)) => {
+					votes.insert(*n1, (id.clone(), v1.clone(), s1.clone()));
+					votes.insert(*n2, (id.clone(), v2.clone(), s2.clone()));
 				},
 			}
 		}
@@ -323,7 +331,7 @@ impl<Id, H, N, Signature> Round<Id, H, N, Signature> where
 			let round_number = self.round_number;
 
 			match multiplicity {
-				VoteMultiplicity::Single(ref vote, _) => {
+				VoteMultiplicity::Single(vote, _, _) => {
 					let vote_weight = VoteWeight {
 						bitfield: self.bitfield_context.prevote_bitfield(info)
 							.expect("info is instantiated from same voter set as context; qed"),
@@ -338,7 +346,7 @@ impl<Id, H, N, Signature> Round<Id, H, N, Signature> where
 
 					None
 				}
-				VoteMultiplicity::Equivocated(ref first, ref second) => {
+				VoteMultiplicity::Equivocated((fst_vote, fst_sig, _), (snd_vote, snd_sig, _)) => {
 					// mark the equivocator as such. no need to "undo" the first vote.
 					self.bitfield_context.equivocated_prevote(info)
 						.expect("info is instantiated from same voter set as bitfield; qed");
@@ -346,8 +354,8 @@ impl<Id, H, N, Signature> Round<Id, H, N, Signature> where
 					Some(Equivocation {
 						round_number,
 						identity: signer,
-						first: first.clone(),
-						second: second.clone(),
+						first: (fst_vote.clone(), fst_sig.clone()),
+						second: (snd_vote.clone(), snd_sig.clone()),
 					})
 				}
 			}
@@ -400,7 +408,7 @@ impl<Id, H, N, Signature> Round<Id, H, N, Signature> where
 			let round_number = self.round_number;
 
 			match multiplicity {
-				VoteMultiplicity::Single(ref vote, _) => {
+				VoteMultiplicity::Single(vote, _, _) => {
 					let vote_weight = VoteWeight {
 						bitfield: self.bitfield_context.precommit_bitfield(info)
 							.expect("info is instantiated from same voter set as context; qed"),
@@ -415,7 +423,7 @@ impl<Id, H, N, Signature> Round<Id, H, N, Signature> where
 
 					None
 				}
-				VoteMultiplicity::Equivocated(ref first, ref second) => {
+				VoteMultiplicity::Equivocated((fst_vote, fst_sig, _), (snd_vote, snd_sig, _)) => {
 					// mark the equivocator as such. no need to "undo" the first vote.
 					self.bitfield_context.equivocated_precommit(info)
 						.expect("info is instantiated from same voter set as bitfield; qed");
@@ -423,8 +431,8 @@ impl<Id, H, N, Signature> Round<Id, H, N, Signature> where
 					Some(Equivocation {
 						round_number,
 						identity: signer,
-						first: first.clone(),
-						second: second.clone(),
+						first: (fst_vote.clone(), fst_sig.clone()),
+						second: (snd_vote.clone(), snd_sig.clone()),
 					})
 				}
 			}
@@ -476,8 +484,8 @@ impl<Id, H, N, Signature> Round<Id, H, N, Signature> where
 			type Item = (V, S);
 
 			fn next(&mut self) -> Option<(V, S)> {
-				match *self.multiplicity {
-					VoteMultiplicity::Single(ref v, ref s) => {
+				match self.multiplicity {
+					VoteMultiplicity::Single(v, s, _) => {
 						if self.yielded == 0 {
 							self.yielded += 1;
 							Some((v.clone(), s.clone()))
@@ -485,10 +493,10 @@ impl<Id, H, N, Signature> Round<Id, H, N, Signature> where
 							None
 						}
 					}
-					VoteMultiplicity::Equivocated(ref a, ref b) => {
+					VoteMultiplicity::Equivocated((fst_vote, fst_sig, _), (snd_vote, snd_sig, _)) => {
 						let res = match self.yielded {
-							0 => Some(a.clone()),
-							1 => Some(b.clone()),
+							0 => Some((fst_vote.clone(), fst_sig.clone())),
+							1 => Some((snd_vote.clone(), snd_sig.clone())),
 							_ => None,
 						};
 
@@ -502,7 +510,7 @@ impl<Id, H, N, Signature> Round<Id, H, N, Signature> where
 		let (f_hash, _f_num) = self.finalized.clone()?;
 		let find_valid_precommits = self.precommit.votes.iter()
 			.filter(move |&(_id, ref multiplicity)| {
-				if let VoteMultiplicity::Single(ref v, _) = *multiplicity {
+				if let VoteMultiplicity::Single(v, _, _) = *multiplicity {
 					// if there is a single vote from this voter, we only include it
 					// if it branches off of the target.
 					chain.is_equal_or_descendent_of(f_hash.clone(), v.target_hash.clone())
