@@ -689,13 +689,13 @@ impl<Id, H, N, Signature> Round<Id, H, N, Signature> where
 
 	/// Set the length of prevotes and precommits received at the moment of prevoting.
 	pub fn set_prevoted_indices(&mut self) {
-		self.prevoted_indices = Some((self.prevote.votes().len(), self.precommit.votes().len()));
+		self.prevoted_indices = Some((self.prevote.num_votes, self.precommit.num_votes));
 		println!("set prevoted indices to {:?}", self.prevoted_indices)
 	}
 
 	/// Set the length of prevotes and precommits received at the moment of precommiting.
 	pub fn set_precommited_indices(&mut self) {
-		self.precommited_indices = Some((self.prevote.votes().len(), self.precommit.votes().len()));
+		self.precommited_indices = Some((self.prevote.num_votes, self.precommit.num_votes));
 		println!("set precommited indices to {:?}", self.precommited_indices)
 	}
 
