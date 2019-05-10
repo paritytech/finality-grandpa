@@ -22,7 +22,7 @@ use crate::bitfield::{Shared as BitfieldContext, Bitfield};
 use crate::vote_graph::VoteGraph;
 use crate::voter_set::VoterSet;
 
-use super::{Equivocation, Prevote, Precommit, Chain, BlockNumberOps};
+use super::{Equivocation, Prevote, Precommit, Chain, BlockNumberOps, HistoricalVotes, Message};
 
 #[derive(Hash, Eq, PartialEq)]
 struct Address;
@@ -232,8 +232,7 @@ pub struct Round<Id: Hash + Eq, H: Hash + Eq, N, Signature> {
 	graph: VoteGraph<H, N, VoteWeight>, // DAG of blocks which have been voted on.
 	prevote: VoteTracker<Id, Prevote<H, N>, Signature>, // tracks prevotes that have been counted
 	precommit: VoteTracker<Id, Precommit<H, N>, Signature>, // tracks precommits
-	prevoted_indices: Option<(usize, usize)>,
-	precommited_indices: Option<(usize, usize)>,
+	historical_votes: HistoricalVotes<H, N>,
 	round_number: u64,
 	voters: VoterSet<Id>,
 	total_weight: u64,
@@ -285,8 +284,11 @@ impl<Id, H, N, Signature> Round<Id, H, N, Signature> where
 			graph: VoteGraph::new(base_hash, base_number),
 			prevote: VoteTracker::new(),
 			precommit: VoteTracker::new(),
-			prevoted_indices: None,
-			precommited_indices: None,
+			historical_votes: HistoricalVotes {
+				seen: Vec::new(),
+				prevote_idx: None,
+				precommit_idx: None,
+			},
 			bitfield_context: BitfieldContext::new(n_validators),
 			prevote_ghost: None,
 			precommit_ghost: None,
@@ -344,6 +346,8 @@ impl<Id, H, N, Signature> Round<Id, H, N, Signature> where
 						vote_weight,
 						chain,
 					)?;
+
+					self.historical_votes.seen.push(Message::Prevote(vote.clone()));
 
 					None
 				}
@@ -421,6 +425,8 @@ impl<Id, H, N, Signature> Round<Id, H, N, Signature> where
 						vote_weight,
 						chain,
 					)?;
+
+					self.historical_votes.seen.push(Message::Precommit(vote.clone()));
 
 					None
 				}
@@ -688,26 +694,29 @@ impl<Id, H, N, Signature> Round<Id, H, N, Signature> where
 		self.precommit.votes()
 	}
 
-	/// Set the length of prevotes and precommits received at the moment of prevoting.
-	pub fn set_prevoted_indices(&mut self) {
-		self.prevoted_indices = Some((self.prevote.num_votes, self.precommit.num_votes));
-		println!("set prevoted indices to {:?}", self.prevoted_indices)
+	/// Return all imported votes (prevotes and precommits) ordered.
+	pub fn historical_votes(&self) -> &HistoricalVotes<H, N> {
+		&self.historical_votes
 	}
 
-	/// Set the length of prevotes and precommits received at the moment of precommiting.
-	pub fn set_precommited_indices(&mut self) {
-		self.precommited_indices = Some((self.prevote.num_votes, self.precommit.num_votes));
-		println!("set precommited indices to {:?}", self.precommited_indices)
+	/// Set the number of prevotes and precommits received at the moment of prevoting.
+	pub fn set_prevoted_index(&mut self) {
+		self.historical_votes.prevote_idx = Some(self.historical_votes.seen.len())
 	}
 
-	/// Get the length of prevotes and precommits received at the moment of prevoting.
-	pub fn prevoted_indices(&self) -> Option<(usize, usize)> {
-		self.prevoted_indices
+	/// Set the number of prevotes and precommits received at the moment of precommiting.
+	pub fn set_precommited_index(&mut self) {
+		self.historical_votes.precommit_idx = Some(self.historical_votes.seen.len())
 	}
 
-	/// Get the length of prevotes and precommits received at the moment of precommiting.
-	pub fn precommited_indices(&self) -> Option<(usize, usize)> {
-		self.precommited_indices
+	/// Get the number of prevotes and precommits received at the moment of prevoting.
+	pub fn prevoted_index(&self) -> Option<usize> {
+		self.historical_votes.prevote_idx
+	}
+
+	/// Get the number of prevotes and precommits received at the moment of precommiting.
+	pub fn precommited_index(&self) -> Option<usize> {
+		self.historical_votes.precommit_idx
 	}
 }
 

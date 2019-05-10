@@ -256,49 +256,31 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 		self.best_finalized.as_ref()
 	}
 
-	/// Return all imported votes for the round (prevotes and precommits).
-	pub(super) fn votes(&self) -> HistoricalVotes<SignedMessage<H, N, E::Signature, E::Id>> {
-		let mut prevotes_before_prevote: Vec<_> = self.votes.prevotes().into_iter().map(|(id, prevote, signature)| {
+	/// Return all imported votes for the round (prevotes and precommits) unordered.
+	pub(super) fn votes(&self) -> Vec<SignedMessage<H, N, E::Signature, E::Id>> {
+		let prevotes = self.votes.prevotes().into_iter().map(|(id, prevote, signature)| {
 			SignedMessage {
 				id,
 				signature,
 				message: Message::Prevote(prevote),
 			}
-		}).collect();
+		});
 
-		let mut precommits_before_prevote: Vec<_> = self.votes.precommits().into_iter().map(|(id, precommit, signature)| {
+		let precommits = self.votes.precommits().into_iter().map(|(id, precommit, signature)| {
 			SignedMessage {
 				id,
 				signature,
 				message: Message::Precommit(precommit),
 			}
-		}).collect();
+		});
 
-		// Indices when prevoted.
-		let (pv_pv_len, pv_pc_len) = self.votes.prevoted_indices().unwrap_or_default();
-		
-		// Indices when precommited.
-		let (pc_pv_len, pc_pc_len) = self.votes.precommited_indices().unwrap_or_default();
+		prevotes.chain(precommits).collect()
+	}
 
-		let mut prevotes_before_precommit = prevotes_before_prevote.split_off(pv_pv_len);
-		let prevotes_after_precommit = prevotes_before_precommit.split_off(pc_pv_len - pv_pv_len);
-
-		let mut precommits_before_precommit = precommits_before_prevote.split_off(pv_pc_len);
-		let precommits_after_precommit = precommits_before_precommit.split_off(pc_pc_len - pv_pc_len);
-
-		let prevote_idx = prevotes_before_prevote.len() + precommits_before_prevote.len();
-		let precommit_idx = prevote_idx + prevotes_before_precommit.len() + precommits_before_precommit.len();
-
-		HistoricalVotes {
-			seen: prevotes_before_prevote.into_iter()
-					.chain(precommits_before_prevote.into_iter())
-					.chain(prevotes_before_precommit.into_iter())
-					.chain(precommits_before_precommit.into_iter())
-					.chain(prevotes_after_precommit.into_iter())
-					.chain(precommits_after_precommit.into_iter()).collect(),
-			prevote_idx,
-			precommit_idx,
-		}
+	/// Return all imported votes for the round (prevotes and precommits) ordered
+	/// and indicating at which indices we voted.
+	pub(super) fn historical_votes(&self) -> &HistoricalVotes<H, N> {
+		self.votes.historical_votes()
 	}
 
 	fn process_incoming(&mut self) -> Result<(), E::Error> {
@@ -395,7 +377,7 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 					if let Some(prevote) = self.construct_prevote(last_round_state)? {
 						debug!(target: "afg", "Casting prevote for round {}", self.votes.number());
 						self.env.prevoted(self.round_number(), prevote.clone())?;
-						self.votes.set_prevoted_indices();
+						self.votes.set_prevoted_index();
 						self.outgoing.push(Message::Prevote(prevote));
 					}
 				}
@@ -448,7 +430,7 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 						debug!(target: "afg", "Casting precommit for round {}", self.votes.number());
 						let precommit = self.construct_precommit();
 						self.env.precommitted(self.round_number(), precommit.clone())?;
-						self.votes.set_precommited_indices();
+						self.votes.set_precommited_index();
 						self.outgoing.push(Message::Precommit(precommit));
 					}
 					self.state = Some(State::Precommitted);

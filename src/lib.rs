@@ -481,10 +481,10 @@ pub fn process_commit_validation_result<H, N>(
 /// Historical votes seen in a round.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "derive-codec", derive(Encode, Decode))]
-pub struct HistoricalVotes<M> {
-	seen: Vec<M>,
-	prevote_idx: usize,
-	precommit_idx: usize,
+pub struct HistoricalVotes<H, N> {
+	seen: Vec<Message<H, N>>,
+	prevote_idx: Option<usize>,
+	precommit_idx: Option<usize>,
 }
 
 #[cfg(test)]

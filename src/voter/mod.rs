@@ -36,7 +36,7 @@ use std::sync::Arc;
 use crate::round::State as RoundState;
 use crate::{
 	Chain, Commit, CompactCommit, Equivocation, Message, Prevote, Precommit, PrimaryPropose,
-	SignedMessage, BlockNumberOps, validate_commit, CommitValidationResult, HistoricalVotes,
+	SignedMessage, BlockNumberOps, validate_commit, CommitValidationResult,
 };
 use crate::voter_set::VoterSet;
 use past_rounds::PastRounds;
@@ -101,7 +101,7 @@ pub trait Environment<H: Eq, N: BlockNumberOps>: Chain<H, N> {
 		round: u64,
 		state: RoundState<H, N>,
 		base: (H, N),
-		votes: HistoricalVotes<SignedMessage<H, N, Self::Signature, Self::Id>>,
+		votes: Vec<SignedMessage<H, N, Self::Signature, Self::Id>>,
 	) -> Result<(), Self::Error>;
 
 	/// Called when a block should be finalized.
