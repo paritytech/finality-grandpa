@@ -169,9 +169,15 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 	pub(super) fn round_number(&self) -> u64 {
 		self.votes.number()
 	}
+
 	/// Get the round state.
 	pub(super) fn round_state(&self) -> RoundState<H, N> {
 		self.votes.state()
+	}
+
+	/// Get the base block in the dag.
+	pub(super) fn dag_base(&self) -> (H, N) {
+		self.votes.base()
 	}
 
 	/// Get the voters in this round.
