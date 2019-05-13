@@ -481,13 +481,13 @@ pub fn process_commit_validation_result<H, N>(
 /// Historical votes seen in a round.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "derive-codec", derive(Encode, Decode))]
-pub struct HistoricalVotes<H, N> {
-	seen: Vec<Message<H, N>>,
+pub struct HistoricalVotes<H, N, S, Id> {
+	seen: Vec<SignedMessage<H, N, S, Id>>,
 	prevote_idx: Option<usize>,
 	precommit_idx: Option<usize>,
 }
 
-impl<H, N> HistoricalVotes<H, N> {
+impl<H, N, S, Id> HistoricalVotes<H, N, S, Id> {
 	pub fn new() -> Self {
 		HistoricalVotes {
 			seen: Vec::new(),
@@ -496,7 +496,7 @@ impl<H, N> HistoricalVotes<H, N> {
 		}
 	}
 
-	pub fn seen(&self) -> &Vec<Message<H, N>> {
+	pub fn seen(&self) -> &Vec<SignedMessage<H, N, S, Id>> {
 		&self.seen
 	}
 

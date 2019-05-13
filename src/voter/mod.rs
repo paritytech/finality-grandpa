@@ -101,7 +101,7 @@ pub trait Environment<H: Eq, N: BlockNumberOps>: Chain<H, N> {
 		round: u64,
 		state: RoundState<H, N>,
 		base: (H, N),
-		votes: &HistoricalVotes<H, N>,
+		votes: &HistoricalVotes<H, N, Self::Signature, Self::Id>,
 	) -> Result<(), Self::Error>;
 
 	/// Called when a block should be finalized.

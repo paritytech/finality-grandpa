@@ -22,7 +22,7 @@ use crate::bitfield::{Shared as BitfieldContext, Bitfield};
 use crate::vote_graph::VoteGraph;
 use crate::voter_set::VoterSet;
 
-use super::{Equivocation, Prevote, Precommit, Chain, BlockNumberOps, HistoricalVotes, Message};
+use super::{Equivocation, Prevote, Precommit, Chain, BlockNumberOps, HistoricalVotes, Message, SignedMessage};
 
 #[derive(Hash, Eq, PartialEq)]
 struct Address;
@@ -224,7 +224,7 @@ pub struct Round<Id: Hash + Eq, H: Hash + Eq, N, Signature> {
 	graph: VoteGraph<H, N, VoteWeight>, // DAG of blocks which have been voted on.
 	prevote: VoteTracker<Id, Prevote<H, N>, Signature>, // tracks prevotes that have been counted
 	precommit: VoteTracker<Id, Precommit<H, N>, Signature>, // tracks precommits
-	historical_votes: HistoricalVotes<H, N>,
+	historical_votes: HistoricalVotes<H, N, Signature, Id>,
 	round_number: u64,
 	voters: VoterSet<Id>,
 	total_weight: u64,
@@ -312,7 +312,7 @@ impl<Id, H, N, Signature> Round<Id, H, N, Signature> where
 		let weight = info.weight();
 
 		let equivocation = {
-			let multiplicity = match self.prevote.add_vote(signer.clone(), vote, signature, weight) {
+			let multiplicity = match self.prevote.add_vote(signer.clone(), vote.clone(), signature.clone(), weight) {
 				AddVoteResult { multiplicity: Some(m), .. } => m,
 				AddVoteResult { duplicated, .. } => {
 					import_result.duplicated = duplicated;
@@ -335,7 +335,10 @@ impl<Id, H, N, Signature> Round<Id, H, N, Signature> where
 						chain,
 					)?;
 
-					self.historical_votes.seen.push(Message::Prevote(vote.clone()));
+					// Push the vote into HistoricalVotes.
+					let message = Message::Prevote(vote.clone());
+					let signed_message = SignedMessage { id: signer.clone(), signature, message };
+					self.historical_votes.seen.push(signed_message);
 
 					None
 				}
@@ -343,6 +346,11 @@ impl<Id, H, N, Signature> Round<Id, H, N, Signature> where
 					// mark the equivocator as such. no need to "undo" the first vote.
 					self.bitfield_context.equivocated_prevote(info)
 						.expect("info is instantiated from same voter set as bitfield; qed");
+
+					// Push the vote into HistoricalVotes.
+					let message = Message::Prevote(vote);
+					let signed_message = SignedMessage { id: signer.clone(), signature, message };
+					self.historical_votes.seen.push(signed_message);
 
 					Some(Equivocation {
 						round_number,
@@ -391,7 +399,7 @@ impl<Id, H, N, Signature> Round<Id, H, N, Signature> where
 		let weight = info.weight();
 
 		let equivocation = {
-			let multiplicity = match self.precommit.add_vote(signer.clone(), vote, signature, weight) {
+			let multiplicity = match self.precommit.add_vote(signer.clone(), vote.clone(), signature.clone(), weight) {
 				AddVoteResult { multiplicity: Some(m), .. } => m,
 				AddVoteResult { duplicated, .. } => {
 					import_result.duplicated = duplicated;
@@ -414,7 +422,9 @@ impl<Id, H, N, Signature> Round<Id, H, N, Signature> where
 						chain,
 					)?;
 
-					self.historical_votes.seen.push(Message::Precommit(vote.clone()));
+					let message = Message::Precommit(vote.clone());
+					let signed_message = SignedMessage { id: signer.clone(), signature, message };
+					self.historical_votes.seen.push(signed_message);
 
 					None
 				}
@@ -422,6 +432,11 @@ impl<Id, H, N, Signature> Round<Id, H, N, Signature> where
 					// mark the equivocator as such. no need to "undo" the first vote.
 					self.bitfield_context.equivocated_precommit(info)
 						.expect("info is instantiated from same voter set as bitfield; qed");
+
+					// Push the vote into HistoricalVotes.
+					let message = Message::Precommit(vote);
+					let signed_message = SignedMessage { id: signer.clone(), signature, message };
+					self.historical_votes.seen.push(signed_message);
 
 					Some(Equivocation {
 						round_number,
@@ -683,7 +698,7 @@ impl<Id, H, N, Signature> Round<Id, H, N, Signature> where
 	}
 
 	/// Return all votes (prevotes and precommits) by importing order.
-	pub fn historical_votes(&self) -> &HistoricalVotes<H, N> {
+	pub fn historical_votes(&self) -> &HistoricalVotes<H, N, Signature, Id> {
 		&self.historical_votes
 	}
 
