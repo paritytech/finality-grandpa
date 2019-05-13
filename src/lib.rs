@@ -496,6 +496,14 @@ impl<H, N, S, Id> HistoricalVotes<H, N, S, Id> {
 		}
 	}
 
+	pub fn new_with_votes(seen: Vec<SignedMessage<H, N, S, Id>>) -> Self {
+		HistoricalVotes {
+			seen,
+			prevote_idx: None,
+			precommit_idx: None,
+		}
+	}
+
 	pub fn seen(&self) -> &Vec<SignedMessage<H, N, S, Id>> {
 		&self.seen
 	}
