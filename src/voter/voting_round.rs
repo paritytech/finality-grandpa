@@ -161,7 +161,7 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 			voting: Voting::No,
 			incoming: round_data.incoming,
 			outgoing: Buffered::new(round_data.outgoing),
-			state: Some(State::Precommitted), // so we don't vote anymore.
+			state: None,
 			bridged_round_state: None,
 			primary_block: None,
 			env,
@@ -174,7 +174,7 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 	/// Mark the round as no-further-voting. Rounds that are in this state will not be
 	/// voted on any more. Irreversible.
 	pub(super) fn stop_voting(&mut self) {
-		self.state = Some(State::Precommitted);
+		self.voting = Voting::No;
 	}
 
 	/// Poll the round. When the round is completable and messages have been flushed, it will return `Async::Ready` but
