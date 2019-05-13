@@ -277,8 +277,8 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 		prevotes.chain(precommits).collect()
 	}
 
-	/// Return all votes for the round (prevotes and precommits) 
-	/// sorted by importing order and indicating at which indices we voted.
+	/// Return all votes for the round (prevotes and precommits), 
+	/// sorted by imported order and indicating the indices where we voted.
 	pub(super) fn historical_votes(&self) -> &HistoricalVotes<H, N> {
 		self.votes.historical_votes()
 	}
