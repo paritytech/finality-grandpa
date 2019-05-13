@@ -276,11 +276,6 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 		latter_view
 	}
 
-	// call this to bridge state from another around.
-	pub(super) fn bridge_state_from(&mut self, other: &mut Self) {
-		self.last_round_state = Some(other.bridge_state())
-	}
-
 	/// Get a commit justifying the best finalized block.
 	pub(super) fn finalizing_commit(&self) -> Option<&Commit<H, N, E::Signature, E::Id>> {
 		self.best_finalized.as_ref()
