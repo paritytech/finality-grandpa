@@ -1,18 +1,16 @@
-// Copyright 2019 Parity Technologies (UK) Ltd.
-// This file is part of finality-grandpa.
-
-// finality-grandpa is free software: you can redistribute it and/or modify
-// it under the terms of the GNU General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-
-// finality-grandpa is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU General Public License for more details.
-
-// You should have received a copy of the GNU General Public License
-// along with finality-grandpa. If not, see <http://www.gnu.org/licenses/>.
+// Copyright 2018-2019 Parity Technologies (UK) Ltd
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 //! Logic for voting and handling messages within a single round.
 
@@ -24,14 +22,16 @@ use std::sync::Arc;
 
 use crate::round::{Round, State as RoundState};
 use crate::{
-	Commit, Message, Prevote, Precommit, SignedMessage,
-	SignedPrecommit, BlockNumberOps, VoterSet, validate_commit
+	Commit, Message, Prevote, Precommit, PrimaryPropose, SignedMessage,
+	SignedPrecommit, BlockNumberOps, validate_commit, ImportResult,
 };
+use crate::voter_set::VoterSet;
 use super::{Environment, Buffered};
 
 /// The state of a voting round.
 pub(super) enum State<T> {
 	Start(T, T),
+	Proposed(T, T),
 	Prevoted(T),
 	Precommitted,
 }
@@ -40,6 +40,7 @@ impl<T> std::fmt::Debug for State<T> {
 	fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
 		match self {
 			State::Start(..) => write!(f, "Start"),
+			State::Proposed(..) => write!(f, "Proposed"),
 			State::Prevoted(_) => write!(f, "Prevoted"),
 			State::Precommitted => write!(f, "Precommitted"),
 		}
@@ -52,6 +53,7 @@ pub(super) struct VotingRound<H, N, E: Environment<H, N>> where
 	N: Copy + BlockNumberOps + ::std::fmt::Debug,
 {
 	env: Arc<E>,
+	voting: Voting,
 	votes: Round<E::Id, H, N, E::Signature>,
 	incoming: E::In,
 	outgoing: Buffered<E::Out>,
@@ -61,6 +63,36 @@ pub(super) struct VotingRound<H, N, E: Environment<H, N>> where
 	primary_block: Option<(H, N)>, // a block posted by primary as a hint.
 	finalized_sender: UnboundedSender<(H, N, u64, Commit<H, N, E::Signature, E::Id>)>,
 	best_finalized: Option<Commit<H, N, E::Signature, E::Id>>,
+}
+
+/// Whether we should vote in the current round (i.e. push votes to the sink.)
+enum Voting {
+	/// Voting is disabled for the current round.
+	No,
+	/// Voting is enabled for the current round (prevotes and precommits.)
+	Yes,
+	/// Voting is enabled for the current round and we are the primary proposer
+	/// (we can also push primary propose messages).
+	Primary,
+}
+
+impl Voting {
+	/// Whether the voter should cast round votes (prevotes and precommits.)
+	fn is_active(&self) -> bool {
+		match self {
+			Voting::Yes => true,
+			Voting::Primary => true,
+			_ => false,
+		}
+	}
+
+	/// Whether the voter is the primary proposer.
+	fn is_primary(&self) -> bool {
+		match self {
+			Voting::Primary => true,
+			_ => false,
+		}
+	}
 }
 
 impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
@@ -83,8 +115,23 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 			round_number,
 		};
 
+		let votes = Round::new(round_params);
+
+		let voting = if round_data.voter_id.as_ref() == Some(&votes.primary_voter().0) {
+			Voting::Primary
+		} else if round_data.voter_id
+			.as_ref()
+			.map(|id| votes.voters().contains_key(id))
+			.unwrap_or(false)
+		{
+			Voting::Yes
+		} else {
+			Voting::No
+		};
+
 		VotingRound {
-			votes: Round::new(round_params),
+			votes,
+			voting,
 			incoming: round_data.incoming,
 			outgoing: Buffered::new(round_data.outgoing),
 			state: Some(
@@ -111,6 +158,7 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 
 		VotingRound {
 			votes,
+			voting: Voting::No,
 			incoming: round_data.incoming,
 			outgoing: Buffered::new(round_data.outgoing),
 			state: Some(State::Precommitted), // so we don't vote anymore.
@@ -133,15 +181,14 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 	/// can continue to be polled.
 	pub(super) fn poll(&mut self) -> Poll<(), E::Error> {
 		trace!(target: "afg", "Polling round {}, state = {:?}, step = {:?}", self.votes.number(), self.votes.state(), self.state);
-
 		let pre_state = self.votes.state();
-
 		self.process_incoming()?;
 
 		// we only cast votes when we have access to the previous round state.
 		// we might have started this round as a prospect "future" round to
 		// check whether the voter is lagging behind the current round.
 		if let Some(last_round_state) = self.last_round_state.as_ref().map(|s| s.get().clone()) {
+			self.primary_propose(&last_round_state)?;
 			self.prevote(&last_round_state)?;
 			self.precommit(&last_round_state)?;
 		}
@@ -196,11 +243,12 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 		&mut self,
 		commit: &Commit<H, N, E::Signature, E::Id>
 	) -> Result<Option<(H, N)>, E::Error> {
-		let base = validate_commit(&commit, self.voters(), &*self.env)?;
+		let base = validate_commit(&commit, self.voters(), &*self.env)?.ghost;
 		if base.is_none() { return Ok(None) }
 
 		for SignedPrecommit { precommit, signature, id } in commit.precommits.iter().cloned() {
-			if let Some(e) = self.votes.import_precommit(&*self.env, precommit, id, signature)? {
+			let import_result = self.votes.import_precommit(&*self.env, precommit, id, signature)?;
+			if let ImportResult { equivocation: Some(e), .. } = import_result {
 				self.env.precommit_equivocation(self.round_number(), e);
 			}
 		}
@@ -238,11 +286,31 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 		self.best_finalized.as_ref()
 	}
 
+	/// Return all imported votes for the round (prevotes and precommits).
+	pub(super) fn votes(&self) -> Vec<SignedMessage<H, N, E::Signature, E::Id>> {
+		let prevotes = self.votes.prevotes().into_iter().map(|(id, prevote, signature)| {
+			SignedMessage {
+				id,
+				signature,
+				message: Message::Prevote(prevote),
+			}
+		});
+
+		let precommits = self.votes.precommits().into_iter().map(|(id, precommit, signature)| {
+			SignedMessage {
+				id,
+				signature,
+				message: Message::Precommit(precommit),
+			}
+		});
+
+		prevotes.chain(precommits).collect()
+	}
+
 	fn process_incoming(&mut self) -> Result<(), E::Error> {
 		while let Async::Ready(Some(incoming)) = self.incoming.poll()? {
 			trace!(target: "afg", "Got incoming message");
 			let SignedMessage { message, signature, id } = incoming;
-
 			if !self.env.is_equal_or_descendent_of(self.votes.base().0, message.target().0.clone()) {
 				trace!(target: "afg", "Ignoring message targeting {:?} lower than round base {:?}",
 					   message.target(),
@@ -253,13 +321,21 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 
 			match message {
 				Message::Prevote(prevote) => {
-					if let Some(e) = self.votes.import_prevote(&*self.env, prevote, id, signature)? {
+					let import_result = self.votes.import_prevote(&*self.env, prevote, id, signature)?;
+					if let ImportResult { equivocation: Some(e), .. } = import_result {
 						self.env.prevote_equivocation(self.votes.number(), e);
 					}
 				}
 				Message::Precommit(precommit) => {
-					if let Some(e) = self.votes.import_precommit(&*self.env, precommit, id, signature)? {
+					let import_result = self.votes.import_precommit(&*self.env, precommit, id, signature)?;
+					if let ImportResult { equivocation: Some(e), .. } = import_result {
 						self.env.precommit_equivocation(self.votes.number(), e);
+					}
+				}
+				Message::PrimaryPropose(primary) => {
+					let primary_id = self.votes.primary_voter().0.clone();
+					if id == primary_id {
+						self.primary_block = Some((primary.target_hash, primary.target_number));
 					}
 				}
 			};
@@ -268,25 +344,85 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 		Ok(())
 	}
 
-	fn prevote(&mut self, last_round_state: &RoundState<H, N>) -> Result<(), E::Error> {
+	fn primary_propose(&mut self, last_round_state: &RoundState<H, N>) -> Result<(), E::Error> {
 		match self.state.take() {
-			Some(State::Start(mut prevote_timer, precommit_timer)) => {
-				let should_prevote = match prevote_timer.poll() {
-					Err(e) => return Err(e),
-					Ok(Async::Ready(())) => true,
-					Ok(Async::NotReady) => self.votes.completable(),
-				};
+			Some(State::Start(prevote_timer, precommit_timer)) => {
+				let maybe_estimate = last_round_state.estimate.clone();
 
-				if should_prevote {
+				match (maybe_estimate, self.voting.is_primary()) {
+					(Some(last_round_estimate), true) => {
+						let maybe_finalized = last_round_state.finalized.clone();
+
+						// Last round estimate has not been finalized.
+						let should_send_primary = maybe_finalized.map_or(true, |f| last_round_estimate.1 > f.1);
+						if should_send_primary {
+							debug!(target: "afg", "Sending primary block hint for round {}", self.votes.number());
+							let primary = PrimaryPropose {
+								target_hash: last_round_estimate.0,
+								target_number: last_round_estimate.1,
+							};
+							self.env.proposed(self.round_number(), primary.clone())?;
+							self.outgoing.push(Message::PrimaryPropose(primary));
+							self.state = Some(State::Proposed(prevote_timer, precommit_timer));
+
+							return Ok(());
+						} else {
+							debug!(target: "afg", "Last round estimate has been finalized, \
+								not sending primary block hint for round {}", self.votes.number());
+						}
+					},
+					(None, true) => {
+						debug!(target: "afg", "Last round estimate does not exist, \
+							not sending primary block hint for round {}", self.votes.number());
+					},
+					_ => {},
+				}
+
+				self.state = Some(State::Start(prevote_timer, precommit_timer));
+			},
+			x => { self.state = x; }
+		}
+
+		Ok(())
+	}
+
+	fn prevote(&mut self, last_round_state: &RoundState<H, N>) -> Result<(), E::Error> {
+		let state = self.state.take();
+
+		let mut handle_prevote = |mut prevote_timer: E::Timer, precommit_timer: E::Timer, proposed| {
+			let should_prevote = match prevote_timer.poll() {
+				Err(e) => return Err(e),
+				Ok(Async::Ready(())) => true,
+				Ok(Async::NotReady) => self.votes.completable(),
+			};
+
+			if should_prevote {
+				if self.voting.is_active() {
 					if let Some(prevote) = self.construct_prevote(last_round_state)? {
 						debug!(target: "afg", "Casting prevote for round {}", self.votes.number());
+						self.env.prevoted(self.round_number(), prevote.clone())?;
 						self.outgoing.push(Message::Prevote(prevote));
 					}
-					self.state = Some(State::Prevoted(precommit_timer));
+				}
+				self.state = Some(State::Prevoted(precommit_timer));
+			} else {
+				if proposed {
+					self.state = Some(State::Proposed(prevote_timer, precommit_timer));
 				} else {
 					self.state = Some(State::Start(prevote_timer, precommit_timer));
 				}
 			}
+
+			Ok(())
+		};
+
+		match state {
+			Some(State::Start(prevote_timer, precommit_timer)) => {
+				handle_prevote(prevote_timer, precommit_timer, false)?;
+			},
+			Some(State::Proposed(prevote_timer, precommit_timer)) => {
+				handle_prevote(prevote_timer, precommit_timer, true)?;
+			},
 			x => { self.state = x; }
 		}
 
@@ -313,9 +449,12 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 				};
 
 				if should_precommit {
-					debug!(target: "afg", "Casting precommit for round {}", self.votes.number());
-					let precommit = self.construct_precommit();
-					self.outgoing.push(Message::Precommit(precommit));
+					if self.voting.is_active() {
+						debug!(target: "afg", "Casting precommit for round {}", self.votes.number());
+						let precommit = self.construct_precommit();
+						self.env.precommitted(self.round_number(), precommit.clone())?;
+						self.outgoing.push(Message::Precommit(precommit));
+					}
 					self.state = Some(State::Precommitted);
 				} else {
 					self.state = Some(State::Prevoted(precommit_timer));

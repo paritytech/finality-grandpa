@@ -1,18 +1,16 @@
-// Copyright 2018 Parity Technologies (UK) Ltd.
-// This file is part of finality-grandpa.
-
-// finality-grandpa is free software: you can redistribute it and/or modify
-// it under the terms of the GNU General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-
-// finality-grandpa is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU General Public License for more details.
-
-// You should have received a copy of the GNU General Public License
-// along with finality-grandpa. If not, see <http://www.gnu.org/licenses/>.
+// Copyright 2018-2019 Parity Technologies (UK) Ltd
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 //! Bitfields and tools for handling equivocations.
 //!
@@ -40,7 +38,7 @@ use std::sync::Arc;
 use alloc::sync::Arc;
 
 use crate::collections::Vec;
-use crate::VoterInfo;
+use crate::voter_set::VoterInfo;
 
 /// Errors that can occur when using the equivocation weighting tools.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -274,6 +272,14 @@ mod tests {
 	use super::*;
 	use crate::VoterSet;
 
+	fn to_prevote(id: usize) -> usize {
+		id * 2
+	}
+
+	fn to_precommit(id: usize) -> usize {
+		id * 2 + 1
+	}
+
 	#[test]
 	fn merge_live() {
 		let mut a = Bitfield::Live(LiveBitfield::with_voters(10));
@@ -288,11 +294,11 @@ mod tests {
 			(2, 7),
 		].iter().cloned().collect();
 
-		a.set_bit(0, 10).unwrap(); // prevote 1
-		a.set_bit(11, 10).unwrap(); // precommit 2
+		a.set_bit(to_prevote(v.info(&1).unwrap().canon_idx()), 10).unwrap(); // prevote 1
+		a.set_bit(to_precommit(v.info(&2).unwrap().canon_idx()), 10).unwrap(); // precommit 2
 
-		b.set_bit(4, 10).unwrap(); // prevote 3
-		b.set_bit(5, 10).unwrap(); // precommit 3
+		b.set_bit(to_prevote(v.info(&3).unwrap().canon_idx()), 10).unwrap(); // prevote 3
+		b.set_bit(to_precommit(v.info(&3).unwrap().canon_idx()), 10).unwrap(); // precommit 3
 
 		let c = a.merge(&b).unwrap();
 		assert_eq!(c.total_weight(|i| v.weight_by_index(i).unwrap()), (14, 16));
@@ -324,21 +330,21 @@ mod tests {
 			(2, 7),
 		].iter().cloned().collect();
 
-		a.set_bit(0, 10).unwrap(); // prevote 1
-		a.set_bit(11, 10).unwrap(); // precommit 2
-		a.set_bit(4, 10).unwrap(); // prevote 3
+		a.set_bit(to_prevote(v.info(&1).unwrap().canon_idx()), 10).unwrap(); // prevote 1
+		a.set_bit(to_precommit(v.info(&2).unwrap().canon_idx()), 10).unwrap(); // precommit 2
+		a.set_bit(to_prevote(v.info(&3).unwrap().canon_idx()), 10).unwrap(); // prevote 3
 
-		b.set_bit(0, 10).unwrap(); // prevote 1
-		b.set_bit(11, 10).unwrap(); // precommit 2
-		b.set_bit(5, 10).unwrap(); // precommit 3
+		b.set_bit(to_prevote(v.info(&1).unwrap().canon_idx()), 10).unwrap(); // prevote 1
+		b.set_bit(to_precommit(v.info(&2).unwrap().canon_idx()), 10).unwrap(); // precommit 2
+		b.set_bit(to_precommit(v.info(&3).unwrap().canon_idx()), 10).unwrap(); // precommit 3
 
 		assert_eq!(a.total_weight(|i| v.weight_by_index(i).unwrap()), (14, 7));
 		assert_eq!(b.total_weight(|i| v.weight_by_index(i).unwrap()), (5, 16));
 
 		let mut c = Bitfield::Live(LiveBitfield::with_voters(10));
 
-		c.set_bit(0, 10).unwrap(); // prevote 1
-		c.set_bit(11, 10).unwrap(); // precommit 2
+		c.set_bit(to_prevote(v.info(&1).unwrap().canon_idx()), 10).unwrap(); // prevote 1
+		c.set_bit(to_precommit(v.info(&2).unwrap().canon_idx()), 10).unwrap(); // precommit 2
 
 		assert_eq!(a.overlap(&b).unwrap(), c);
 	}

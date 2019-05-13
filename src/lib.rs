@@ -1,18 +1,16 @@
-// Copyright 2018 Parity Technologies (UK) Ltd.
-// This file is part of finality-grandpa.
-
-// finality-grandpa is free software: you can redistribute it and/or modify
-// it under the terms of the GNU General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-
-// finality-grandpa is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU General Public License for more details.
-
-// You should have received a copy of the GNU General Public License
-// along with finality-grandpa. If not, see <http://www.gnu.org/licenses/>.
+// Copyright 2018-2019 Parity Technologies (UK) Ltd
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 //! Finality gadget for blockchains.
 //!
@@ -62,6 +60,7 @@ extern crate alloc;
 pub mod bitfield;
 pub mod round;
 pub mod vote_graph;
+pub mod voter_set;
 
 #[cfg(feature = "std")]
 pub mod voter;
@@ -72,9 +71,10 @@ mod bridge_state;
 #[cfg(test)]
 mod testing;
 
-use collections::{HashMap, Vec};
+use collections::Vec;
 use std::fmt;
-use std::hash::Hash;
+use crate::voter_set::VoterSet;
+use round::ImportResult;
 
 #[cfg(not(feature = "std"))]
 mod collections {
@@ -118,6 +118,22 @@ pub struct Precommit<H, N> {
 impl<H, N> Precommit<H, N> {
 	pub fn new(target_hash: H, target_number: N) -> Self {
 		Precommit { target_hash, target_number }
+	}
+}
+
+/// A primary proposed block, this is a broadcast of the last round's estimate.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "derive-codec", derive(Encode, Decode))]
+pub struct PrimaryPropose<H, N> {
+	/// The target block's hash.
+	pub target_hash: H,
+	/// The target block's number
+	pub target_number: N,
+}
+
+impl<H, N> PrimaryPropose<H, N> {
+	pub fn new(target_hash: H, target_number: N) -> Self {
+		PrimaryPropose { target_hash, target_number }
 	}
 }
 
@@ -216,7 +232,9 @@ pub enum Message<H, N> {
 	/// A precommit message.
 	#[cfg_attr(feature = "derive-codec", codec(index = "1"))]
 	Precommit(Precommit<H, N>),
-	// TODO: liveness - primary propose.
+	// Primary proposed block.
+	#[cfg_attr(feature = "derive-codec", codec(index = "2"))]
+	PrimaryPropose(PrimaryPropose<H, N>),
 }
 
 impl<H, N: Copy> Message<H, N> {
@@ -225,6 +243,7 @@ impl<H, N: Copy> Message<H, N> {
 		match *self {
 			Message::Prevote(ref v) => (&v.target_hash, v.target_number),
 			Message::Precommit(ref v) => (&v.target_hash, v.target_number),
+			Message::PrimaryPropose(ref v) => (&v.target_hash, v.target_number),
 		}
 	}
 }
@@ -346,73 +365,54 @@ impl<H: Clone, N: Clone, S, Id> From<Commit<H, N, S, Id>> for CompactCommit<H, N
 	}
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct VoterInfo {
-	canon_idx: usize,
-	weight: u64,
+/// Struct returned from `validate_commit` function with information
+/// about the validation result.
+pub struct CommitValidationResult<H, N> {
+	ghost: Option<(H, N)>,
+	num_precommits: usize,
+	num_duplicated_precommits: usize,
+	num_equivocations: usize,
+	num_invalid_voters: usize,
 }
 
-impl VoterInfo {
-	/// Get the canonical index of the voter.
-	pub fn canon_idx(&self) -> usize { self.canon_idx }
-
-	/// Get the weight of the voter.
-	pub fn weight(&self) -> u64 { self.weight }
-}
-
-/// A voter set, with accompanying indices.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct VoterSet<Id: Hash + Eq> {
-	weights: HashMap<Id, VoterInfo>,
-	voters: Vec<(Id, u64)>,
-	threshold: u64,
-}
-
-impl<Id: Hash + Eq> VoterSet<Id> {
-	/// Get the voter info for a voter.
-	pub fn info<'a>(&'a self, id: &Id) -> Option<&'a VoterInfo> {
-		self.weights.get(id)
+impl<H, N> CommitValidationResult<H, N> {
+	/// Returns the commit GHOST i.e. the block with highest number for which
+	/// the cumulative votes of descendents and itself reach finalization
+	/// threshold.
+	pub fn ghost(&self) -> Option<&(H, N)> {
+		self.ghost.as_ref()
 	}
 
-	/// Get the length of the set.
-	pub fn len(&self) -> usize { self.voters.len() }
-
-	/// Whether the set contains the key.
-	pub fn contains_key(&self, id: &Id) -> bool {
-		self.weights.contains_key(id)
+	/// Returns the number of precommits in the commit.
+	pub fn num_precommits(&self) -> usize {
+		self.num_precommits
 	}
 
-	/// Get voter info by index.
-	pub fn weight_by_index<'a>(&'a self, idx: usize) -> Option<u64> {
-		self.voters.get(idx).map(|&(_, weight)| weight)
+	/// Returns the number of duplicate precommits in the commit.
+	pub fn num_duplicated_precommits(&self) -> usize {
+		self.num_duplicated_precommits
 	}
 
-	/// Get the threshold weight.
-	pub fn threshold(&self) -> u64 { self.threshold }
+	/// Returns the number of equivocated precommits in the commit.
+	pub fn num_equivocations(&self) -> usize {
+		self.num_equivocations
+	}
 
-	/// Get the total weight.
-	pub fn total_weight(&self) -> u64 {
-		self.voters.iter().map(|&(_, weight)| weight).sum()
+	/// Returns the number of invalid voters in the commit.
+	pub fn num_invalid_voters(&self) -> usize {
+		self.num_invalid_voters
 	}
 }
 
-impl<Id: Hash + Eq + Clone> std::iter::FromIterator<(Id, u64)> for VoterSet<Id> {
-	fn from_iter<I: IntoIterator<Item = (Id, u64)>>(iterable: I) -> Self {
-		let iter = iterable.into_iter();
-		let (lower, _) = iter.size_hint();
-
-		let mut voters = Vec::with_capacity(lower);
-		let mut weights = HashMap::with_capacity(lower);
-
-		let mut total_weight = 0;
-		for (idx, (id, weight)) in iter.enumerate() {
-			voters.push((id.clone(), weight));
-			weights.insert(id, VoterInfo { canon_idx: idx, weight });
-			total_weight += weight;
+impl<H, N> Default for CommitValidationResult<H, N> {
+	fn default() -> Self {
+		CommitValidationResult {
+			ghost: None,
+			num_precommits: 0,
+			num_duplicated_precommits: 0,
+			num_equivocations: 0,
+			num_invalid_voters: 0,
 		}
-
-		let threshold = threshold(total_weight);
-		VoterSet { weights, voters, threshold }
 	}
 }
 
@@ -428,13 +428,16 @@ pub fn validate_commit<H, N, S, I, C: Chain<H, N>>(
 	commit: &Commit<H, N, S, I>,
 	voters: &VoterSet<I>,
 	chain: &C,
-) -> Result<Option<(H, N)>, crate::Error>
+) -> Result<CommitValidationResult<H, N>, crate::Error>
 	where
 	H: std::hash::Hash + Clone + Eq + Ord + std::fmt::Debug,
 	N: Copy + BlockNumberOps + std::fmt::Debug,
 	I: Clone + std::hash::Hash + Eq + std::fmt::Debug,
 	S: Eq,
 {
+	let mut validation_result = CommitValidationResult::default();
+	validation_result.num_precommits = commit.precommits.len();
+
 	// check that all precommits are for blocks higher than the target
 	// commit block, and that they're its descendents
 	if !commit.precommits.iter().all(|signed| {
@@ -444,7 +447,7 @@ pub fn validate_commit<H, N, S, I, C: Chain<H, N>>(
 				signed.precommit.target_hash.clone(),
 			)
 	}) {
-		return Ok(None);
+		return Ok(validation_result);
 	}
 
 	let mut equivocated = crate::collections::HashSet::new();
@@ -458,20 +461,53 @@ pub fn validate_commit<H, N, S, I, C: Chain<H, N>>(
 	});
 
 	for SignedPrecommit { precommit, id, signature } in commit.precommits.iter() {
-		if let Some(_) = round.import_precommit(chain, precommit.clone(), id.clone(), signature.clone())? {
-			// allow only one equivocation per voter, as extras are redundant.
-			if !equivocated.insert(id) { return Ok(None) }
+		match round.import_precommit(chain, precommit.clone(), id.clone(), signature.clone())? {
+			ImportResult { equivocation: Some(_), .. } => {
+				validation_result.num_equivocations += 1;
+				// allow only one equivocation per voter, as extras are redundant.
+				if !equivocated.insert(id) {
+					return Ok(validation_result)
+				}
+			},
+			ImportResult { duplicated, valid_voter, .. } => {
+				if duplicated {
+					validation_result.num_duplicated_precommits += 1;
+				}
+				if !valid_voter {
+					validation_result.num_invalid_voters += 1;
+				}
+			}
 		}
 	}
 
 	// if a ghost is found then it must be equal or higher than the commit
 	// target, otherwise the commit is invalid
-	Ok(round.precommit_ghost())
+	validation_result.ghost = round.precommit_ghost();
+	Ok(validation_result)
 }
 
-fn threshold(total_weight: u64) -> u64 {
+/// Get the threshold weight given the total voting weight.
+pub fn threshold(total_weight: u64) -> u64 {
 	let faulty = total_weight.saturating_sub(1) / 3;
 	total_weight - faulty
+}
+
+/// Runs the callback with the appropriate `CommitProcessingOutcome` based on
+/// the given `CommitValidationResult`. Outcome is bad if ghost is undefined,
+/// good otherwise.
+pub fn process_commit_validation_result<H, N>(
+	validation_result: CommitValidationResult<H, N>,
+	mut callback: voter::Callback,
+) {
+	if let Some(_) = validation_result.ghost {
+		callback.run(
+			voter::CommitProcessingOutcome::Good(voter::GoodCommit::new())
+		)
+	} else {
+		callback.run(
+			voter::CommitProcessingOutcome::Bad(voter::BadCommit::from(validation_result))
+		)
+	}
 }
 
 #[cfg(test)]

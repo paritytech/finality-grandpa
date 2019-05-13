@@ -1,18 +1,16 @@
-// Copyright 2018 Parity Technologies (UK) Ltd.
-// This file is part of finality-grandpa.
-
-// Polkadot is free software: you can redistribute it and/or modify
-// it under the terms of the GNU General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-
-// Polkadot is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU General Public License for more details.
-
-// You should have received a copy of the GNU General Public License
-// along with finality-grandpa. If not, see <http://www.gnu.org/licenses/>.
+// Copyright 2018-2019 Parity Technologies (UK) Ltd
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 //! Helpers for testing
 
@@ -21,12 +19,12 @@ use std::sync::Arc;
 use std::time::{Instant, Duration};
 
 use crate::round::State as RoundState;
-use crate::voter::{RoundData, CommunicationIn, CommunicationOut};
+use crate::voter::{RoundData, CommunicationIn, CommunicationOut, Callback};
 use tokio::timer::Delay;
 use parking_lot::Mutex;
 use futures::prelude::*;
 use futures::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
-use super::{Chain, Commit, Error, Equivocation, Message, Prevote, Precommit, SignedMessage};
+use super::{Chain, Commit, Error, Equivocation, Message, Prevote, Precommit, PrimaryPropose, SignedMessage};
 
 pub const GENESIS_HASH: &str = "genesis";
 const NULL_HASH: &str = "NULL";
@@ -133,7 +131,7 @@ impl Chain<&'static str, u32> for DummyChain {
 	}
 }
 
-#[derive(Hash, Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Hash, Debug, Clone, Copy, PartialEq, Eq, Ord, PartialOrd)]
 pub struct Id(pub u32);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -187,12 +185,13 @@ impl crate::voter::Environment<&'static str, u32> for Environment {
 	type Out = Box<Sink<SinkItem=Message<&'static str, u32>,SinkError=Error> + Send + 'static>;
 	type Error = Error;
 
-	fn round_data(&self, round: u64) -> RoundData<Self::Timer, Self::In, Self::Out> {
+	fn round_data(&self, round: u64) -> RoundData<Self::Id, Self::Timer, Self::In, Self::Out> {
 		const GOSSIP_DURATION: Duration = Duration::from_millis(500);
 
 		let now = Instant::now();
 		let (incoming, outgoing) = self.network.make_round_comms(round, self.local_id);
 		RoundData {
+			voter_id: Some(self.local_id),
 			prevote_timer: Box::new(Delay::new(now + GOSSIP_DURATION)
 				.map_err(|_| panic!("Timer failed"))),
 			precommit_timer: Box::new(Delay::new(now + GOSSIP_DURATION + GOSSIP_DURATION)
@@ -214,7 +213,13 @@ impl crate::voter::Environment<&'static str, u32> for Environment {
 		Box::new(Delay::new(now + delay).map_err(|_| panic!("Timer failed")))
 	}
 
-	fn completed(&self, _round: u64, _state: RoundState<&'static str, u32>) -> Result<(), Error> {
+	fn completed(
+		&self,
+		_round: u64,
+		_state: RoundState<&'static str, u32>,
+		_base: (&'static str, u32),
+		_votes: Vec<SignedMessage<&'static str, u32, Signature, Id>>,
+	) -> Result<(), Error> {
 		Ok(())
 	}
 
@@ -226,6 +231,18 @@ impl crate::voter::Environment<&'static str, u32> for Environment {
 		chain.finalized = (hash, number as _);
 		self.listeners.lock().retain(|s| s.unbounded_send((hash, number as _, commit.clone())).is_ok());
 
+		Ok(())
+	}
+
+	fn proposed(&self, _round: u64, _propose: PrimaryPropose<&'static str, u32>) -> Result<(), Self::Error> {
+		Ok(())
+	}
+
+	fn prevoted(&self, _round: u64, _prevote: Prevote<&'static str, u32>) -> Result<(), Self::Error> {
+		Ok(())
+	}
+
+	fn precommitted(&self, _round: u64, _precommit: Precommit<&'static str, u32>) -> Result<(), Self::Error> {
 		Ok(())
 	}
 
@@ -342,7 +359,7 @@ impl Network {
 	) {
 		let mut global_messages = self.global_messages.lock();
 		global_messages.add_node(|message| match message {
-			CommunicationOut::Commit(r, commit) => CommunicationIn::Commit(r, commit.into()),
+			CommunicationOut::Commit(r, commit) => CommunicationIn::Commit(r, commit.into(), Callback::Blank),
 			CommunicationOut::Auxiliary(aux) => CommunicationIn::Auxiliary(aux),
 		})
 	}

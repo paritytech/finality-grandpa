@@ -1,25 +1,29 @@
-// Copyright 2018 Parity Technologies (UK) Ltd.
-// This file is part of finality-grandpa.
-
-// finality-grandpa is free software: you can redistribute it and/or modify
-// it under the terms of the GNU General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-
-// finality-grandpa is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU General Public License for more details.
-
-// You should have received a copy of the GNU General Public License
-// along with finality-grandpa. If not, see <http://www.gnu.org/licenses/>.
+// Copyright 2018-2019 Parity Technologies (UK) Ltd
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 //! A voter in GRANDPA. This transitions between rounds and casts votes.
 //!
 //! Voters rely on some external context to function:
-//!   - setting timers to cast votes
-//!   - incoming vote streams
+//!   - setting timers to cast votes.
+//!   - incoming vote streams.
 //!   - providing voter weights.
+//!   - getting the local voter id.
+//!
+//!  The local voter id is used to check whether to cast votes for a given
+//!  round. If no local id is defined or if it's not part of the voter set then
+//!  votes will not be pushed to the sink. The protocol state machine still
+//!  transitions state as if the votes had been pushed out.
 
 use futures::prelude::*;
 use futures::sync::mpsc::{self, UnboundedReceiver};
@@ -30,9 +34,10 @@ use std::sync::Arc;
 
 use crate::round::State as RoundState;
 use crate::{
-	Chain, Commit, CompactCommit, Equivocation, Message, Prevote, Precommit, SignedMessage,
-	BlockNumberOps, VoterSet, CatchUp, validate_commit
+	CatchUp, Chain, Commit, CompactCommit, Equivocation, Message, Prevote, Precommit,
+	PrimaryPropose, SignedMessage, BlockNumberOps, validate_commit, CommitValidationResult
 };
+use crate::voter_set::VoterSet;
 use past_rounds::PastRounds;
 use voting_round::{VotingRound, State as VotingRoundState};
 
@@ -68,9 +73,10 @@ pub trait Environment<H: Eq, N: BlockNumberOps>: Chain<H, N> {
 	/// Furthermore, this means that actual logic of creating and verifying
 	/// signatures is flexible and can be maintained outside this crate.
 	fn round_data(&self, round: u64) -> RoundData<
+		Self::Id,
 		Self::Timer,
 		Self::In,
-		Self::Out
+		Self::Out,
 	>;
 
 	/// Return a timer that will be used to delay the broadcast of a commit
@@ -78,9 +84,24 @@ pub trait Environment<H: Eq, N: BlockNumberOps>: Chain<H, N> {
 	/// commit messages that are sent (e.g. random value in [0, 1] seconds).
 	fn round_commit_timer(&self) -> Self::Timer;
 
+	/// Note that we've done a primary proposal in the given round.
+	fn proposed(&self, round: u64, propose: PrimaryPropose<H, N>) -> Result<(), Self::Error>;
+
+	/// Note that we have prevoted in the given round.
+	fn prevoted(&self, round: u64, prevote: Prevote<H, N>) -> Result<(), Self::Error>;
+
+	/// Note that we have precommitted in the given round.
+	fn precommitted(&self, round: u64, precommit: Precommit<H, N>) -> Result<(), Self::Error>;
+
 	/// Note that a round was completed. This is called when a round has been
 	/// voted in. Should return an error when something fatal occurs.
-	fn completed(&self, round: u64, state: RoundState<H, N>) -> Result<(), Self::Error>;
+	fn completed(
+		&self,
+		round: u64,
+		state: RoundState<H, N>,
+		base: (H, N),
+		votes: Vec<SignedMessage<H, N, Self::Signature, Self::Id>>,
+	) -> Result<(), Self::Error>;
 
 	/// Called when a block should be finalized.
 	// TODO: make this a future that resolves when it's e.g. written to disk?
@@ -94,25 +115,108 @@ pub trait Environment<H: Eq, N: BlockNumberOps>: Chain<H, N> {
 
 /// Communication between nodes that is not round-localized.
 #[derive(Debug, Clone, PartialEq, Eq)]
-#[cfg_attr(feature = "derive-codec", derive(Encode, Decode))]
 pub enum CommunicationOut<H, N, S, Id> {
 	/// A commit message.
-	#[cfg_attr(feature = "derive-codec", codec(index = "0"))]
 	Commit(u64, Commit<H, N, S, Id>),
 	/// Auxiliary messages out.
-	#[cfg_attr(feature = "derive-codec", codec(index = "1"))]
 	Auxiliary(AuxiliaryCommunication<H, N, S, Id>),
 }
 
-/// Communication between nodes that is not round-localized.
+/// The outcome of processing a commit.
 #[derive(Debug, Clone, PartialEq, Eq)]
-#[cfg_attr(feature = "derive-codec", derive(Encode, Decode))]
+pub enum CommitProcessingOutcome {
+	/// It was beneficial to process this commit.
+	Good(GoodCommit),
+	/// It wasn't beneficial to process this commit. We wasted resources.
+	Bad(BadCommit),
+}
+
+/// The result of processing for a good commit.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GoodCommit {
+	_priv: (), // lets us add stuff without breaking API.
+}
+
+impl GoodCommit {
+	pub(crate) fn new() -> Self {
+		GoodCommit { _priv: () }
+	}
+}
+
+/// The result of processing for a bad commit
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BadCommit {
+	_priv: (), // lets us add stuff without breaking API.
+	num_precommits: usize,
+	num_duplicated_precommits: usize,
+	num_equivocations: usize,
+	num_invalid_voters: usize,
+}
+
+impl BadCommit {
+	/// Get the number of precommits
+	pub fn num_precommits(&self) -> usize {
+		self.num_precommits
+	}
+
+	/// Get the number of duplicated precommits
+	pub fn num_duplicated(&self) -> usize {
+		self.num_duplicated_precommits
+	}
+
+	/// Get the number of equivocations in the precommits
+	pub fn num_equivocations(&self) -> usize {
+		self.num_equivocations
+	}
+
+	/// Get the number of invalid voters in the precommits
+	pub fn num_invalid_voters(&self) -> usize {
+		self.num_invalid_voters
+	}
+}
+
+impl<H, N> From<CommitValidationResult<H, N>> for BadCommit {
+	fn from(r: CommitValidationResult<H, N>) -> Self {
+		BadCommit {
+			num_precommits: r.num_precommits,
+			num_duplicated_precommits: r.num_duplicated_precommits,
+			num_equivocations: r.num_equivocations,
+			num_invalid_voters: r.num_invalid_voters,
+			_priv: (),
+		}
+	}
+}
+
+/// Callback used to propagate the commit in case the outcome is good.
+pub enum Callback {
+	/// Default value.
+	Blank,
+	/// Callback to execute given a commit processing outcome.
+	Work(Box<FnMut(CommitProcessingOutcome) + Send>),
+}
+
+#[cfg(test)]
+impl Clone for Callback {
+	fn clone(&self) -> Self {
+		Callback::Blank
+	}
+}
+
+impl Callback {
+	pub(crate) fn run(&mut self, o: CommitProcessingOutcome) {
+		match self {
+			Callback::Blank => {},
+			Callback::Work(cb) => cb(o),
+		}
+	}
+}
+
+/// Communication between nodes that is not round-localized.
+#[cfg_attr(test, derive(Clone))]
 pub enum CommunicationIn<H, N, S, Id> {
 	/// A commit message.
-	#[cfg_attr(feature = "derive-codec", codec(index = "0"))]
-	Commit(u64, CompactCommit<H, N, S, Id>),
+	Commit(u64, CompactCommit<H, N, S, Id>, Callback),
 	/// Auxiliary messages out.
-	#[cfg_attr(feature = "derive-codec", codec(index = "1"))]
 	Auxiliary(AuxiliaryCommunication<H, N, S, Id>),
 }
 
@@ -126,7 +230,9 @@ pub enum AuxiliaryCommunication<H, N, S, Id> {
 }
 
 /// Data necessary to participate in a round.
-pub struct RoundData<Timer, Input, Output> {
+pub struct RoundData<Id, Timer, Input, Output> {
+	/// Local voter id (if any.)
+	pub voter_id: Option<Id>,
 	/// Timer before prevotes can be cast. This should be Start + 2T
 	/// where T is the gossip time estimate.
 	pub prevote_timer: Timer,
@@ -321,7 +427,7 @@ impl<H, N, E: Environment<H, N>, GlobalIn, GlobalOut> Voter<H, N, E, GlobalIn, G
 	fn process_incoming(&mut self) -> Result<(), E::Error> {
 		while let Async::Ready(Some(item)) = self.global_in.poll()? {
 			match item {
-				CommunicationIn::Commit(round_number, commit) => {
+				CommunicationIn::Commit(round_number, commit, mut process_commit_outcome) => {
 					trace!(target: "afg", "Got commit for round_number {:?}: target_number: {:?}, target_hash: {:?}",
 						round_number,
 						commit.target_number,
@@ -335,11 +441,9 @@ impl<H, N, E: Environment<H, N>, GlobalIn, GlobalOut> Voter<H, N, E, GlobalIn, G
 					if let Some(commit) = self.past_rounds.import_commit(round_number, commit) {
 						// otherwise validate the commit and signal the finalized block
 						// (if any) to the environment
-						if let Some((finalized_hash, finalized_number)) = validate_commit(
-							&commit,
-							&self.voters,
-							&*self.env,
-						)? {
+						let validation_result = validate_commit(&commit, &self.voters, &*self.env)?;
+
+						if let Some((finalized_hash, finalized_number)) = validation_result.ghost {
 							// this can't be moved to a function because the compiler
 							// will complain about getting two mutable borrows to self
 							// (due to the call to `self.rounds.get_mut`).
@@ -349,7 +453,16 @@ impl<H, N, E: Environment<H, N>, GlobalIn, GlobalOut> Voter<H, N, E, GlobalIn, G
 								*last_finalized_number = finalized_number.clone();
 								self.env.finalize_block(finalized_hash, finalized_number, round_number, commit)?;
 							}
+							process_commit_outcome.run(CommitProcessingOutcome::Good(GoodCommit::new()));
+						} else {
+							// Failing validation of a commit is bad.
+							process_commit_outcome.run(
+								CommitProcessingOutcome::Bad(BadCommit::from(validation_result)),
+							);
 						}
+					} else {
+						// Import to backgrounded round is good.
+						process_commit_outcome.run(CommitProcessingOutcome::Good(GoodCommit::new()));
 					}
 				}
 				CommunicationIn::Auxiliary(AuxiliaryCommunication::CatchUp(catch_up)) => {
@@ -384,7 +497,7 @@ impl<H, N, E: Environment<H, N>, GlobalIn, GlobalOut> Voter<H, N, E, GlobalIn, G
 						let (pv, pc) = map.into_iter().fold(
 							(0, 0),
 							|(mut pv, mut pc), (id, (prevoted, precommitted))| {
-								let weight = voters.info(&id).map(|i| i.weight).unwrap_or(0);
+								let weight = voters.info(&id).map(|i| i.weight()).unwrap_or(0);
 
 								if prevoted {
 									pv += weight;
@@ -454,7 +567,12 @@ impl<H, N, E: Environment<H, N>, GlobalIn, GlobalOut> Voter<H, N, E, GlobalIn, G
 						}
 					}
 
-					self.env.completed(just_completed.round_number(), state)?;
+					self.env.completed(
+						just_completed.round_number(),
+						just_completed.round_state(),
+						just_completed.dag_base(),
+						just_completed.votes(),
+					)?;
 					self.past_rounds.push(&*self.env, just_completed);
 
 					// stop voting in the best round before we background it, just in case it contradicts what
@@ -503,7 +621,12 @@ impl<H, N, E: Environment<H, N>, GlobalIn, GlobalOut> Voter<H, N, E, GlobalIn, G
 	}
 
 	fn completed_best_round(&mut self) -> Result<(), E::Error> {
-		self.env.completed(self.best_round.round_number(), self.best_round.round_state())?;
+		self.env.completed(
+			self.best_round.round_number(),
+			self.best_round.round_state(),
+			self.best_round.dag_base(),
+			self.best_round.votes(),
+		)?;
 
 		let old_round_number = self.best_round.round_number();
 
