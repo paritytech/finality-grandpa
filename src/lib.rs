@@ -488,6 +488,7 @@ pub struct HistoricalVotes<H, N, S, Id> {
 }
 
 impl<H, N, S, Id> HistoricalVotes<H, N, S, Id> {
+	/// Creates a new HistoricalVotes.
 	pub fn new() -> Self {
 		HistoricalVotes {
 			seen: Vec::new(),
@@ -496,6 +497,7 @@ impl<H, N, S, Id> HistoricalVotes<H, N, S, Id> {
 		}
 	}
 
+	/// Creates a new HistoricalVotes initialized with messages in `seen`.
 	pub fn new_with_votes(seen: Vec<SignedMessage<H, N, S, Id>>) -> Self {
 		HistoricalVotes {
 			seen,
@@ -504,14 +506,19 @@ impl<H, N, S, Id> HistoricalVotes<H, N, S, Id> {
 		}
 	}
 
+	/// Returns the messages seen so far.
 	pub fn seen(&self) -> &Vec<SignedMessage<H, N, S, Id>> {
 		&self.seen
 	}
 
+	/// Returns the number of messages seen before prevoting.
+	/// Returns None in case we didn't prevote yet.
 	pub fn prevote_idx(&self) -> Option<usize> {
 		self.prevote_idx
 	}
 
+	/// Returns the number of messages seen before precommiting.
+	/// Returns None in case we didn't precommit yet.
 	pub fn precommit_idx(&self) -> Option<usize> {
 		self.precommit_idx
 	}
