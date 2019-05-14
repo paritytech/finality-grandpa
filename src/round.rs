@@ -1017,8 +1017,8 @@ mod tests {
 					id: "Eve"
 				},
 				SignedMessage {
-					message: Message::Precommit(
-						Precommit { target_hash: "EC", target_number: 10 }
+					message: Message::Prevote(
+						Prevote { target_hash: "EC", target_number: 10 }
 					),
 					signature: Signature("Alice"),
 					id: "Alice"
