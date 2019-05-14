@@ -488,7 +488,7 @@ pub struct HistoricalVotes<H, N, S, Id> {
 }
 
 impl<H, N, S, Id> HistoricalVotes<H, N, S, Id> {
-	/// Creates a new HistoricalVotes.
+	/// Create a new HistoricalVotes.
 	pub fn new() -> Self {
 		HistoricalVotes {
 			seen: Vec::new(),
@@ -497,30 +497,49 @@ impl<H, N, S, Id> HistoricalVotes<H, N, S, Id> {
 		}
 	}
 
-	/// Creates a new HistoricalVotes initialized with messages in `seen`.
-	pub fn new_with_votes(seen: Vec<SignedMessage<H, N, S, Id>>) -> Self {
+	/// Create a new HistoricalVotes initialized from the parameters.
+	pub fn new_with(
+		seen: Vec<SignedMessage<H, N, S, Id>>,
+		prevote_idx: Option<usize>,
+		precommit_idx: Option<usize>
+	) -> Self {
 		HistoricalVotes {
 			seen,
-			prevote_idx: None,
-			precommit_idx: None,
+			prevote_idx,
+			precommit_idx,
 		}
 	}
 
-	/// Returns the messages seen so far.
+	/// Push a vote into the list.
+	pub fn push_vote(&mut self, msg: SignedMessage<H, N, S, Id>) {
+		self.seen.push(msg)
+	}
+
+	/// Return the messages seen so far.
 	pub fn seen(&self) -> &Vec<SignedMessage<H, N, S, Id>> {
 		&self.seen
 	}
 
-	/// Returns the number of messages seen before prevoting.
-	/// Returns None in case we didn't prevote yet.
+	/// Return the number of messages seen before prevoting.
+	/// None in case we didn't prevote yet.
 	pub fn prevote_idx(&self) -> Option<usize> {
 		self.prevote_idx
 	}
 
-	/// Returns the number of messages seen before precommiting.
-	/// Returns None in case we didn't precommit yet.
+	/// Return the number of messages seen before precommiting.
+	/// None in case we didn't precommit yet.
 	pub fn precommit_idx(&self) -> Option<usize> {
 		self.precommit_idx
+	}
+
+	/// Set the number of messages seen before prevoting.
+	pub fn set_prevoted_idx(&mut self) {
+		self.prevote_idx = Some(self.seen.len())
+	}
+
+	/// Set the number of messages seen before precommiting.
+	pub fn set_precommited_idx(&mut self) {
+		self.precommit_idx = Some(self.seen.len())
 	}
 }
 

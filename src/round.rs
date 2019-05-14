@@ -338,7 +338,7 @@ impl<Id, H, N, Signature> Round<Id, H, N, Signature> where
 					// Push the vote into HistoricalVotes.
 					let message = Message::Prevote(vote.clone());
 					let signed_message = SignedMessage { id: signer.clone(), signature, message };
-					self.historical_votes.seen.push(signed_message);
+					self.historical_votes.push_vote(signed_message);
 
 					None
 				}
@@ -350,7 +350,7 @@ impl<Id, H, N, Signature> Round<Id, H, N, Signature> where
 					// Push the vote into HistoricalVotes.
 					let message = Message::Prevote(vote);
 					let signed_message = SignedMessage { id: signer.clone(), signature, message };
-					self.historical_votes.seen.push(signed_message);
+					self.historical_votes.push_vote(signed_message);
 
 					Some(Equivocation {
 						round_number,
@@ -424,7 +424,7 @@ impl<Id, H, N, Signature> Round<Id, H, N, Signature> where
 
 					let message = Message::Precommit(vote.clone());
 					let signed_message = SignedMessage { id: signer.clone(), signature, message };
-					self.historical_votes.seen.push(signed_message);
+					self.historical_votes.push_vote(signed_message);
 
 					None
 				}
@@ -436,7 +436,7 @@ impl<Id, H, N, Signature> Round<Id, H, N, Signature> where
 					// Push the vote into HistoricalVotes.
 					let message = Message::Precommit(vote);
 					let signed_message = SignedMessage { id: signer.clone(), signature, message };
-					self.historical_votes.seen.push(signed_message);
+					self.historical_votes.push_vote(signed_message);
 
 					Some(Equivocation {
 						round_number,
@@ -705,13 +705,13 @@ impl<Id, H, N, Signature> Round<Id, H, N, Signature> where
 	/// Set the number of prevotes and precommits received at the moment of prevoting.
 	/// It should be called inmediatly after prevoting.
 	pub fn set_prevoted_index(&mut self) {
-		self.historical_votes.prevote_idx = Some(self.historical_votes.seen.len())
+		self.historical_votes.set_prevoted_idx()
 	}
 
 	/// Set the number of prevotes and precommits received at the moment of precommiting.
 	/// It should be called inmediatly after precommiting.
 	pub fn set_precommited_index(&mut self) {
-		self.historical_votes.precommit_idx = Some(self.historical_votes.seen.len())
+		self.historical_votes.set_precommited_idx()
 	}
 
 	/// Get the number of prevotes and precommits received at the moment of prevoting.
@@ -946,5 +946,86 @@ mod tests {
 
 		// adding an extra vote by 5 doesn't increase the count.
 		assert_eq!(vote_weight, TotalWeight { prevote: 1 + 5 + 2 + 3, precommit: 0 });
+	}
+
+	#[test]
+	fn historical_votes_works() {
+		let mut chain = DummyChain::new();
+		chain.push_blocks(GENESIS_HASH, &["A", "B", "C", "D", "E", "F"]);
+		chain.push_blocks("E", &["EA", "EB", "EC", "ED"]);
+		chain.push_blocks("F", &["FA", "FB", "FC"]);
+
+		let mut round = Round::new(RoundParams {
+			round_number: 1,
+			voters: voters(),
+			base: ("C", 4),
+		});
+
+		round.import_prevote(
+			&chain,
+			Prevote::new("FC", 10),
+			"Alice",
+			Signature("Alice"),
+		).unwrap();
+
+		round.set_prevoted_index();
+
+		round.import_prevote(
+			&chain,
+			Prevote::new("EA", 7),
+			"Eve",
+			Signature("Eve"),
+		).unwrap();
+
+		round.import_precommit(
+			&chain,
+			Precommit::new("EA", 7),
+			"Eve",
+			Signature("Eve"),
+		).unwrap();
+
+		round.import_prevote(
+			&chain,
+			Prevote::new("EC", 10),
+			"Alice",
+			Signature("Alice"),
+		).unwrap();
+
+		round.set_precommited_index();
+
+		assert_eq!(round.historical_votes(), &HistoricalVotes::new_with(
+			vec![
+				SignedMessage {
+					message: Message::Prevote(
+						Prevote { target_hash: "FC", target_number: 10 }
+					),
+					signature: Signature("Alice"),
+					id: "Alice"
+				},
+				SignedMessage {
+					message: Message::Prevote(
+						Prevote { target_hash: "EA", target_number: 7 }
+					),
+					signature: Signature("Eve"),
+					id: "Eve"
+				},
+				SignedMessage {
+					message: Message::Precommit(
+						Precommit { target_hash: "EA", target_number: 7 }
+					),
+					signature: Signature("Eve"),
+					id: "Eve"
+				},
+				SignedMessage {
+					message: Message::Precommit(
+						Precommit { target_hash: "EC", target_number: 10 }
+					),
+					signature: Signature("Alice"),
+					id: "Alice"
+				},
+			],
+			Some(1),
+			Some(4),
+		));
 	}
 }
