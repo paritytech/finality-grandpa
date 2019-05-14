@@ -322,22 +322,22 @@ impl<Id, H, N, Signature> Round<Id, H, N, Signature> where
 			let round_number = self.round_number;
 
 			match multiplicity {
-				VoteMultiplicity::Single(ref vote, _) => {
+				VoteMultiplicity::Single(single_vote, _) => {
 					let vote_weight = VoteWeight {
 						bitfield: self.bitfield_context.prevote_bitfield(info)
 							.expect("info is instantiated from same voter set as context; qed"),
 					};
 
 					self.graph.insert(
-						vote.target_hash.clone(),
-						vote.target_number,
+						single_vote.target_hash.clone(),
+						single_vote.target_number,
 						vote_weight,
 						chain,
 					)?;
 
 					// Push the vote into HistoricalVotes.
-					let message = Message::Prevote(vote.clone());
-					let signed_message = SignedMessage { id: signer.clone(), signature, message };
+					let message = Message::Prevote(vote);
+					let signed_message = SignedMessage { id: signer, signature, message };
 					self.historical_votes.push_vote(signed_message);
 
 					None
@@ -409,25 +409,25 @@ impl<Id, H, N, Signature> Round<Id, H, N, Signature> where
 			let round_number = self.round_number;
 
 			match multiplicity {
-				VoteMultiplicity::Single(ref vote, _) => {
+				VoteMultiplicity::Single(single_vote, _) => {
 					let vote_weight = VoteWeight {
 						bitfield: self.bitfield_context.precommit_bitfield(info)
 							.expect("info is instantiated from same voter set as context; qed"),
 					};
 
 					self.graph.insert(
-						vote.target_hash.clone(),
-						vote.target_number,
+						single_vote.target_hash.clone(),
+						single_vote.target_number,
 						vote_weight,
 						chain,
 					)?;
 
-					let message = Message::Precommit(vote.clone());
-					let signed_message = SignedMessage { id: signer.clone(), signature, message };
+					let message = Message::Precommit(vote);
+					let signed_message = SignedMessage { id: signer, signature, message };
 					self.historical_votes.push_vote(signed_message);
 
 					None
-				}
+				},
 				VoteMultiplicity::Equivocated(ref first, ref second) => {
 					// mark the equivocator as such. no need to "undo" the first vote.
 					self.bitfield_context.equivocated_precommit(info)
@@ -444,7 +444,7 @@ impl<Id, H, N, Signature> Round<Id, H, N, Signature> where
 						first: first.clone(),
 						second: second.clone(),
 					})
-				}
+				},
 			}
 		};
 
