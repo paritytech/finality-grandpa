@@ -24,7 +24,7 @@ use tokio::timer::Delay;
 use parking_lot::Mutex;
 use futures::prelude::*;
 use futures::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
-use super::{Chain, Commit, Error, Equivocation, Message, Prevote, Precommit, PrimaryPropose, SignedMessage, HistoricalVotes};
+use super::{Chain, Commit, Error, Equivocation, Message, Prevote, Precommit, PrimaryPropose, SignedMessage};
 
 pub const GENESIS_HASH: &str = "genesis";
 const NULL_HASH: &str = "NULL";
@@ -53,6 +53,8 @@ impl DummyChain {
 	}
 
 	pub fn push_blocks(&mut self, mut parent: &'static str, blocks: &[&'static str]) {
+		use std::cmp::Ord;
+
 		if blocks.is_empty() { return }
 
 		let base_number = self.inner.get(parent).unwrap().number + 1;
@@ -216,7 +218,7 @@ impl crate::voter::Environment<&'static str, u32> for Environment {
 		_round: u64,
 		_state: RoundState<&'static str, u32>,
 		_base: (&'static str, u32),
-		_votes: &HistoricalVotes<&'static str, u32, Self::Signature, Self::Id>,
+		_votes: Vec<SignedMessage<&'static str, u32, Signature, Id>>,
 	) -> Result<(), Error> {
 		Ok(())
 	}
