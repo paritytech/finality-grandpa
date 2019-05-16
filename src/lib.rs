@@ -543,6 +543,12 @@ impl<H, N, S, Id> HistoricalVotes<H, N, S, Id> {
 	}
 }
 
+pub trait AccountableSafety<H, N, S, Id> {
+	fn prevotes_seen(round: u64) -> Vec<SignedMessage<H, N, S, Id>>;
+	fn votes_seen_when_prevoted(round: u64) -> Vec<SignedMessage<H, N, S, Id>>;
+	fn votes_seen_when_precommited(round: u64) -> Vec<SignedMessage<H, N, S, Id>>;
+}
+
 #[cfg(test)]
 mod tests {
 	use super::threshold;
