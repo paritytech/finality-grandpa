@@ -543,10 +543,12 @@ impl<H, N, S, Id> HistoricalVotes<H, N, S, Id> {
 	}
 }
 
-pub trait AccountableSafety<H, N, S, Id> {
-	fn prevotes_seen(round: u64) -> Vec<SignedMessage<H, N, S, Id>>;
-	fn votes_seen_when_prevoted(round: u64) -> Vec<SignedMessage<H, N, S, Id>>;
-	fn votes_seen_when_precommited(round: u64) -> Vec<SignedMessage<H, N, S, Id>>;
+pub trait AccountableSafety {
+	type Message;
+
+	fn prevotes_seen(&self, round: u64) -> Vec<Self::Message>;
+	fn votes_seen_when_prevoted(&self, round: u64) -> Vec<Self::Message>;
+	fn votes_seen_when_precommited(&self, round: u64) -> Vec<Self::Message>;
 }
 
 #[cfg(test)]

@@ -89,10 +89,20 @@ pub trait Environment<H: Eq, N: BlockNumberOps>: Chain<H, N> {
 	fn proposed(&self, round: u64, propose: PrimaryPropose<H, N>) -> Result<(), Self::Error>;
 
 	/// Note that we have prevoted in the given round.
-	fn prevoted(&self, round: u64, prevote: Prevote<H, N>) -> Result<(), Self::Error>;
+	fn prevoted(
+		&self,
+		round: u64,
+		prevote: Prevote<H, N>,
+		votes: &HistoricalVotes<H, N, Self::Signature, Self::Id>,
+	) -> Result<(), Self::Error>;
 
 	/// Note that we have precommitted in the given round.
-	fn precommitted(&self, round: u64, precommit: Precommit<H, N>) -> Result<(), Self::Error>;
+	fn precommitted(
+		&self,
+		round: u64,
+		precommit: Precommit<H, N>,
+		votes: &HistoricalVotes<H, N, Self::Signature, Self::Id>,
+	) -> Result<(), Self::Error>;
 
 	/// Note that a round was completed. This is called when a round has been
 	/// voted in. Should return an error when something fatal occurs.
