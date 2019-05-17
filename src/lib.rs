@@ -510,7 +510,7 @@ impl<H, N, S, Id> HistoricalVotes<H, N, S, Id> {
 		}
 	}
 
-	/// Push a vote into the list.
+	/// Push a message into the list.
 	pub fn push_vote(&mut self, msg: SignedMessage<H, N, S, Id>) {
 		self.seen.push(msg)
 	}
