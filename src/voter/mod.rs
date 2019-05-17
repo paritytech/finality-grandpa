@@ -37,6 +37,7 @@ use crate::round::State as RoundState;
 use crate::{
 	Chain, Commit, CompactCommit, Equivocation, Message, Prevote, Precommit, PrimaryPropose,
 	SignedMessage, BlockNumberOps, validate_commit, CommitValidationResult, HistoricalVotes,
+	AccountableSafety,
 };
 use crate::voter_set::VoterSet;
 use past_rounds::PastRounds;
@@ -48,7 +49,7 @@ mod voting_round;
 /// Necessary environment for a voter.
 ///
 /// This encapsulates the database and networking layers of the chain.
-pub trait Environment<H: Eq, N: BlockNumberOps>: Chain<H, N> {
+pub trait Environment<H: Eq, N: BlockNumberOps>: Chain<H, N> + AccountableSafety {
 	type Timer: Future<Item=(),Error=Self::Error>;
 	type Id: Hash + Clone + Eq + ::std::fmt::Debug;
 	type Signature: Eq + Clone;
