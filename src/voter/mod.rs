@@ -51,8 +51,8 @@ pub trait Environment<H: Eq, N: BlockNumberOps>: Chain<H, N> {
 	type Timer: Future<Item=(),Error=Self::Error>;
 	type Id: Hash + Clone + Eq + ::std::fmt::Debug;
 	type Signature: Eq + Clone;
-	type In: Stream<Item=SignedMessage<H, N, Self::Signature, Self::Id>,Error=Self::Error>;
-	type Out: Sink<SinkItem=Message<H, N>,SinkError=Self::Error>;
+	type In: Stream<Item=SignedMessage<H, N, Self::Signature, Self::Id>, Error=Self::Error>;
+	type Out: Sink<SinkItem=Message<H, N>, SinkError=Self::Error>;
 	type Error: From<crate::Error> + ::std::error::Error;
 
 	/// Produce data necessary to start a round of voting.
@@ -118,8 +118,6 @@ pub trait Environment<H: Eq, N: BlockNumberOps>: Chain<H, N> {
 pub enum CommunicationOut<H, N, S, Id> {
 	/// A commit message.
 	Commit(u64, Commit<H, N, S, Id>),
-	/// Auxiliary messages out.
-	Auxiliary(AuxiliaryCommunication<H, N, S, Id>),
 }
 
 /// The outcome of processing a commit.
@@ -215,18 +213,9 @@ impl Callback {
 #[cfg_attr(test, derive(Clone))]
 pub enum CommunicationIn<H, N, S, Id> {
 	/// A commit message.
-	Commit(u64, CompactCommit<H, N, S, Id>, Callback),
-	/// Auxiliary messages out.
-	Auxiliary(AuxiliaryCommunication<H, N, S, Id>),
-}
-
-/// Communication between nodes that is not round-localized.
-#[derive(Debug, Clone, PartialEq, Eq)]
-#[cfg_attr(feature = "derive-codec", derive(Encode, Decode))]
-pub enum AuxiliaryCommunication<H, N, S, Id> {
-	/// A response for catch-up request.
-	#[cfg_attr(feature = "derive-codec", codec(index = "1"))]
-	CatchUp(CatchUp<H, N, S, Id>)
+	Commit(u64, CompactCommit<H, N, S, Id>, Callback<CommitProcessingOutcome>),
+	/// A catch up message.
+	CatchUp(CatchUp<H, N, S, Id>, Callback<CatchUpProcessingOutcome>),
 }
 
 /// Data necessary to participate in a round.
@@ -465,7 +454,7 @@ impl<H, N, E: Environment<H, N>, GlobalIn, GlobalOut> Voter<H, N, E, GlobalIn, G
 						process_commit_outcome.run(CommitProcessingOutcome::Good(GoodCommit::new()));
 					}
 				}
-				CommunicationIn::Auxiliary(AuxiliaryCommunication::CatchUp(catch_up)) => {
+				CommunicationIn::CatchUp(catch_up, mut process_catch_up_outcome) => {
 					trace!(target: "afg", "Got catch-up message for round {}", catch_up.round_number);
 
 					if catch_up.round_number <= self.best_round.round_number() {
@@ -1013,13 +1002,16 @@ mod tests {
 			};
 
 			// send in a catch-up message for round 5.
-			network.send_message(CommunicationIn::Auxiliary(AuxiliaryCommunication::CatchUp(CatchUp {
-				base_number: 1,
-				base_hash: GENESIS_HASH,
-				round_number: 5,
-				prevotes: vec![pv(0), pv(1), pv(2)],
-				precommits: vec![pc(0), pc(1), pc(2)],
-			})));
+			network.send_message(CommunicationIn::CatchUp(
+				CatchUp {
+					base_number: 1,
+					base_hash: GENESIS_HASH,
+					round_number: 5,
+					prevotes: vec![pv(0), pv(1), pv(2)],
+					precommits: vec![pc(0), pc(1), pc(2)],
+				},
+				Callback::Blank,
+			));
 
 			// poll until it's caught up.
 			// should skip to round 6

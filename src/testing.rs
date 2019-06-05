@@ -360,7 +360,6 @@ impl Network {
 		let mut global_messages = self.global_messages.lock();
 		global_messages.add_node(|message| match message {
 			CommunicationOut::Commit(r, commit) => CommunicationIn::Commit(r, commit.into(), Callback::Blank),
-			CommunicationOut::Auxiliary(aux) => CommunicationIn::Auxiliary(aux),
 		})
 	}
 
