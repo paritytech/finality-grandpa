@@ -319,7 +319,7 @@ impl<Id, H, N, Signature> Round<Id, H, N, Signature> where
 			let round_number = self.round_number;
 
 			match multiplicity {
-				VoteMultiplicity::Single(ref vote, _) => {
+				VoteMultiplicity::Single(ref vote, signature) => {
 					let vote_weight = VoteWeight {
 						bitfield: self.bitfield_context.prevote_bitfield(info)
 							.expect("info is instantiated from same voter set as context; qed"),
@@ -331,8 +331,16 @@ impl<Id, H, N, Signature> Round<Id, H, N, Signature> where
 						vote_weight,
 						chain,
 					)?;
+					
+					// Produce prevote equivocations for testing.
+					Some(Equivocation {
+						round_number,
+						identity: signer,
+						first: (vote.clone(), signature.clone()),
+						second: (vote.clone(), signature.clone()),
+					})
 
-					None
+					// None
 				}
 				VoteMultiplicity::Equivocated(ref first, ref second) => {
 					// mark the equivocator as such. no need to "undo" the first vote.

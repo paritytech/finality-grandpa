@@ -108,8 +108,9 @@ pub trait Environment<H: Eq, N: BlockNumberOps>: Chain<H, N> {
 	// TODO: make this a future that resolves when it's e.g. written to disk?
 	fn finalize_block(&self, hash: H, number: N, round: u64, commit: Commit<H, N, Self::Signature, Self::Id>) -> Result<(), Self::Error>;
 
-	// Note that an equivocation in prevotes has occurred.s
+	// Note that an equivocation in prevotes has occurred.
 	fn prevote_equivocation(&self, round: u64, equivocation: Equivocation<Self::Id, Prevote<H, N>, Self::Signature>);
+
 	// Note that an equivocation in precommits has occurred.
 	fn precommit_equivocation(&self, round: u64, equivocation: Equivocation<Self::Id, Precommit<H, N>, Self::Signature>);
 }

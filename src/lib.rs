@@ -76,6 +76,8 @@ use std::fmt;
 use crate::voter_set::VoterSet;
 use round::ImportResult;
 
+pub use primitives::{Prevote, Precommit, Equivocation, Message, PrimaryPropose};
+
 #[cfg(not(feature = "std"))]
 mod collections {
 	pub use alloc::collections::*;
@@ -87,54 +89,6 @@ mod collections {
 mod collections {
 	pub use std::collections::*;
 	pub use std::vec::Vec;
-}
-
-/// A prevote for a block and its ancestors.
-#[derive(Debug, Clone, PartialEq, Eq)]
-#[cfg_attr(feature = "derive-codec", derive(Encode, Decode))]
-pub struct Prevote<H, N> {
-	/// The target block's hash.
-	pub target_hash: H,
-	/// The target block's number.
-	pub target_number: N,
-}
-
-impl<H, N> Prevote<H, N> {
-	pub fn new(target_hash: H, target_number: N) -> Self {
-		Prevote { target_hash, target_number }
-	}
-}
-
-/// A precommit for a block and its ancestors.
-#[derive(Debug, Clone, PartialEq, Eq)]
-#[cfg_attr(feature = "derive-codec", derive(Encode, Decode))]
-pub struct Precommit<H, N> {
-	/// The target block's hash.
-	pub target_hash: H,
-	/// The target block's number
-	pub target_number: N,
-}
-
-impl<H, N> Precommit<H, N> {
-	pub fn new(target_hash: H, target_number: N) -> Self {
-		Precommit { target_hash, target_number }
-	}
-}
-
-/// A primary proposed block, this is a broadcast of the last round's estimate.
-#[derive(Debug, Clone, PartialEq, Eq)]
-#[cfg_attr(feature = "derive-codec", derive(Encode, Decode))]
-pub struct PrimaryPropose<H, N> {
-	/// The target block's hash.
-	pub target_hash: H,
-	/// The target block's number
-	pub target_number: N,
-}
-
-impl<H, N> PrimaryPropose<H, N> {
-	pub fn new(target_hash: H, target_number: N) -> Self {
-		PrimaryPropose { target_hash, target_number }
-	}
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -204,46 +158,6 @@ pub trait Chain<H: Eq, N: Copy + BlockNumberOps> {
 		match self.ancestry(base, block) {
 			Ok(_) => true,
 			Err(Error::NotDescendent) => false,
-		}
-	}
-}
-
-/// An equivocation (double-vote) in a given round.
-#[derive(Debug, Clone, PartialEq)]
-#[cfg_attr(feature = "derive-codec", derive(Encode, Decode))]
-pub struct Equivocation<Id, V, S> {
-	/// The round number equivocated in.
-	pub round_number: u64,
-	/// The identity of the equivocator.
-	pub identity: Id,
-	/// The first vote in the equivocation.
-	pub	first: (V, S),
-	/// The second vote in the equivocation.
-	pub second: (V, S),
-}
-
-/// A protocol message or vote.
-#[derive(Debug, Clone, PartialEq, Eq)]
-#[cfg_attr(feature = "derive-codec", derive(Encode, Decode))]
-pub enum Message<H, N> {
-	/// A prevote message.
-	#[cfg_attr(feature = "derive-codec", codec(index = "0"))]
-	Prevote(Prevote<H, N>),
-	/// A precommit message.
-	#[cfg_attr(feature = "derive-codec", codec(index = "1"))]
-	Precommit(Precommit<H, N>),
-	// Primary proposed block.
-	#[cfg_attr(feature = "derive-codec", codec(index = "2"))]
-	PrimaryPropose(PrimaryPropose<H, N>),
-}
-
-impl<H, N: Copy> Message<H, N> {
-	/// Get the target block of the vote.
-	pub fn target(&self) -> (&H, N) {
-		match *self {
-			Message::Prevote(ref v) => (&v.target_hash, v.target_number),
-			Message::Precommit(ref v) => (&v.target_hash, v.target_number),
-			Message::PrimaryPropose(ref v) => (&v.target_hash, v.target_number),
 		}
 	}
 }
