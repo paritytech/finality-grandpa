@@ -185,23 +185,62 @@ impl<H, N> From<CommitValidationResult<H, N>> for BadCommit {
 	}
 }
 
-/// Callback used to propagate the commit in case the outcome is good.
-pub enum Callback {
+/// The outcome of processing a catch up.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CatchUpProcessingOutcome {
+	/// It was beneficial to process this catch up.
+	Good(GoodCatchUp),
+	/// It wasn't beneficial to process this catch up, it is invalid and we
+	/// wasted resources.
+	Bad(BadCatchUp),
+	/// The catch up wasn't processed because it is useless, e.g. it is for a
+	/// round lower than we're currently in.
+	Useless,
+}
+
+/// The result of processing for a good catch up.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GoodCatchUp {
+	_priv: (), // lets us add stuff without breaking API.
+}
+
+impl GoodCatchUp {
+	pub(crate) fn new() -> Self {
+		GoodCatchUp { _priv: () }
+	}
+}
+
+/// The result of processing for a bad catch up.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BadCatchUp {
+	_priv: (), // lets us add stuff without breaking API.
+}
+
+impl BadCatchUp {
+	pub(crate) fn new() -> Self {
+		BadCatchUp { _priv: () }
+	}
+}
+
+/// Callback used to pass information about the outcome of importing a given
+/// message (e.g. vote, commit, catch up). Useful to propagate data to the
+/// network after making sure the import is successful.
+pub enum Callback<O> {
 	/// Default value.
 	Blank,
-	/// Callback to execute given a commit processing outcome.
-	Work(Box<FnMut(CommitProcessingOutcome) + Send>),
+	/// Callback to execute given a processing outcome.
+	Work(Box<FnMut(O) + Send>),
 }
 
 #[cfg(test)]
-impl Clone for Callback {
+impl<O> Clone for Callback<O> {
 	fn clone(&self) -> Self {
 		Callback::Blank
 	}
 }
 
-impl Callback {
-	pub(crate) fn run(&mut self, o: CommitProcessingOutcome) {
+impl<O> Callback<O> {
+	pub(crate) fn run(&mut self, o: O) {
 		match self {
 			Callback::Blank => {},
 			Callback::Work(cb) => cb(o),
@@ -461,6 +500,8 @@ impl<H, N, E: Environment<H, N>, GlobalIn, GlobalOut> Voter<H, N, E, GlobalIn, G
 						trace!(target: "afg", "Ignoring because best round number is {}",
 							self.best_round.round_number());
 
+						process_catch_up_outcome.run(CatchUpProcessingOutcome::Useless);
+
 						return Ok(())
 					}
 
@@ -471,16 +512,18 @@ impl<H, N, E: Environment<H, N>, GlobalIn, GlobalOut> Voter<H, N, E, GlobalIn, G
 
 						for prevote in &catch_up.prevotes {
 							if !voters.contains_key(&prevote.id) {
+								process_catch_up_outcome.run(CatchUpProcessingOutcome::Bad(BadCatchUp::new()));
 								return Ok(())
 							}
-							map.entry(prevote.id.clone()).or_insert((false ,false)).0 = true;
+							map.entry(prevote.id.clone()).or_insert((false, false)).0 = true;
 						}
 
 						for precommit in &catch_up.precommits {
 							if !voters.contains_key(&precommit.id) {
+								process_catch_up_outcome.run(CatchUpProcessingOutcome::Bad(BadCatchUp::new()));
 								return Ok(())
 							}
-							map.entry(precommit.id.clone()).or_insert((false ,false)).1 = true;
+							map.entry(precommit.id.clone()).or_insert((false, false)).1 = true;
 						}
 
 						let (pv, pc) = map.into_iter().fold(
@@ -502,6 +545,7 @@ impl<H, N, E: Environment<H, N>, GlobalIn, GlobalOut> Voter<H, N, E, GlobalIn, G
 
 						let threshold = voters.threshold();
 						if pv < threshold || pc < threshold {
+							process_catch_up_outcome.run(CatchUpProcessingOutcome::Bad(BadCatchUp::new()));
 							return Ok(())
 						}
 					}
@@ -516,7 +560,10 @@ impl<H, N, E: Environment<H, N>, GlobalIn, GlobalOut> Voter<H, N, E, GlobalIn, G
 					for crate::SignedPrevote { prevote, id, signature } in catch_up.prevotes {
 						match round.import_prevote(&*self.env, prevote, id, signature) {
 							Ok(_) => {},
-							Err(e) => return Ok(()),
+							Err(e) => {
+								process_catch_up_outcome.run(CatchUpProcessingOutcome::Bad(BadCatchUp::new()));
+								return Ok(());
+							},
 						}
 					}
 
@@ -524,12 +571,18 @@ impl<H, N, E: Environment<H, N>, GlobalIn, GlobalOut> Voter<H, N, E, GlobalIn, G
 					for crate::SignedPrecommit { precommit, id, signature } in catch_up.precommits {
 						match round.import_precommit(&*self.env, precommit, id, signature) {
 							Ok(_) => {},
-							Err(e) => return Ok(()),
+							Err(e) => {
+								process_catch_up_outcome.run(CatchUpProcessingOutcome::Bad(BadCatchUp::new()));
+								return Ok(());
+							},
 						}
 					}
 
 					let state = round.state();
-					if !state.completable { return Ok(()) }
+					if !state.completable {
+						process_catch_up_outcome.run(CatchUpProcessingOutcome::Bad(BadCatchUp::new()));
+						return Ok(())
+					}
 
 					// beyond this point, we set this round to the past and
 					// start voting in the next round.
@@ -562,6 +615,7 @@ impl<H, N, E: Environment<H, N>, GlobalIn, GlobalOut> Voter<H, N, E, GlobalIn, G
 						just_completed.dag_base(),
 						just_completed.votes(),
 					)?;
+
 					self.past_rounds.push(&*self.env, just_completed);
 
 					// stop voting in the best round before we background it, just in case it contradicts what
@@ -571,6 +625,8 @@ impl<H, N, E: Environment<H, N>, GlobalIn, GlobalOut> Voter<H, N, E, GlobalIn, G
 						&*self.env,
 						std::mem::replace(&mut self.best_round, new_best),
 					);
+
+					process_catch_up_outcome.run(CatchUpProcessingOutcome::Good(GoodCatchUp::new()));
 				},
 			}
 		}

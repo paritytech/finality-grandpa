@@ -497,7 +497,7 @@ pub fn threshold(total_weight: u64) -> u64 {
 /// good otherwise.
 pub fn process_commit_validation_result<H, N>(
 	validation_result: CommitValidationResult<H, N>,
-	mut callback: voter::Callback,
+	mut callback: voter::Callback<voter::CommitProcessingOutcome>,
 ) {
 	if let Some(_) = validation_result.ghost {
 		callback.run(
