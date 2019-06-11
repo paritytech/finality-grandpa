@@ -111,7 +111,8 @@ pub trait Environment<H: Eq, N: BlockNumberOps>: Chain<H, N> {
 		round: u64,
 		state: RoundState<H, N>,
 		base: (H, N),
-		votes: &HistoricalVotes<H, N, Self::Signature, Self::Id>,
+		votes: Vec<SignedMessage<H, N, Self::Signature, Self::Id>>,
+		historical_votes: &HistoricalVotes<H, N, Self::Signature, Self::Id>,
 	) -> Result<(), Self::Error>;
 
 	/// Called when a block should be finalized.
@@ -672,6 +673,7 @@ impl<H, N, E: Environment<H, N>, GlobalIn, GlobalOut> Voter<H, N, E, GlobalIn, G
 			self.best_round.round_number(),
 			self.best_round.round_state(),
 			self.best_round.dag_base(),
+			self.best_round.votes(),
 			self.best_round.historical_votes(),
 		)?;
 
@@ -700,6 +702,7 @@ impl<H, N, E: Environment<H, N>, GlobalIn, GlobalOut> Voter<H, N, E, GlobalIn, G
 			prospective_round.round_number(),
 			prospective_round.round_state(),
 			prospective_round.dag_base(),
+			prospective_round.votes(),
 			prospective_round.historical_votes(),
 		)?;
 

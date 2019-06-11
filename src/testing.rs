@@ -219,7 +219,8 @@ impl crate::voter::Environment<&'static str, u32> for Environment {
 		_round: u64,
 		_state: RoundState<&'static str, u32>,
 		_base: (&'static str, u32),
-		_votes: &HistoricalVotes<&'static str, u32, Self::Signature, Self::Id>,
+		_votes: Vec<SignedMessage<H, N, Self::Signature, Self::Id>>,
+		_historical_votes: &HistoricalVotes<&'static str, u32, Self::Signature, Self::Id>,
 	) -> Result<(), Error> {
 		Ok(())
 	}
