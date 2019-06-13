@@ -14,8 +14,12 @@
 
 //! Logic for voting and handling messages within a single round.
 
+#[cfg(feature = "std")]
+use futures::try_ready;
 use futures::prelude::*;
 use futures::sync::mpsc::UnboundedSender;
+#[cfg(feature = "std")]
+use log::{trace, warn, debug};
 
 use std::hash::Hash;
 use std::sync::Arc;
