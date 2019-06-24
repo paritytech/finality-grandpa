@@ -35,7 +35,8 @@ use std::sync::Arc;
 use crate::round::State as RoundState;
 use crate::{
 	CatchUp, Chain, Commit, CompactCommit, Equivocation, Message, Prevote, Precommit,
-	PrimaryPropose, SignedMessage, BlockNumberOps, validate_commit, CommitValidationResult
+	PrimaryPropose, SignedMessage, BlockNumberOps, validate_commit, CommitValidationResult,
+	HistoricalVotes,
 };
 use crate::voter_set::VoterSet;
 use past_rounds::PastRounds;
@@ -100,7 +101,7 @@ pub trait Environment<H: Eq, N: BlockNumberOps>: Chain<H, N> {
 		round: u64,
 		state: RoundState<H, N>,
 		base: (H, N),
-		votes: Vec<SignedMessage<H, N, Self::Signature, Self::Id>>,
+		votes: &HistoricalVotes<H, N, Self::Signature, Self::Id>,
 	) -> Result<(), Self::Error>;
 
 	/// Called when a block should be finalized.
@@ -613,7 +614,7 @@ impl<H, N, E: Environment<H, N>, GlobalIn, GlobalOut> Voter<H, N, E, GlobalIn, G
 						just_completed.round_number(),
 						just_completed.round_state(),
 						just_completed.dag_base(),
-						just_completed.votes(),
+						just_completed.historical_votes(),
 					)?;
 
 					self.past_rounds.push(&*self.env, just_completed);
@@ -670,7 +671,7 @@ impl<H, N, E: Environment<H, N>, GlobalIn, GlobalOut> Voter<H, N, E, GlobalIn, G
 			self.best_round.round_number(),
 			self.best_round.round_state(),
 			self.best_round.dag_base(),
-			self.best_round.votes(),
+			self.best_round.historical_votes(),
 		)?;
 
 		let old_round_number = self.best_round.round_number();

@@ -510,6 +510,71 @@ pub fn process_commit_validation_result<H, N>(
 	}
 }
 
+/// Historical votes seen in a round.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "derive-codec", derive(Encode, Decode))]
+pub struct HistoricalVotes<H, N, S, Id> {
+	seen: Vec<SignedMessage<H, N, S, Id>>,
+	prevote_idx: Option<usize>,
+	precommit_idx: Option<usize>,
+}
+
+impl<H, N, S, Id> HistoricalVotes<H, N, S, Id> {
+	/// Create a new HistoricalVotes.
+	pub fn new() -> Self {
+		HistoricalVotes {
+			seen: Vec::new(),
+			prevote_idx: None,
+			precommit_idx: None,
+		}
+	}
+
+	/// Create a new HistoricalVotes initialized from the parameters.
+	pub fn new_with(
+		seen: Vec<SignedMessage<H, N, S, Id>>,
+		prevote_idx: Option<usize>,
+		precommit_idx: Option<usize>
+	) -> Self {
+		HistoricalVotes {
+			seen,
+			prevote_idx,
+			precommit_idx,
+		}
+	}
+
+	/// Push a vote into the list.
+	pub fn push_vote(&mut self, msg: SignedMessage<H, N, S, Id>) {
+		self.seen.push(msg)
+	}
+
+	/// Return the messages seen so far.
+	pub fn seen(&self) -> &Vec<SignedMessage<H, N, S, Id>> {
+		&self.seen
+	}
+
+	/// Return the number of messages seen before prevoting.
+	/// None in case we didn't prevote yet.
+	pub fn prevote_idx(&self) -> Option<usize> {
+		self.prevote_idx
+	}
+
+	/// Return the number of messages seen before precommiting.
+	/// None in case we didn't precommit yet.
+	pub fn precommit_idx(&self) -> Option<usize> {
+		self.precommit_idx
+	}
+
+	/// Set the number of messages seen before prevoting.
+	pub fn set_prevoted_idx(&mut self) {
+		self.prevote_idx = Some(self.seen.len())
+	}
+
+	/// Set the number of messages seen before precommiting.
+	pub fn set_precommited_idx(&mut self) {
+		self.precommit_idx = Some(self.seen.len())
+	}
+}
+
 #[cfg(test)]
 mod tests {
 	use super::threshold;
