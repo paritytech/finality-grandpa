@@ -241,7 +241,8 @@ impl<O> Clone for Callback<O> {
 }
 
 impl<O> Callback<O> {
-	pub(crate) fn run(&mut self, o: O) {
+	/// Do the work associated with the callback, if any.
+	pub fn run(&mut self, o: O) {
 		match self {
 			Callback::Blank => {},
 			Callback::Work(cb) => cb(o),
