@@ -514,6 +514,11 @@ impl<H, N, E: Environment<H, N>, GlobalIn, GlobalOut> Voter<H, N, E, GlobalIn, G
 
 						for prevote in &catch_up.prevotes {
 							if !voters.contains_key(&prevote.id) {
+								trace!(target: "afg",
+									"Ignoring invalid catch up, invalid voter: {:?}",
+									prevote.id,
+								);
+
 								process_catch_up_outcome.run(CatchUpProcessingOutcome::Bad(BadCatchUp::new()));
 								return Ok(())
 							}
@@ -522,6 +527,11 @@ impl<H, N, E: Environment<H, N>, GlobalIn, GlobalOut> Voter<H, N, E, GlobalIn, G
 
 						for precommit in &catch_up.precommits {
 							if !voters.contains_key(&precommit.id) {
+								trace!(target: "afg",
+									"Ignoring invalid catch up, invalid voter: {:?}",
+									precommit.id,
+								);
+
 								process_catch_up_outcome.run(CatchUpProcessingOutcome::Bad(BadCatchUp::new()));
 								return Ok(())
 							}
@@ -547,6 +557,10 @@ impl<H, N, E: Environment<H, N>, GlobalIn, GlobalOut> Voter<H, N, E, GlobalIn, G
 
 						let threshold = voters.threshold();
 						if pv < threshold || pc < threshold {
+							trace!(target: "afg",
+								"Ignoring invalid catch up, missing voter threshold"
+							);
+
 							process_catch_up_outcome.run(CatchUpProcessingOutcome::Bad(BadCatchUp::new()));
 							return Ok(())
 						}
@@ -563,6 +577,11 @@ impl<H, N, E: Environment<H, N>, GlobalIn, GlobalOut> Voter<H, N, E, GlobalIn, G
 						match round.import_prevote(&*self.env, prevote, id, signature) {
 							Ok(_) => {},
 							Err(e) => {
+								trace!(target: "afg",
+									"Ignoring invalid catch up, error importing prevote: {:?}",
+									e,
+								);
+
 								process_catch_up_outcome.run(CatchUpProcessingOutcome::Bad(BadCatchUp::new()));
 								return Ok(());
 							},
@@ -574,6 +593,11 @@ impl<H, N, E: Environment<H, N>, GlobalIn, GlobalOut> Voter<H, N, E, GlobalIn, G
 						match round.import_precommit(&*self.env, precommit, id, signature) {
 							Ok(_) => {},
 							Err(e) => {
+								trace!(target: "afg",
+									"Ignoring invalid catch up, error importing precommit: {:?}",
+									e,
+								);
+
 								process_catch_up_outcome.run(CatchUpProcessingOutcome::Bad(BadCatchUp::new()));
 								return Ok(());
 							},
