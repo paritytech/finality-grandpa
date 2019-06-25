@@ -21,10 +21,14 @@
 //!   - Informing it of any new finalized block heights
 //!   - Passing it any validated commits (so backgrounded rounds don't produce conflicting ones)
 
+#[cfg(feature = "std")]
+use futures::try_ready;
 use futures::prelude::*;
 use futures::stream::{self, futures_unordered::FuturesUnordered};
 use futures::task;
 use futures::sync::mpsc;
+#[cfg(feature = "std")]
+use log::{trace, debug};
 
 use std::cmp;
 use std::collections::HashMap;
