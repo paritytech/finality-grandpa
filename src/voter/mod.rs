@@ -27,6 +27,10 @@
 
 use futures::prelude::*;
 use futures::sync::mpsc::{self, UnboundedReceiver};
+#[cfg(feature = "std")]
+use log::trace;
+#[cfg(feature = "derive-codec")]
+use parity_codec::{Encode, Decode};
 
 use std::collections::VecDeque;
 use std::hash::Hash;

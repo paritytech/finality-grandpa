@@ -17,6 +17,9 @@
 use std::hash::Hash;
 use std::ops::AddAssign;
 
+#[cfg(feature = "derive-codec")]
+use parity_codec::{Encode, Decode};
+
 use crate::collections::{hash_map::{HashMap, Entry}, Vec};
 use crate::bitfield::{Shared as BitfieldContext, Bitfield};
 use crate::vote_graph::VoteGraph;
@@ -715,13 +718,13 @@ impl<Id, H, N, Signature> Round<Id, H, N, Signature> where
 
 	/// Get the number of prevotes and precommits received at the moment of prevoting.
 	/// Returns None if the prevote wasn't realized.
-	pub fn prevoted_index(&self) -> Option<usize> {
+	pub fn prevoted_index(&self) -> Option<u64> {
 		self.historical_votes.prevote_idx
 	}
 
 	/// Get the number of prevotes and precommits received at the moment of precommiting.
 	/// Returns None if the precommit wasn't realized.
-	pub fn precommited_index(&self) -> Option<usize> {
+	pub fn precommited_index(&self) -> Option<u64> {
 		self.historical_votes.precommit_idx
 	}
 }
