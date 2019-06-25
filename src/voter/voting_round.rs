@@ -176,12 +176,6 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 		}
 	}
 
-	/// Mark the round as no-further-voting. Rounds that are in this state will not be
-	/// voted on any more. Irreversible.
-	pub(super) fn stop_voting(&mut self) {
-		self.voting = Voting::No;
-	}
-
 	/// Poll the round. When the round is completable and messages have been flushed, it will return `Async::Ready` but
 	/// can continue to be polled.
 	pub(super) fn poll(&mut self) -> Poll<(), E::Error> {
@@ -286,7 +280,7 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 		self.best_finalized.as_ref()
 	}
 
-	/// Return all votes for the round (prevotes and precommits), 
+	/// Return all votes for the round (prevotes and precommits),
 	/// sorted by imported order and indicating the indices where we voted.
 	pub(super) fn historical_votes(&self) -> &HistoricalVotes<H, N, E::Signature, E::Id> {
 		self.votes.historical_votes()

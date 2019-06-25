@@ -648,9 +648,6 @@ impl<H, N, E: Environment<H, N>, GlobalIn, GlobalOut> Voter<H, N, E, GlobalIn, G
 
 					self.past_rounds.push(&*self.env, just_completed);
 
-					// stop voting in the best round before we background it, just in case it contradicts what
-					// we're doing now.
-					self.best_round.stop_voting();
 					self.past_rounds.push(
 						&*self.env,
 						std::mem::replace(&mut self.best_round, new_best),
