@@ -502,117 +502,20 @@ impl<H, N, E: Environment<H, N>, GlobalIn, GlobalOut> Voter<H, N, E, GlobalIn, G
 				CommunicationIn::CatchUp(catch_up, mut process_catch_up_outcome) => {
 					trace!(target: "afg", "Got catch-up message for round {}", catch_up.round_number);
 
-					if catch_up.round_number <= self.best_round.round_number() {
-						trace!(target: "afg", "Ignoring because best round number is {}",
-							self.best_round.round_number());
-
-						process_catch_up_outcome.run(CatchUpProcessingOutcome::Useless);
-
-						return Ok(())
-					}
-
-					// check threshold support in prevotes and precommits.
-					{
-						let mut map = std::collections::HashMap::new();
-						let voters = &self.voters;
-
-						for prevote in &catch_up.prevotes {
-							if !voters.contains_key(&prevote.id) {
-								trace!(target: "afg",
-									"Ignoring invalid catch up, invalid voter: {:?}",
-									prevote.id,
-								);
-
-								process_catch_up_outcome.run(CatchUpProcessingOutcome::Bad(BadCatchUp::new()));
-								return Ok(())
-							}
-							map.entry(prevote.id.clone()).or_insert((false, false)).0 = true;
-						}
-
-						for precommit in &catch_up.precommits {
-							if !voters.contains_key(&precommit.id) {
-								trace!(target: "afg",
-									"Ignoring invalid catch up, invalid voter: {:?}",
-									precommit.id,
-								);
-
-								process_catch_up_outcome.run(CatchUpProcessingOutcome::Bad(BadCatchUp::new()));
-								return Ok(())
-							}
-							map.entry(precommit.id.clone()).or_insert((false, false)).1 = true;
-						}
-
-						let (pv, pc) = map.into_iter().fold(
-							(0, 0),
-							|(mut pv, mut pc), (id, (prevoted, precommitted))| {
-								let weight = voters.info(&id).map(|i| i.weight()).unwrap_or(0);
-
-								if prevoted {
-									pv += weight;
-								}
-
-								if precommitted {
-									pc += weight;
-								}
-
-								(pv, pc)
-							},
-						);
-
-						let threshold = voters.threshold();
-						if pv < threshold || pc < threshold {
-							trace!(target: "afg",
-								"Ignoring invalid catch up, missing voter threshold"
-							);
-
+					let round = match validate_catch_up(
+						catch_up,
+						&*self.env,
+						&self.voters,
+						self.best_round.round_number(),
+					) {
+						Some(round) => round,
+						None => {
 							process_catch_up_outcome.run(CatchUpProcessingOutcome::Bad(BadCatchUp::new()));
-							return Ok(())
-						}
-					}
-
-					let mut round = crate::round::Round::new(crate::round::RoundParams {
-						round_number: catch_up.round_number,
-						voters: self.voters.clone(),
-						base: (catch_up.base_hash, catch_up.base_number),
-					});
-
-					// import prevotes first.
-					for crate::SignedPrevote { prevote, id, signature } in catch_up.prevotes {
-						match round.import_prevote(&*self.env, prevote, id, signature) {
-							Ok(_) => {},
-							Err(e) => {
-								trace!(target: "afg",
-									"Ignoring invalid catch up, error importing prevote: {:?}",
-									e,
-								);
-
-								process_catch_up_outcome.run(CatchUpProcessingOutcome::Bad(BadCatchUp::new()));
-								return Ok(());
-							},
-						}
-					}
-
-					// then precommits.
-					for crate::SignedPrecommit { precommit, id, signature } in catch_up.precommits {
-						match round.import_precommit(&*self.env, precommit, id, signature) {
-							Ok(_) => {},
-							Err(e) => {
-								trace!(target: "afg",
-									"Ignoring invalid catch up, error importing precommit: {:?}",
-									e,
-								);
-
-								process_catch_up_outcome.run(CatchUpProcessingOutcome::Bad(BadCatchUp::new()));
-								return Ok(());
-							},
-						}
-					}
+							return Ok(());
+						},
+					};
 
 					let state = round.state();
-					if !state.completable {
-						process_catch_up_outcome.run(CatchUpProcessingOutcome::Bad(BadCatchUp::new()));
-						return Ok(())
-					}
 
 					// beyond this point, we set this round to the past and
 					// start voting in the next round.
@@ -623,7 +526,7 @@ impl<H, N, E: Environment<H, N>, GlobalIn, GlobalOut> Voter<H, N, E, GlobalIn, G
 					);
 
 					let new_best = VotingRound::new(
-						catch_up.round_number + 1,
+						just_completed.round_number() + 1,
 						self.voters.clone(),
 						self.last_finalized_in_rounds.clone(),
 						Some(just_completed.bridge_state()),
@@ -742,6 +645,129 @@ impl<H, N, E: Environment<H, N>, GlobalIn, GlobalOut> Future for Voter<H, N, E, 
 
 		self.process_best_round()
 	}
+}
+
+/// Validate the given catch up and return a completed round with all prevotes
+/// and precommits from the catch up imported. If the catch up is invalid `None`
+/// is returned instead.
+fn validate_catch_up<H, N, S, I, E>(
+	catch_up: CatchUp<H, N, S, I>,
+	env: &E,
+	voters: &VoterSet<I>,
+	best_round_number: u64,
+) -> Option<crate::round::Round<I, H, N, S>> where
+	H: Clone + Eq + Ord + std::fmt::Debug + std::hash::Hash,
+	N: BlockNumberOps + std::fmt::Debug,
+	S: Clone + Eq,
+	I: Clone + Eq + std::fmt::Debug + std::hash::Hash,
+	E: Environment<H, N>,
+{
+	if catch_up.round_number <= best_round_number {
+		trace!(target: "afg", "Ignoring because best round number is {}",
+			   best_round_number);
+
+		return None;
+	}
+
+	// check threshold support in prevotes and precommits.
+	{
+		let mut map = std::collections::HashMap::new();
+
+		for prevote in &catch_up.prevotes {
+			if !voters.contains_key(&prevote.id) {
+				trace!(target: "afg",
+					   "Ignoring invalid catch up, invalid voter: {:?}",
+					   prevote.id,
+				);
+
+				return None;
+			}
+
+			map.entry(prevote.id.clone()).or_insert((false, false)).0 = true;
+		}
+
+		for precommit in &catch_up.precommits {
+			if !voters.contains_key(&precommit.id) {
+				trace!(target: "afg",
+					   "Ignoring invalid catch up, invalid voter: {:?}",
+					   precommit.id,
+				);
+
+				return None;
+			}
+
+			map.entry(precommit.id.clone()).or_insert((false, false)).1 = true;
+		}
+
+		let (pv, pc) = map.into_iter().fold(
+			(0, 0),
+			|(mut pv, mut pc), (id, (prevoted, precommitted))| {
+				let weight = voters.info(&id).map(|i| i.weight()).unwrap_or(0);
+
+				if prevoted {
+					pv += weight;
+				}
+
+				if precommitted {
+					pc += weight;
+				}
+
+				(pv, pc)
+			},
+		);
+
+		let threshold = voters.threshold();
+		if pv < threshold || pc < threshold {
+			trace!(target: "afg",
+				   "Ignoring invalid catch up, missing voter threshold"
+			);
+
+			return None;
+		}
+	}
+
+	let mut round = crate::round::Round::new(crate::round::RoundParams {
+		round_number: catch_up.round_number,
+		voters: voters.clone(),
+		base: (catch_up.base_hash.clone(), catch_up.base_number.clone()),
+	});
+
+	// import prevotes first.
+	for crate::SignedPrevote { prevote, id, signature } in catch_up.prevotes {
+		match round.import_prevote(env, prevote, id, signature) {
+			Ok(_) => {},
+			Err(e) => {
+				trace!(target: "afg",
+					   "Ignoring invalid catch up, error importing prevote: {:?}",
+					   e,
+				);
+
+				return None;
+			},
+		}
+	}
+
+	// then precommits.
+	for crate::SignedPrecommit { precommit, id, signature } in catch_up.precommits {
+		match round.import_precommit(env, precommit, id, signature) {
+			Ok(_) => {},
+			Err(e) => {
+				trace!(target: "afg",
+					   "Ignoring invalid catch up, error importing precommit: {:?}",
+					   e,
+				);
+
+				return None;
+			},
+		}
+	}
+
+	let state = round.state();
+	if !state.completable {
+		return None;
+	}
+
+	Some(round)
 }
 
 #[cfg(test)]
