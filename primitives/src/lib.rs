@@ -14,7 +14,7 @@
 
 //! Primitives.
 
-#![cfg_attr(not(feature = "std"), no_std)]
+// #![cfg_attr(not(feature = "std"), no_std)]
 
 use parity_codec::{Encode, Decode};
 
@@ -95,6 +95,58 @@ impl<H, N: Copy> Message<H, N> {
 			Message::Prevote(ref v) => (&v.target_hash, v.target_number),
 			Message::Precommit(ref v) => (&v.target_hash, v.target_number),
 			Message::PrimaryPropose(ref v) => (&v.target_hash, v.target_number),
+		}
+	}
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum Error {
+	NotDescendent,
+}
+
+use std::fmt;
+
+impl fmt::Display for Error {
+	fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+		match *self {
+			Error::NotDescendent => write!(f, "Block not descendent of base"),
+		}
+	}
+}
+
+impl std::error::Error for Error {
+	fn description(&self) -> &str {
+		match *self {
+			Error::NotDescendent => "Block not descendent of base",
+		}
+	}
+}
+
+
+/// Chain context necessary for implementation of the finality gadget.
+pub trait Chain<H: Eq, N: Copy> {
+	/// Get the ancestry of a block up to but not including the base hash.
+	/// Should be in reverse order from `block`'s parent.
+	///
+	/// If the block is not a descendent of `base`, returns an error.
+	fn ancestry(&self, base: H, block: H) -> Result<Vec<H>, Error>;
+
+	/// Return the hash of the best block whose chain contains the given block hash,
+	/// even if that block is `base` itself.
+	///
+	/// If `base` is unknown, return `None`.
+	fn best_chain_containing(&self, base: H) -> Option<(H, N)>;
+
+	/// Returns true if `block` is a descendent of or equal to the given `base`.
+	fn is_equal_or_descendent_of(&self, base: H, block: H) -> bool {
+		if base == block { return true; }
+
+		// TODO: currently this function always succeeds since the only error
+		// variant is `Error::NotDescendent`, this may change in the future as
+		// other errors (e.g. IO) are not being exposed.
+		match self.ancestry(base, block) {
+			Ok(_) => true,
+			Err(Error::NotDescendent) => false,
 		}
 	}
 }
