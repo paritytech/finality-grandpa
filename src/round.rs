@@ -333,14 +333,14 @@ impl<Id, H, N, Signature> Round<Id, H, N, Signature> where
 					)?;
 					
 					// Produce prevote equivocations for testing.
-					Some(Equivocation {
-						round_number,
-						identity: signer,
-						first: (vote.clone(), signature.clone()),
-						second: (vote.clone(), signature.clone()),
-					})
+					// Some(Equivocation {
+					// 	round_number,
+					// 	identity: signer,
+					// 	first: (vote.clone(), signature.clone()),
+					// 	second: (vote.clone(), signature.clone()),
+					// })
 
-					// None
+					None
 				}
 				VoteMultiplicity::Equivocated(ref first, ref second) => {
 					// mark the equivocator as such. no need to "undo" the first vote.
