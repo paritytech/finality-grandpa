@@ -104,25 +104,6 @@ pub enum Error {
 	NotDescendent,
 }
 
-use std::fmt;
-
-impl fmt::Display for Error {
-	fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-		match *self {
-			Error::NotDescendent => write!(f, "Block not descendent of base"),
-		}
-	}
-}
-
-impl std::error::Error for Error {
-	fn description(&self) -> &str {
-		match *self {
-			Error::NotDescendent => "Block not descendent of base",
-		}
-	}
-}
-
-
 /// Chain context necessary for implementation of the finality gadget.
 pub trait Chain<H: Eq, N: Copy> {
 	/// Get the ancestry of a block up to but not including the base hash.
