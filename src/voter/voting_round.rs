@@ -151,6 +151,31 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 		}
 	}
 
+	/// Create a voting round from a completed `Round`. We will not vote further
+	/// in this round.
+	pub (super) fn completed(
+		votes: Round<E::Id, H, N, E::Signature>,
+		finalized_sender: UnboundedSender<(H, N, u64, Commit<H, N, E::Signature, E::Id>)>,
+		env: Arc<E>,
+	) -> VotingRound<H, N, E> {
+
+		let round_data = env.round_data(votes.number());
+
+		VotingRound {
+			votes,
+			voting: Voting::No,
+			incoming: round_data.incoming,
+			outgoing: Buffered::new(round_data.outgoing),
+			state: None,
+			bridged_round_state: None,
+			primary_block: None,
+			env,
+			last_round_state: None,
+			finalized_sender,
+			best_finalized: None,
+		}
+	}
+
 	/// Poll the round. When the round is completable and messages have been flushed, it will return `Async::Ready` but
 	/// can continue to be polled.
 	pub(super) fn poll(&mut self) -> Poll<(), E::Error> {
@@ -191,14 +216,14 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 		self.votes.number()
 	}
 
-	/// Get the base block in the dag.
-	pub(super) fn dag_base(&self) -> (H, N) {
-		self.votes.base()
-	}
-
 	/// Get the round state.
 	pub(super) fn round_state(&self) -> RoundState<H, N> {
 		self.votes.state()
+	}
+
+	/// Get the base block in the dag.
+	pub(super) fn dag_base(&self) -> (H, N) {
+		self.votes.base()
 	}
 
 	/// Get the voters in this round.
@@ -250,17 +275,12 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 		latter_view
 	}
 
-	// call this to bridge state from another around.
-	pub(super) fn bridge_state_from(&mut self, other: &mut Self) {
-		self.last_round_state = Some(other.bridge_state())
-	}
-
 	/// Get a commit justifying the best finalized block.
 	pub(super) fn finalizing_commit(&self) -> Option<&Commit<H, N, E::Signature, E::Id>> {
 		self.best_finalized.as_ref()
 	}
 
-	/// Return all votes for the round (prevotes and precommits), 
+	/// Return all votes for the round (prevotes and precommits),
 	/// sorted by imported order and indicating the indices where we voted.
 	pub(super) fn historical_votes(&self) -> &HistoricalVotes<H, N, E::Signature, E::Id> {
 		self.votes.historical_votes()

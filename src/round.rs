@@ -556,7 +556,6 @@ impl<Id, H, N, Signature> Round<Id, H, N, Signature> where
 
 		let voters = &self.voters;
 
-
 		let (g_hash, g_num) = match self.prevote_ghost.clone() {
 			None => return,
 			Some(x) => x,

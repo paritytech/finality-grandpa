@@ -259,6 +259,18 @@ pub struct Commit<H, N, S, Id> {
 	pub precommits: Vec<SignedPrecommit<H, N, S, Id>>,
 }
 
+/// A signed prevote message.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "derive-codec", derive(Encode, Decode))]
+pub struct SignedPrevote<H, N, S, Id> {
+	/// The prevote message which has been signed.
+	pub prevote: Prevote<H, N>,
+	/// The signature on the message.
+	pub signature: S,
+	/// The Id of the signer.
+	pub id: Id,
+}
+
 /// A signed precommit message.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "derive-codec", derive(Encode, Decode))]
@@ -282,12 +294,32 @@ pub struct CompactCommit<H, N, S, Id> {
 	/// Precommits for target block or any block after it that justify this commit.
 	pub precommits: Vec<Precommit<H, N>>,
 	/// Authentication data for the commit.
-	pub auth_data: CommitAuthData<S, Id>,
+	pub auth_data: MultiAuthData<S, Id>,
 }
 
-/// Authentication data for a commit, currently a set of precommit signatures but
+/// A catch-up message, which is an aggregate of prevotes and precommits necessary
+/// to complete a round.
+///
+/// This message contains a "base", which is a block all of the vote-targets are
+/// a descendent of.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "derive-codec", derive(Encode, Decode))]
+pub struct CatchUp<H, N, S, Id> {
+	/// Round number.
+	pub round_number: u64,
+	/// Prevotes for target block or any block after it that justify this catch-up.
+	pub prevotes: Vec<SignedPrevote<H, N, S, Id>>,
+	/// Precommits for target block or any block after it that justify this catch-up.
+	pub precommits: Vec<SignedPrecommit<H, N, S, Id>>,
+	/// The base hash. See struct docs.
+	pub base_hash: H,
+	/// The base number. See struct docs.
+	pub base_number: N,
+}
+
+/// Authentication data for a set of many messages, currently a set of precommit signatures but
 /// in the future could be optimized with BLS signature aggregation.
-pub type CommitAuthData<S, Id> = Vec<(S, Id)>;
+pub type MultiAuthData<S, Id> = Vec<(S, Id)>;
 
 impl<H, N, S, Id> From<CompactCommit<H, N, S, Id>> for Commit<H, N, S, Id> {
 	fn from(commit: CompactCommit<H, N, S, Id>) -> Commit<H, N, S, Id> {
@@ -445,7 +477,7 @@ pub fn threshold(total_weight: u64) -> u64 {
 /// good otherwise.
 pub fn process_commit_validation_result<H, N>(
 	validation_result: CommitValidationResult<H, N>,
-	mut callback: voter::Callback,
+	mut callback: voter::Callback<voter::CommitProcessingOutcome>,
 ) {
 	if let Some(_) = validation_result.ghost {
 		callback.run(
