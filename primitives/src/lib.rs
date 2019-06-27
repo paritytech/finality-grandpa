@@ -16,7 +16,34 @@
 
 #![cfg_attr(not(feature = "std"), no_std)]
 
+
+extern crate alloc;
+
+mod voter_set;
+mod bitfield;
+
 use parity_codec::{Encode, Decode};
+use core::fmt;
+
+/// Get the threshold weight given the total voting weight.
+pub fn threshold(total_weight: u64) -> u64 {
+	let faulty = total_weight.saturating_sub(1) / 3;
+	total_weight - faulty
+}
+
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum Error {
+	NotDescendent,
+}
+
+impl fmt::Display for Error {
+	fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+		match *self {
+			Error::NotDescendent => write!(f, "Block not descendent of base"),
+		}
+	}
+}
 
 /// A prevote for a block and its ancestors.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]

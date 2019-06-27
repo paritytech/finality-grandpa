@@ -76,7 +76,9 @@ use std::fmt;
 use crate::voter_set::VoterSet;
 use round::ImportResult;
 
-pub use primitives::{Prevote, Precommit, Equivocation, Message, PrimaryPropose};
+pub use primitives::{
+	Prevote, Precommit, Equivocation, Message, PrimaryPropose, Error as GrandpaError
+};
 
 #[cfg(not(feature = "std"))]
 mod collections {
@@ -91,27 +93,14 @@ mod collections {
 	pub use std::vec::Vec;
 }
 
-#[derive(Debug, Clone, PartialEq)]
-pub enum Error {
-	NotDescendent,
-}
-
-impl fmt::Display for Error {
-	fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-		match *self {
-			Error::NotDescendent => write!(f, "Block not descendent of base"),
-		}
-	}
-}
-
-#[cfg(feature = "std")]
-impl std::error::Error for Error {
-	fn description(&self) -> &str {
-		match *self {
-			Error::NotDescendent => "Block not descendent of base",
-		}
-	}
-}
+// #[cfg(feature = "std")]
+// impl std::error::Error for Error {
+// 	fn description(&self) -> &str {
+// 		match *self {
+// 			Error::NotDescendent => "Block not descendent of base",
+// 		}
+// 	}
+// }
 
 /// Arithmetic necessary for a block number.
 pub trait BlockNumberOps:
@@ -366,12 +355,6 @@ pub fn validate_commit<H, N, S, I, C: Chain<H, N>>(
 	// target, otherwise the commit is invalid
 	validation_result.ghost = round.precommit_ghost();
 	Ok(validation_result)
-}
-
-/// Get the threshold weight given the total voting weight.
-pub fn threshold(total_weight: u64) -> u64 {
-	let faulty = total_weight.saturating_sub(1) / 3;
-	total_weight - faulty
 }
 
 /// Runs the callback with the appropriate `CommitProcessingOutcome` based on
