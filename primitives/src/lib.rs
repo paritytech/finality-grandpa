@@ -41,6 +41,16 @@ pub enum Error {
 	NotDescendent,
 }
 
+
+impl fmt::Display for Error {
+	fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+		match *self {
+			Error::NotDescendent => write!(f, "Block not descendent of base"),
+		}
+	}
+}
+
+
 /// Arithmetic necessary for a block number.
 pub trait BlockNumberOps:
 	core::fmt::Debug +
@@ -86,14 +96,6 @@ pub trait Chain<H: Eq, N: Copy + BlockNumberOps> {
 		match self.ancestry(base, block) {
 			Ok(_) => true,
 			Err(Error::NotDescendent) => false,
-		}
-	}
-}
-
-impl fmt::Display for Error {
-	fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-		match *self {
-			Error::NotDescendent => write!(f, "Block not descendent of base"),
 		}
 	}
 }

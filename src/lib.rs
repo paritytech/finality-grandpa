@@ -93,14 +93,33 @@ mod collections {
 	pub use std::vec::Vec;
 }
 
-// #[cfg(feature = "std")]
-// impl std::error::Error for Error {
-// 	fn description(&self) -> &str {
-// 		match *self {
-// 			Error::NotDescendent => "Block not descendent of base",
-// 		}
-// 	}
-// }
+/// Get the threshold weight given the total voting weight.
+pub fn threshold(total_weight: u64) -> u64 {
+	let faulty = total_weight.saturating_sub(1) / 3;
+	total_weight - faulty
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum Error {
+	NotDescendent,
+}
+
+impl fmt::Display for Error {
+	fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+		match *self {
+			Error::NotDescendent => write!(f, "Block not descendent of base"),
+		}
+	}
+}
+
+#[cfg(feature = "std")]
+impl std::error::Error for Error {
+	fn description(&self) -> &str {
+		match *self {
+			Error::NotDescendent => "Block not descendent of base",
+		}
+	}
+}
 
 /// Arithmetic necessary for a block number.
 pub trait BlockNumberOps:
