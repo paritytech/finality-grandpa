@@ -18,12 +18,15 @@
 
 
 extern crate alloc;
+extern crate num_traits;
 
 mod voter_set;
 mod bitfield;
 
 use parity_codec::{Encode, Decode};
 use core::fmt;
+use alloc::vec::Vec;
+use num_traits as num;
 
 /// Get the threshold weight given the total voting weight.
 pub fn threshold(total_weight: u64) -> u64 {
@@ -35,6 +38,55 @@ pub fn threshold(total_weight: u64) -> u64 {
 #[derive(Debug, Clone, PartialEq)]
 pub enum Error {
 	NotDescendent,
+}
+
+/// Arithmetic necessary for a block number.
+pub trait BlockNumberOps:
+	core::fmt::Debug +
+	core::cmp::Ord +
+	core::ops::Add<Output=Self> +
+	core::ops::Sub<Output=Self> +
+	crate::num::One +
+	crate::num::Zero +
+	crate::num::AsPrimitive<usize>
+{}
+
+impl<T> BlockNumberOps for T where
+	T: core::fmt::Debug,
+	T: core::cmp::Ord,
+	T: core::ops::Add<Output=Self>,
+	T: core::ops::Sub<Output=Self>,
+	T: crate::num::One,
+	T: crate::num::Zero,
+	T: crate::num::AsPrimitive<usize>,
+{}
+
+/// Chain context necessary for implementation of the finality gadget.
+pub trait Chain<H: Eq, N: Copy + BlockNumberOps> {
+	/// Get the ancestry of a block up to but not including the base hash.
+	/// Should be in reverse order from `block`'s parent.
+	///
+	/// If the block is not a descendent of `base`, returns an error.
+	fn ancestry(&self, base: H, block: H) -> Result<Vec<H>, Error>;
+
+	/// Return the hash of the best block whose chain contains the given block hash,
+	/// even if that block is `base` itself.
+	///
+	/// If `base` is unknown, return `None`.
+	fn best_chain_containing(&self, base: H) -> Option<(H, N)>;
+
+	/// Returns true if `block` is a descendent of or equal to the given `base`.
+	fn is_equal_or_descendent_of(&self, base: H, block: H) -> bool {
+		if base == block { return true; }
+
+		// TODO: currently this function always succeeds since the only error
+		// variant is `Error::NotDescendent`, this may change in the future as
+		// other errors (e.g. IO) are not being exposed.
+		match self.ancestry(base, block) {
+			Ok(_) => true,
+			Err(Error::NotDescendent) => false,
+		}
+	}
 }
 
 impl fmt::Display for Error {

@@ -9,3 +9,4 @@ edition = "2018"
 
 [dependencies]
 parity-codec = { version = "3.3", default-features = false, features = ["derive"] }
+num-traits = { version = "0.2", default-features = false }
