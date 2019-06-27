@@ -29,6 +29,141 @@ use parity_codec::{Encode, Decode};
 use core::fmt;
 use alloc::vec::Vec;
 use num_traits as num;
+use voter_set::VoterSet;
+use round::ImportResult;
+
+/// A commit message which is an aggregate of precommits.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "derive-codec", derive(Encode, Decode))]
+pub struct Commit<H, N, S, Id> {
+	/// The target block's hash.
+	pub target_hash: H,
+	/// The target block's number.
+	pub target_number: N,
+	/// Precommits for target block or any block after it that justify this commit.
+	pub precommits: Vec<SignedPrecommit<H, N, S, Id>>,
+}
+
+/// Struct returned from `validate_commit` function with information
+/// about the validation result.
+pub struct CommitValidationResult<H, N> {
+	ghost: Option<(H, N)>,
+	num_precommits: usize,
+	num_duplicated_precommits: usize,
+	num_equivocations: usize,
+	num_invalid_voters: usize,
+}
+
+impl<H, N> CommitValidationResult<H, N> {
+	/// Returns the commit GHOST i.e. the block with highest number for which
+	/// the cumulative votes of descendents and itself reach finalization
+	/// threshold.
+	pub fn ghost(&self) -> Option<&(H, N)> {
+		self.ghost.as_ref()
+	}
+
+	/// Returns the number of precommits in the commit.
+	pub fn num_precommits(&self) -> usize {
+		self.num_precommits
+	}
+
+	/// Returns the number of duplicate precommits in the commit.
+	pub fn num_duplicated_precommits(&self) -> usize {
+		self.num_duplicated_precommits
+	}
+
+	/// Returns the number of equivocated precommits in the commit.
+	pub fn num_equivocations(&self) -> usize {
+		self.num_equivocations
+	}
+
+	/// Returns the number of invalid voters in the commit.
+	pub fn num_invalid_voters(&self) -> usize {
+		self.num_invalid_voters
+	}
+}
+
+impl<H, N> Default for CommitValidationResult<H, N> {
+	fn default() -> Self {
+		CommitValidationResult {
+			ghost: None,
+			num_precommits: 0,
+			num_duplicated_precommits: 0,
+			num_equivocations: 0,
+			num_invalid_voters: 0,
+		}
+	}
+}
+
+/// Validates a GRANDPA commit message and returns the ghost calculated using
+/// the precommits in the commit message and using the commit target as a
+/// base.
+///
+/// Signatures on precommits are assumed to have been checked.
+///
+/// Duplicate votes or votes from voters not in the voter-set will be ignored, but it is recommended
+/// for the caller of this function to remove those at signature-verification time.
+pub fn validate_commit<H, N, S, I, C: Chain<H, N>>(
+	commit: &Commit<H, N, S, I>,
+	voters: &VoterSet<I>,
+	chain: &C,
+) -> Result<CommitValidationResult<H, N>, crate::Error>
+	where
+	H: core::hash::Hash + Clone + Eq + Ord + core::fmt::Debug,
+	N: Copy + BlockNumberOps + core::fmt::Debug,
+	I: Clone + core::hash::Hash + Eq + core::fmt::Debug + Ord,
+	S: Eq,
+{
+	let mut validation_result = CommitValidationResult::default();
+	validation_result.num_precommits = commit.precommits.len();
+
+	// check that all precommits are for blocks higher than the target
+	// commit block, and that they're its descendents
+	if !commit.precommits.iter().all(|signed| {
+		signed.precommit.target_number >= commit.target_number &&
+			chain.is_equal_or_descendent_of(
+				commit.target_hash.clone(),
+				signed.precommit.target_hash.clone(),
+			)
+	}) {
+		return Ok(validation_result);
+	}
+
+	let mut equivocated = alloc::collections::BTreeSet::new();
+
+	// Add all precommits to the round with correct counting logic
+	// using the commit target as a base.
+	let mut round = round::Round::new(round::RoundParams {
+		round_number: 0, // doesn't matter here.
+		voters: voters.clone(),
+		base: (commit.target_hash.clone(), commit.target_number),
+	});
+
+	for SignedPrecommit { precommit, id, signature } in commit.precommits.iter() {
+		match round.import_precommit(chain, precommit.clone(), id.clone(), signature.clone())? {
+			ImportResult { equivocation: Some(_), .. } => {
+				validation_result.num_equivocations += 1;
+				// allow only one equivocation per voter, as extras are redundant.
+				if !equivocated.insert(id) {
+					return Ok(validation_result)
+				}
+			},
+			ImportResult { duplicated, valid_voter, .. } => {
+				if duplicated {
+					validation_result.num_duplicated_precommits += 1;
+				}
+				if !valid_voter {
+					validation_result.num_invalid_voters += 1;
+				}
+			}
+		}
+	}
+
+	// if a ghost is found then it must be equal or higher than the commit
+	// target, otherwise the commit is invalid
+	validation_result.ghost = round.precommit_ghost();
+	Ok(validation_result)
+}
 
 
 /// A signed precommit message.
