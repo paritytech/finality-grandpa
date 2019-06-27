@@ -22,6 +22,7 @@ extern crate num_traits;
 
 mod voter_set;
 mod bitfield;
+mod vote_graph;
 
 use parity_codec::{Encode, Decode};
 use core::fmt;
