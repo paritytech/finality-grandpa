@@ -23,11 +23,25 @@ extern crate num_traits;
 mod voter_set;
 mod bitfield;
 mod vote_graph;
+mod round;
 
 use parity_codec::{Encode, Decode};
 use core::fmt;
 use alloc::vec::Vec;
 use num_traits as num;
+
+
+/// A signed precommit message.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "derive-codec", derive(Encode, Decode))]
+pub struct SignedPrecommit<H, N, S, Id> {
+	/// The precommit message which has been signed.
+	pub precommit: Precommit<H, N>,
+	/// The signature on the message.
+	pub signature: S,
+	/// The Id of the signer.
+	pub id: Id,
+}
 
 /// Get the threshold weight given the total voting weight.
 pub fn threshold(total_weight: u64) -> u64 {
