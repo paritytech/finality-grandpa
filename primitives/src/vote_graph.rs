@@ -16,7 +16,6 @@
 //!
 //! See docs on `VoteGraph` for more information.
 
-use core::fmt::Debug;
 use core::hash::Hash;
 use core::ops::AddAssign;
 
@@ -24,7 +23,6 @@ use alloc::collections::{BTreeMap, BTreeSet};
 use alloc::vec::Vec;
 use super::{Chain, Error, BlockNumberOps};
 
-#[derive(Debug)]
 struct Entry<H, N, V> {
 	number: N,
 	// ancestor hashes in reverse order, e.g. ancestors[0] is the parent
@@ -88,9 +86,9 @@ pub struct VoteGraph<H: Hash + Eq, N, V> {
 }
 
 impl<H, N, V> VoteGraph<H, N, V> where
-	H: Hash + Eq + Clone + Ord + Debug,
-	V: AddAssign + Default + Clone + Debug,
-	N: Copy + Debug + BlockNumberOps,
+	H: Hash + Eq + Clone + Ord,
+	V: AddAssign + Default + Clone,
+	N: Copy + BlockNumberOps,
 {
 	/// Create a new `VoteGraph` with base node as given.
 	pub fn new(base_hash: H, base_number: N) -> Self {

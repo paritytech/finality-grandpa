@@ -25,16 +25,18 @@ mod bitfield;
 mod vote_graph;
 mod round;
 
+#[cfg(feature = "std")]
+use serde::Serialize;
 use parity_codec::{Encode, Decode};
 use core::fmt;
 use alloc::vec::Vec;
 use num_traits as num;
-use voter_set::VoterSet;
+pub use voter_set::VoterSet;
 use round::ImportResult;
 
 /// A commit message which is an aggregate of precommits.
-#[derive(Debug, Clone, PartialEq, Eq)]
-#[cfg_attr(feature = "derive-codec", derive(Encode, Decode))]
+#[cfg_attr(feature = "std", derive(Serialize))]
+#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 pub struct Commit<H, N, S, Id> {
 	/// The target block's hash.
 	pub target_hash: H,
@@ -109,9 +111,9 @@ pub fn validate_commit<H, N, S, I, C: Chain<H, N>>(
 	chain: &C,
 ) -> Result<CommitValidationResult<H, N>, crate::Error>
 	where
-	H: core::hash::Hash + Clone + Eq + Ord + core::fmt::Debug,
-	N: Copy + BlockNumberOps + core::fmt::Debug,
-	I: Clone + core::hash::Hash + Eq + core::fmt::Debug + Ord,
+	H: core::hash::Hash + Clone + Eq + Ord,
+	N: Copy + BlockNumberOps,
+	I: Clone + core::hash::Hash + Eq + Ord,
 	S: Eq,
 {
 	let mut validation_result = CommitValidationResult::default();
@@ -167,8 +169,8 @@ pub fn validate_commit<H, N, S, I, C: Chain<H, N>>(
 
 
 /// A signed precommit message.
-#[derive(Debug, Clone, PartialEq, Eq)]
-#[cfg_attr(feature = "derive-codec", derive(Encode, Decode))]
+#[cfg_attr(feature = "std", derive(Serialize))]
+#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 pub struct SignedPrecommit<H, N, S, Id> {
 	/// The precommit message which has been signed.
 	pub precommit: Precommit<H, N>,
@@ -202,7 +204,6 @@ impl fmt::Display for Error {
 
 /// Arithmetic necessary for a block number.
 pub trait BlockNumberOps:
-	core::fmt::Debug +
 	core::cmp::Ord +
 	core::ops::Add<Output=Self> +
 	core::ops::Sub<Output=Self> +
@@ -212,7 +213,6 @@ pub trait BlockNumberOps:
 {}
 
 impl<T> BlockNumberOps for T where
-	T: core::fmt::Debug,
 	T: core::cmp::Ord,
 	T: core::ops::Add<Output=Self>,
 	T: core::ops::Sub<Output=Self>,
@@ -250,6 +250,7 @@ pub trait Chain<H: Eq, N: Copy + BlockNumberOps> {
 }
 
 /// A prevote for a block and its ancestors.
+#[cfg_attr(feature = "std", derive(Serialize))]
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 pub struct Prevote<H, N> {
 	/// The target block's hash.
@@ -265,6 +266,7 @@ impl<H, N> Prevote<H, N> {
 }
 
 /// A precommit for a block and its ancestors.
+#[cfg_attr(feature = "std", derive(Serialize))]
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 pub struct Precommit<H, N> {
 	/// The target block's hash.

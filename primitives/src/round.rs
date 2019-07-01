@@ -256,9 +256,9 @@ impl<Id, P, Signature> Default for ImportResult<Id, P, Signature> {
 }
 
 impl<Id, H, N, Signature> Round<Id, H, N, Signature> where
-	Id: Hash + Clone + Eq + core::fmt::Debug + Ord,
-	H: Hash + Clone + Eq + Ord + core::fmt::Debug,
-	N: Copy + core::fmt::Debug + BlockNumberOps,
+	Id: Hash + Clone + Eq + Ord,
+	H: Hash + Clone + Eq + Ord,
+	N: Copy + BlockNumberOps,
 	Signature: Eq + Clone,
 {
 	/// Create a new round accumulator for given round number and with given weight.
