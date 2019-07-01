@@ -49,11 +49,11 @@ pub struct Commit<H, N, S, Id> {
 /// Struct returned from `validate_commit` function with information
 /// about the validation result.
 pub struct CommitValidationResult<H, N> {
-	ghost: Option<(H, N)>,
-	num_precommits: usize,
-	num_duplicated_precommits: usize,
-	num_equivocations: usize,
-	num_invalid_voters: usize,
+	pub ghost: Option<(H, N)>,
+	pub num_precommits: usize,
+	pub num_duplicated_precommits: usize,
+	pub num_equivocations: usize,
+	pub num_invalid_voters: usize,
 }
 
 impl<H, N> CommitValidationResult<H, N> {

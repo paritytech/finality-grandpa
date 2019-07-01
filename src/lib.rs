@@ -77,7 +77,8 @@ use crate::voter_set::VoterSet;
 use round::ImportResult;
 
 pub use primitives::{
-	Prevote, Precommit, Equivocation, Message, PrimaryPropose, Error as GrandpaError
+	Prevote, Precommit, Equivocation, Message, PrimaryPropose,
+	Error as GrandpaError, CommitValidationResult
 };
 
 #[cfg(not(feature = "std"))]
