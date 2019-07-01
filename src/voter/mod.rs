@@ -134,6 +134,19 @@ pub enum CommitProcessingOutcome {
 	Bad(BadCommit),
 }
 
+#[cfg(any(test, feature = "test-helpers"))]
+impl CommitProcessingOutcome {
+	/// Returns a `Good` instance of commit processing outcome's opaque type. Useful for testing.
+	pub fn good() -> CommitProcessingOutcome {
+		CommitProcessingOutcome::Good(GoodCommit::new())
+	}
+
+	/// Returns a `Bad` instance of commit processing outcome's opaque type. Useful for testing.
+	pub fn bad() -> CommitProcessingOutcome {
+		CommitProcessingOutcome::Bad(CommitValidationResult::<(), ()>::default().into())
+	}
+}
+
 /// The result of processing for a good commit.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GoodCommit {
@@ -201,6 +214,19 @@ pub enum CatchUpProcessingOutcome {
 	/// The catch up wasn't processed because it is useless, e.g. it is for a
 	/// round lower than we're currently in.
 	Useless,
+}
+
+#[cfg(any(test, feature = "test-helpers"))]
+impl CatchUpProcessingOutcome {
+	/// Returns a `Bad` instance of catch up processing outcome's opaque type. Useful for testing.
+	pub fn bad() -> CatchUpProcessingOutcome {
+		CatchUpProcessingOutcome::Bad(BadCatchUp::new())
+	}
+
+	/// Returns a `Good` instance of catch up processing outcome's opaque type. Useful for testing.
+	pub fn good() -> CatchUpProcessingOutcome {
+		CatchUpProcessingOutcome::Good(GoodCatchUp::new())
+	}
 }
 
 /// The result of processing for a good catch up.
