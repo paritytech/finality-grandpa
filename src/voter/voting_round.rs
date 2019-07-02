@@ -215,13 +215,13 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 				// either it was already finalized in the previous round
 				let finalized_in_last_round = self.env.is_equal_or_descendent_of(
 					last_round_estimate.clone(),
-					last_round_finalized.clone(),
+					last_round_finalized,
 				);
 
 				// or it must be finalized in the current round
 				let finalized_in_current_round = self.finalized().map(|(current_round_finalized, _)| {
 					self.env.is_equal_or_descendent_of(
-						last_round_estimate.clone(),
+						last_round_estimate,
 						current_round_finalized.clone(),
 					)
 				}).unwrap_or(false);
