@@ -186,10 +186,11 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 		// we only cast votes when we have access to the previous round state.
 		// we might have started this round as a prospect "future" round to
 		// check whether the voter is lagging behind the current round.
-		if let Some(last_round_state) = self.last_round_state.as_ref().map(|s| s.get().clone()) {
-			self.primary_propose(&last_round_state)?;
-			self.prevote(&last_round_state)?;
-			self.precommit(&last_round_state)?;
+		let last_round_state = self.last_round_state.as_ref().map(|s| s.get().clone());
+		if let Some(ref last_round_state) = last_round_state {
+			self.primary_propose(last_round_state)?;
+			self.prevote(last_round_state)?;
+			self.precommit(last_round_state)?;
 		}
 
 		try_ready!(self.outgoing.poll());
@@ -199,11 +200,50 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 		let post_state = self.votes.state();
 		self.notify(pre_state, post_state);
 
-		if self.votes.completable() {
-			Ok(Async::Ready(()))
-		} else {
-			Ok(Async::NotReady)
+		// early exit if the current round is not completable
+		if !self.votes.completable() {
+			return Ok(Async::NotReady);
 		}
+
+		// make sure that the previous round estimate has been finalized
+		let last_round_estimate_finalized = match last_round_state {
+			Some(RoundState {
+				estimate: Some((last_round_estimate, _)),
+				finalized: Some((last_round_finalized, _)),
+				..
+			}) => {
+				// either it was already finalized in the previous round
+				let finalized_in_last_round = self.env.is_equal_or_descendent_of(
+					last_round_estimate.clone(),
+					last_round_finalized.clone(),
+				);
+
+				// or it must be finalized in the current round
+				let finalized_in_current_round = self.finalized().map(|(current_round_finalized, _)| {
+					self.env.is_equal_or_descendent_of(
+						last_round_estimate.clone(),
+						current_round_finalized.clone(),
+					)
+				}).unwrap_or(false);
+
+				finalized_in_last_round || finalized_in_current_round
+			},
+			None => {
+				// NOTE: when we catch up to a round we complete the round
+				// without any last round state. in this case we already started
+				// a new round after we caught up so this guard is unneeded.
+				true
+			},
+			_ => false,
+		};
+
+		// the previous round estimate must be finalized
+		if !last_round_estimate_finalized {
+			return Ok(Async::NotReady);
+		}
+
+		// both conditions verified, we can complete this round
+		Ok(Async::Ready(()))
 	}
 
 	/// Inspect the state of this round.
