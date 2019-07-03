@@ -237,7 +237,7 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 			return Ok(Async::NotReady);
 		}
 
-		// both conditions verified, we can complete this round
+		// both exit conditions verified, we can complete this round
 		Ok(Async::Ready(()))
 	}
 
