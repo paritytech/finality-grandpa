@@ -1,6 +1,6 @@
 # `finality-grandpa`
 
-[![crates.io link][crates-badge]][crates] [![Build Status][travis-badge]][travis]
+[![crates.io link][crates-badge]][crates] [![Build Status][travis-badge]][travis] [![Code coverage][codecov-badge]][codecov]
 
 <img align="right" width="150" height="150" src="img/grandpa.png">
 
@@ -88,6 +88,8 @@ details.
 
 [blogpost]: https://medium.com/polkadot-network/grandpa-block-finality-in-polkadot-an-introduction-part-1-d08a24a021b5
 [chain-docs]: https://docs.rs/finality-grandpa/0.8.1/finality_grandpa/trait.Chain.html
+[codecov-badge]: https://codecov.io/gh/paritytech/finality-grandpa/branch/master/graph/badge.svg
+[codecov]: https://codecov.io/gh/paritytech/finality-grandpa
 [crates-badge]: https://img.shields.io/crates/v/finality-grandpa.svg
 [crates]: https://crates.io/crates/finality-grandpa
 [environment-docs]: https://docs.rs/finality-grandpa/0.8.1/finality_grandpa/voter/trait.Environment.html
