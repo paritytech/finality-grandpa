@@ -49,24 +49,24 @@ mod bridge_state;
 #[cfg(test)]
 mod testing;
 
-use collections::Vec;
 use std::fmt;
-use crate::voter_set::VoterSet;
-use round::ImportResult;
+
 #[cfg(feature = "derive-codec")]
-use parity_codec::{Encode, Decode};
+use parity_codec::{Decode, Encode};
+
+use crate::voter_set::VoterSet;
+use collections::Vec;
+use round::ImportResult;
 
 #[cfg(not(feature = "std"))]
 mod collections {
-	pub use alloc::collections::*;
-	pub use alloc::vec::Vec;
+	pub use alloc::{collections::*, vec::Vec};
 	pub use hashmap_core::{map as hash_map, HashMap, HashSet};
 }
 
 #[cfg(feature = "std")]
 mod collections {
-	pub use std::collections::*;
-	pub use std::vec::Vec;
+	pub use std::{collections::*, vec::Vec};
 }
 
 /// A prevote for a block and its ancestors.
@@ -81,7 +81,10 @@ pub struct Prevote<H, N> {
 
 impl<H, N> Prevote<H, N> {
 	pub fn new(target_hash: H, target_number: N) -> Self {
-		Prevote { target_hash, target_number }
+		Prevote {
+			target_hash,
+			target_number,
+		}
 	}
 }
 
@@ -97,7 +100,10 @@ pub struct Precommit<H, N> {
 
 impl<H, N> Precommit<H, N> {
 	pub fn new(target_hash: H, target_number: N) -> Self {
-		Precommit { target_hash, target_number }
+		Precommit {
+			target_hash,
+			target_number,
+		}
 	}
 }
 
@@ -113,7 +119,10 @@ pub struct PrimaryPropose<H, N> {
 
 impl<H, N> PrimaryPropose<H, N> {
 	pub fn new(target_hash: H, target_number: N) -> Self {
-		PrimaryPropose { target_hash, target_number }
+		PrimaryPropose {
+			target_hash,
+			target_number,
+		}
 	}
 }
 
@@ -141,24 +150,27 @@ impl std::error::Error for Error {
 
 /// Arithmetic necessary for a block number.
 pub trait BlockNumberOps:
-	std::fmt::Debug +
-	std::cmp::Ord +
-	std::ops::Add<Output=Self> +
-	std::ops::Sub<Output=Self> +
-	num::One +
-	num::Zero +
-	num::AsPrimitive<usize>
-{}
+	std::fmt::Debug
+	+ std::cmp::Ord
+	+ std::ops::Add<Output = Self>
+	+ std::ops::Sub<Output = Self>
+	+ num::One
+	+ num::Zero
+	+ num::AsPrimitive<usize>
+{
+}
 
-impl<T> BlockNumberOps for T where
+impl<T> BlockNumberOps for T
+where
 	T: std::fmt::Debug,
 	T: std::cmp::Ord,
-	T: std::ops::Add<Output=Self>,
-	T: std::ops::Sub<Output=Self>,
+	T: std::ops::Add<Output = Self>,
+	T: std::ops::Sub<Output = Self>,
 	T: num::One,
 	T: num::Zero,
 	T: num::AsPrimitive<usize>,
-{}
+{
+}
 
 /// Chain context necessary for implementation of the finality gadget.
 pub trait Chain<H: Eq, N: Copy + BlockNumberOps> {
@@ -176,7 +188,9 @@ pub trait Chain<H: Eq, N: Copy + BlockNumberOps> {
 
 	/// Returns true if `block` is a descendent of or equal to the given `base`.
 	fn is_equal_or_descendent_of(&self, base: H, block: H) -> bool {
-		if base == block { return true; }
+		if base == block {
+			return true;
+		}
 
 		// TODO: currently this function always succeeds since the only error
 		// variant is `Error::NotDescendent`, this may change in the future as
@@ -197,7 +211,7 @@ pub struct Equivocation<Id, V, S> {
 	/// The identity of the equivocator.
 	pub identity: Id,
 	/// The first vote in the equivocation.
-	pub	first: (V, S),
+	pub first: (V, S),
 	/// The second vote in the equivocation.
 	pub second: (V, S),
 }
@@ -323,24 +337,44 @@ pub type MultiAuthData<S, Id> = Vec<(S, Id)>;
 
 impl<H, N, S, Id> From<CompactCommit<H, N, S, Id>> for Commit<H, N, S, Id> {
 	fn from(commit: CompactCommit<H, N, S, Id>) -> Commit<H, N, S, Id> {
+		let precommits = commit
+			.precommits
+			.into_iter()
+			.zip(commit.auth_data.into_iter())
+			.map(|(precommit, (signature, id))| SignedPrecommit {
+				precommit,
+				signature,
+				id,
+			})
+			.collect();
+
 		Commit {
 			target_hash: commit.target_hash,
 			target_number: commit.target_number,
-			precommits: commit.precommits.into_iter()
-				.zip(commit.auth_data.into_iter())
-				.map(|(precommit, (signature, id))| SignedPrecommit { precommit, signature, id })
-				.collect()
+			precommits,
 		}
 	}
 }
 
 impl<H: Clone, N: Clone, S, Id> From<Commit<H, N, S, Id>> for CompactCommit<H, N, S, Id> {
 	fn from(commit: Commit<H, N, S, Id>) -> CompactCommit<H, N, S, Id> {
+		let precommits = commit
+			.precommits
+			.iter()
+			.map(|signed| signed.precommit.clone())
+			.collect();
+
+		let auth_data = commit
+			.precommits
+			.into_iter()
+			.map(|signed| (signed.signature, signed.id))
+			.collect();
+
 		CompactCommit {
 			target_hash: commit.target_hash,
 			target_number: commit.target_number,
-			precommits: commit.precommits.iter().map(|signed| signed.precommit.clone()).collect(),
-			auth_data: commit.precommits.into_iter().map(|signed| (signed.signature, signed.id)).collect(),
+			precommits,
+			auth_data,
 		}
 	}
 }
@@ -409,7 +443,7 @@ pub fn validate_commit<H, N, S, I, C: Chain<H, N>>(
 	voters: &VoterSet<I>,
 	chain: &C,
 ) -> Result<CommitValidationResult<H, N>, crate::Error>
-	where
+where
 	H: std::hash::Hash + Clone + Eq + Ord + std::fmt::Debug,
 	N: Copy + BlockNumberOps + std::fmt::Debug,
 	I: Clone + std::hash::Hash + Eq + std::fmt::Debug,
@@ -440,23 +474,37 @@ pub fn validate_commit<H, N, S, I, C: Chain<H, N>>(
 		base: (commit.target_hash.clone(), commit.target_number),
 	});
 
-	for SignedPrecommit { precommit, id, signature } in commit.precommits.iter() {
+	for SignedPrecommit {
+		precommit,
+		id,
+		signature,
+	} in commit.precommits.iter()
+	{
 		match round.import_precommit(chain, precommit.clone(), id.clone(), signature.clone())? {
-			ImportResult { equivocation: Some(_), .. } => {
+			ImportResult {
+				equivocation: Some(_),
+				..
+			} => {
 				validation_result.num_equivocations += 1;
+
 				// allow only one equivocation per voter, as extras are redundant.
 				if !equivocated.insert(id) {
-					return Ok(validation_result)
+					return Ok(validation_result);
 				}
 			},
-			ImportResult { duplicated, valid_voter, .. } => {
+			ImportResult {
+				duplicated,
+				valid_voter,
+				..
+			} => {
 				if duplicated {
 					validation_result.num_duplicated_precommits += 1;
 				}
+
 				if !valid_voter {
 					validation_result.num_invalid_voters += 1;
 				}
-			}
+			},
 		}
 	}
 
@@ -480,13 +528,13 @@ pub fn process_commit_validation_result<H, N>(
 	mut callback: voter::Callback<voter::CommitProcessingOutcome>,
 ) {
 	if let Some(_) = validation_result.ghost {
-		callback.run(
-			voter::CommitProcessingOutcome::Good(voter::GoodCommit::new())
-		)
+		callback.run(voter::CommitProcessingOutcome::Good(
+			voter::GoodCommit::new(),
+		))
 	} else {
-		callback.run(
-			voter::CommitProcessingOutcome::Bad(voter::BadCommit::from(validation_result))
-		)
+		callback.run(voter::CommitProcessingOutcome::Bad(voter::BadCommit::from(
+			validation_result,
+		)))
 	}
 }
 
@@ -513,7 +561,7 @@ impl<H, N, S, Id> HistoricalVotes<H, N, S, Id> {
 	pub fn new_with(
 		seen: Vec<SignedMessage<H, N, S, Id>>,
 		prevote_idx: Option<u64>,
-		precommit_idx: Option<u64>
+		precommit_idx: Option<u64>,
 	) -> Self {
 		HistoricalVotes {
 			seen,
@@ -576,7 +624,7 @@ mod tests {
 	#[cfg(feature = "derive-codec")]
 	#[test]
 	fn codec_was_derived() {
-		use parity_codec::{Encode, Decode};
+		use parity_codec::{Decode, Encode};
 
 		let signed = crate::SignedMessage {
 			message: crate::Message::Prevote(crate::Prevote {

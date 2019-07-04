@@ -18,8 +18,8 @@
 
 use std::hash::Hash;
 
-use crate::collections::{HashMap, Vec};
 use super::threshold;
+use crate::collections::{HashMap, Vec};
 
 /// A voter set, with accompanying indices.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -36,7 +36,9 @@ impl<Id: Hash + Eq> VoterSet<Id> {
 	}
 
 	/// Get the length of the set.
-	pub fn len(&self) -> usize { self.voters.len() }
+	pub fn len(&self) -> usize {
+		self.voters.len()
+	}
 
 	/// Whether the set contains the key.
 	pub fn contains_key(&self, id: &Id) -> bool {
@@ -54,7 +56,9 @@ impl<Id: Hash + Eq> VoterSet<Id> {
 	}
 
 	/// Get the threshold weight.
-	pub fn threshold(&self) -> u64 { self.threshold }
+	pub fn threshold(&self) -> u64 {
+		self.threshold
+	}
 
 	/// Get the total weight.
 	pub fn total_weight(&self) -> u64 {
@@ -84,11 +88,21 @@ impl<Id: Hash + Eq + Clone + Ord> std::iter::FromIterator<(Id, u64)> for VoterSe
 		voters.sort_unstable();
 
 		for (idx, (id, weight)) in voters.iter().enumerate() {
-			weights.insert(id.clone(), VoterInfo { canon_idx: idx, weight: weight.clone() });
+			weights.insert(
+				id.clone(),
+				VoterInfo {
+					canon_idx: idx,
+					weight: weight.clone(),
+				},
+			);
 		}
 
 		let threshold = threshold(total_weight);
-		VoterSet { weights, voters, threshold }
+		VoterSet {
+			weights,
+			voters,
+			threshold,
+		}
 	}
 }
 
@@ -100,12 +114,15 @@ pub struct VoterInfo {
 
 impl VoterInfo {
 	/// Get the canonical index of the voter.
-	pub fn canon_idx(&self) -> usize { self.canon_idx }
+	pub fn canon_idx(&self) -> usize {
+		self.canon_idx
+	}
 
 	/// Get the weight of the voter.
-	pub fn weight(&self) -> u64 { self.weight }
+	pub fn weight(&self) -> u64 {
+		self.weight
+	}
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -113,37 +130,25 @@ mod tests {
 
 	#[test]
 	fn voters_are_sorted() {
-		let v1: VoterSet<usize> = [
-			(1, 5),
-			(4, 1),
-			(3, 9),
-			(5, 7),
-			(9, 9),
-			(2, 7),
-		].iter().cloned().collect();
+		let v1: VoterSet<usize> = [(1, 5), (4, 1), (3, 9), (5, 7), (9, 9), (2, 7)]
+			.iter()
+			.cloned()
+			.collect();
 
-		let v2: VoterSet<usize> = [
-			(1, 5),
-			(2, 7),
-			(3, 9),
-			(4, 1),
-			(5, 7),
-			(9, 9),
-		].iter().cloned().collect();
+		let v2: VoterSet<usize> = [(1, 5), (2, 7), (3, 9), (4, 1), (5, 7), (9, 9)]
+			.iter()
+			.cloned()
+			.collect();
 
 		assert_eq!(v1, v2);
 	}
 
 	#[test]
 	fn voter_by_index_works() {
-		let v: VoterSet<usize> = [
-			(1, 5),
-			(4, 1),
-			(3, 9),
-			(5, 7),
-			(9, 9),
-			(2, 7),
-		].iter().cloned().collect();
+		let v: VoterSet<usize> = [(1, 5), (4, 1), (3, 9), (5, 7), (9, 9), (2, 7)]
+			.iter()
+			.cloned()
+			.collect();
 
 		assert_eq!(v.len(), 6);
 		assert_eq!(v.total_weight(), 38);

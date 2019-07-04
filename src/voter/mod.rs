@@ -25,26 +25,24 @@
 //!  votes will not be pushed to the sink. The protocol state machine still
 //!  transitions state as if the votes had been pushed out.
 
-use futures::prelude::*;
-use futures::sync::mpsc::{self, UnboundedReceiver};
+use std::{collections::VecDeque, hash::Hash, sync::Arc};
+
+use futures::{
+	prelude::*,
+	sync::mpsc::{self, UnboundedReceiver},
+};
 #[cfg(feature = "std")]
 use log::trace;
 #[cfg(feature = "derive-codec")]
-use parity_codec::{Encode, Decode};
+use parity_codec::{Decode, Encode};
 
-use std::collections::VecDeque;
-use std::hash::Hash;
-use std::sync::Arc;
-
-use crate::round::State as RoundState;
 use crate::{
-	CatchUp, Chain, Commit, CompactCommit, Equivocation, Message, Prevote, Precommit,
-	PrimaryPropose, SignedMessage, BlockNumberOps, validate_commit, CommitValidationResult,
-	HistoricalVotes,
+	round::State as RoundState, validate_commit, voter_set::VoterSet, BlockNumberOps, CatchUp,
+	Chain, Commit, CommitValidationResult, CompactCommit, Equivocation, HistoricalVotes, Message,
+	Precommit, Prevote, PrimaryPropose, SignedMessage,
 };
-use crate::voter_set::VoterSet;
 use past_rounds::PastRounds;
-use voting_round::{VotingRound, State as VotingRoundState};
+use voting_round::{State as VotingRoundState, VotingRound};
 
 mod past_rounds;
 mod voting_round;
@@ -53,11 +51,11 @@ mod voting_round;
 ///
 /// This encapsulates the database and networking layers of the chain.
 pub trait Environment<H: Eq, N: BlockNumberOps>: Chain<H, N> {
-	type Timer: Future<Item=(),Error=Self::Error>;
+	type Timer: Future<Item = (), Error = Self::Error>;
 	type Id: Hash + Clone + Eq + ::std::fmt::Debug;
 	type Signature: Eq + Clone;
-	type In: Stream<Item=SignedMessage<H, N, Self::Signature, Self::Id>, Error=Self::Error>;
-	type Out: Sink<SinkItem=Message<H, N>, SinkError=Self::Error>;
+	type In: Stream<Item = SignedMessage<H, N, Self::Signature, Self::Id>, Error = Self::Error>;
+	type Out: Sink<SinkItem = Message<H, N>, SinkError = Self::Error>;
 	type Error: From<crate::Error> + ::std::error::Error;
 
 	/// Produce data necessary to start a round of voting.
@@ -77,12 +75,7 @@ pub trait Environment<H: Eq, N: BlockNumberOps>: Chain<H, N> {
 	///
 	/// Furthermore, this means that actual logic of creating and verifying
 	/// signatures is flexible and can be maintained outside this crate.
-	fn round_data(&self, round: u64) -> RoundData<
-		Self::Id,
-		Self::Timer,
-		Self::In,
-		Self::Out,
-	>;
+	fn round_data(&self, round: u64) -> RoundData<Self::Id, Self::Timer, Self::In, Self::Out>;
 
 	/// Return a timer that will be used to delay the broadcast of a commit
 	/// message. This delay should not be static to minimize the amount of
@@ -110,12 +103,26 @@ pub trait Environment<H: Eq, N: BlockNumberOps>: Chain<H, N> {
 
 	/// Called when a block should be finalized.
 	// TODO: make this a future that resolves when it's e.g. written to disk?
-	fn finalize_block(&self, hash: H, number: N, round: u64, commit: Commit<H, N, Self::Signature, Self::Id>) -> Result<(), Self::Error>;
+	fn finalize_block(
+		&self,
+		hash: H,
+		number: N,
+		round: u64,
+		commit: Commit<H, N, Self::Signature, Self::Id>,
+	) -> Result<(), Self::Error>;
 
 	// Note that an equivocation in prevotes has occurred.s
-	fn prevote_equivocation(&self, round: u64, equivocation: Equivocation<Self::Id, Prevote<H, N>, Self::Signature>);
+	fn prevote_equivocation(
+		&self,
+		round: u64,
+		equivocation: Equivocation<Self::Id, Prevote<H, N>, Self::Signature>,
+	);
 	// Note that an equivocation in precommits has occurred.
-	fn precommit_equivocation(&self, round: u64, equivocation: Equivocation<Self::Id, Precommit<H, N>, Self::Signature>);
+	fn precommit_equivocation(
+		&self,
+		round: u64,
+		equivocation: Equivocation<Self::Id, Precommit<H, N>, Self::Signature>,
+	);
 }
 
 /// Communication between nodes that is not round-localized.
@@ -258,7 +265,11 @@ impl<O> Callback<O> {
 #[cfg_attr(test, derive(Clone))]
 pub enum CommunicationIn<H, N, S, Id> {
 	/// A commit message.
-	Commit(u64, CompactCommit<H, N, S, Id>, Callback<CommitProcessingOutcome>),
+	Commit(
+		u64,
+		CompactCommit<H, N, S, Id>,
+		Callback<CommitProcessingOutcome>,
+	),
 	/// A catch up message.
 	CatchUp(CatchUp<H, N, S, Id>, Callback<CatchUpProcessingOutcome>),
 }
@@ -287,7 +298,7 @@ impl<S: Sink> Buffered<S> {
 	fn new(inner: S) -> Buffered<S> {
 		Buffered {
 			buffer: VecDeque::new(),
-			inner
+			inner,
 		}
 	}
 
@@ -306,7 +317,7 @@ impl<S: Sink> Buffered<S> {
 			Async::NotReady => {
 				self.inner.poll_complete()?;
 				Ok(Async::NotReady)
-			}
+			},
 		}
 	}
 
@@ -317,7 +328,7 @@ impl<S: Sink> Buffered<S> {
 				Ok(AsyncSink::NotReady(front)) => {
 					self.buffer.push_front(front);
 					break;
-				}
+				},
 				Err(e) => return Err(e),
 			}
 		}
@@ -348,11 +359,12 @@ impl<S: Sink> Buffered<S> {
 /// Additionally, we also listen to commit messages from rounds that aren't
 /// currently running, we validate the commit and dispatch a finalization
 /// notification (if any) to the environment.
-pub struct Voter<H, N, E: Environment<H, N>, GlobalIn, GlobalOut> where
+pub struct Voter<H, N, E: Environment<H, N>, GlobalIn, GlobalOut>
+where
 	H: Hash + Clone + Eq + Ord + ::std::fmt::Debug,
 	N: Copy + BlockNumberOps + ::std::fmt::Debug,
-	GlobalIn: Stream<Item=CommunicationIn<H, N, E::Signature, E::Id>, Error=E::Error>,
-	GlobalOut: Sink<SinkItem=CommunicationOut<H, N, E::Signature, E::Id>, SinkError=E::Error>,
+	GlobalIn: Stream<Item = CommunicationIn<H, N, E::Signature, E::Id>, Error = E::Error>,
+	GlobalOut: Sink<SinkItem = CommunicationOut<H, N, E::Signature, E::Id>, SinkError = E::Error>,
 {
 	env: Arc<E>,
 	voters: VoterSet<E::Id>,
@@ -368,11 +380,12 @@ pub struct Voter<H, N, E: Environment<H, N>, GlobalIn, GlobalOut> where
 	last_finalized_in_rounds: (H, N),
 }
 
-impl<H, N, E: Environment<H, N>, GlobalIn, GlobalOut> Voter<H, N, E, GlobalIn, GlobalOut> where
+impl<H, N, E: Environment<H, N>, GlobalIn, GlobalOut> Voter<H, N, E, GlobalIn, GlobalOut>
+where
 	H: Hash + Clone + Eq + Ord + ::std::fmt::Debug,
 	N: Copy + BlockNumberOps + ::std::fmt::Debug,
-	GlobalIn: Stream<Item=CommunicationIn<H, N, E::Signature, E::Id>, Error=E::Error>,
-	GlobalOut: Sink<SinkItem=CommunicationOut<H, N, E::Signature, E::Id>, SinkError=E::Error>,
+	GlobalIn: Stream<Item = CommunicationIn<H, N, E::Signature, E::Id>, Error = E::Error>,
+	GlobalOut: Sink<SinkItem = CommunicationOut<H, N, E::Signature, E::Id>, SinkError = E::Error>,
 {
 	/// Create new `Voter` tracker with given round number and base block.
 	///
@@ -426,20 +439,23 @@ impl<H, N, E: Environment<H, N>, GlobalIn, GlobalOut> Voter<H, N, E, GlobalIn, G
 	fn prune_background_rounds(&mut self) -> Result<(), E::Error> {
 		// Do work on all background rounds, broadcasting any commits generated.
 		while let Async::Ready(Some((number, commit))) = self.past_rounds.poll()? {
-			self.global_out.push(CommunicationOut::Commit(number, commit));
+			self.global_out
+				.push(CommunicationOut::Commit(number, commit));
 		}
 
-		while let Async::Ready(res) = self.finalized_notifications.poll()
+		while let Async::Ready(res) = self
+			.finalized_notifications
+			.poll()
 			.expect("unbounded receivers do not have spurious errors; qed")
 		{
 			let (f_hash, f_num, round, commit) =
 				res.expect("one sender always kept alive in self.best_round; qed");
 
-
 			self.past_rounds.update_finalized(f_num);
 
 			if self.set_last_finalized_number(f_num.clone()) {
-				self.env.finalize_block(f_hash.clone(), f_num.clone(), round, commit)?;
+				self.env
+					.finalize_block(f_hash.clone(), f_num.clone(), round, commit)?;
 			}
 
 			if f_num > self.last_finalized_in_rounds.1 {
@@ -462,7 +478,8 @@ impl<H, N, E: Environment<H, N>, GlobalIn, GlobalOut> Voter<H, N, E, GlobalIn, G
 		while let Async::Ready(Some(item)) = self.global_in.poll()? {
 			match item {
 				CommunicationIn::Commit(round_number, commit, mut process_commit_outcome) => {
-					trace!(target: "afg", "Got commit for round_number {:?}: target_number: {:?}, target_hash: {:?}",
+					trace!(target: "afg",
+						"Got commit for round_number {:?}: target_number: {:?}, target_hash: {:?}",
 						round_number,
 						commit.target_number,
 						commit.target_hash,
@@ -485,22 +502,32 @@ impl<H, N, E: Environment<H, N>, GlobalIn, GlobalOut> Voter<H, N, E, GlobalIn, G
 
 							if finalized_number > *last_finalized_number {
 								*last_finalized_number = finalized_number.clone();
-								self.env.finalize_block(finalized_hash, finalized_number, round_number, commit)?;
+								self.env.finalize_block(
+									finalized_hash,
+									finalized_number,
+									round_number,
+									commit,
+								)?;
 							}
-							process_commit_outcome.run(CommitProcessingOutcome::Good(GoodCommit::new()));
+							process_commit_outcome
+								.run(CommitProcessingOutcome::Good(GoodCommit::new()));
 						} else {
 							// Failing validation of a commit is bad.
-							process_commit_outcome.run(
-								CommitProcessingOutcome::Bad(BadCommit::from(validation_result)),
-							);
+							process_commit_outcome.run(CommitProcessingOutcome::Bad(
+								BadCommit::from(validation_result),
+							));
 						}
 					} else {
 						// Import to backgrounded round is good.
-						process_commit_outcome.run(CommitProcessingOutcome::Good(GoodCommit::new()));
+						process_commit_outcome
+							.run(CommitProcessingOutcome::Good(GoodCommit::new()));
 					}
-				}
+				},
 				CommunicationIn::CatchUp(catch_up, mut process_catch_up_outcome) => {
-					trace!(target: "afg", "Got catch-up message for round {}", catch_up.round_number);
+					trace!(target: "afg",
+						"Got catch-up message for round {}",
+						catch_up.round_number,
+					);
 
 					let round = match validate_catch_up(
 						catch_up,
@@ -510,7 +537,8 @@ impl<H, N, E: Environment<H, N>, GlobalIn, GlobalOut> Voter<H, N, E, GlobalIn, G
 					) {
 						Some(round) => round,
 						None => {
-							process_catch_up_outcome.run(CatchUpProcessingOutcome::Bad(BadCatchUp::new()));
+							process_catch_up_outcome
+								.run(CatchUpProcessingOutcome::Bad(BadCatchUp::new()));
 							return Ok(());
 						},
 					};
@@ -556,7 +584,8 @@ impl<H, N, E: Environment<H, N>, GlobalIn, GlobalOut> Voter<H, N, E, GlobalIn, G
 						std::mem::replace(&mut self.best_round, new_best),
 					);
 
-					process_catch_up_outcome.run(CatchUpProcessingOutcome::Good(GoodCatchUp::new()));
+					process_catch_up_outcome
+						.run(CatchUpProcessingOutcome::Good(GoodCatchUp::new()));
 				},
 			}
 		}
@@ -582,9 +611,12 @@ impl<H, N, E: Environment<H, N>, GlobalIn, GlobalOut> Voter<H, N, E, GlobalIn, G
 			completable && precommitted
 		};
 
-		if !should_start_next { return Ok(Async::NotReady) }
+		if !should_start_next {
+			return Ok(Async::NotReady);
+		}
 
-		trace!(target: "afg", "Best round at {} has become completable. Starting new best round at {}",
+		trace!(target: "afg",
+			"Best round at {} has become completable. Starting new best round at {}",
 			self.best_round.round_number(),
 			self.best_round.round_number() + 1,
 		);
@@ -629,11 +661,12 @@ impl<H, N, E: Environment<H, N>, GlobalIn, GlobalOut> Voter<H, N, E, GlobalIn, G
 	}
 }
 
-impl<H, N, E: Environment<H, N>, GlobalIn, GlobalOut> Future for Voter<H, N, E, GlobalIn, GlobalOut> where
+impl<H, N, E: Environment<H, N>, GlobalIn, GlobalOut> Future for Voter<H, N, E, GlobalIn, GlobalOut>
+where
 	H: Hash + Clone + Eq + Ord + ::std::fmt::Debug,
 	N: Copy + BlockNumberOps + ::std::fmt::Debug,
-	GlobalIn: Stream<Item=CommunicationIn<H, N, E::Signature, E::Id>, Error=E::Error>,
-	GlobalOut: Sink<SinkItem=CommunicationOut<H, N, E::Signature, E::Id>, SinkError=E::Error>,
+	GlobalIn: Stream<Item = CommunicationIn<H, N, E::Signature, E::Id>, Error = E::Error>,
+	GlobalOut: Sink<SinkItem = CommunicationOut<H, N, E::Signature, E::Id>, SinkError = E::Error>,
 {
 	type Item = ();
 	type Error = E::Error;
@@ -655,7 +688,8 @@ fn validate_catch_up<H, N, S, I, E>(
 	env: &E,
 	voters: &VoterSet<I>,
 	best_round_number: u64,
-) -> Option<crate::round::Round<I, H, N, S>> where
+) -> Option<crate::round::Round<I, H, N, S>>
+where
 	H: Clone + Eq + Ord + std::fmt::Debug + std::hash::Hash,
 	N: BlockNumberOps + std::fmt::Debug,
 	S: Clone + Eq,
@@ -733,7 +767,12 @@ fn validate_catch_up<H, N, S, I, E>(
 	});
 
 	// import prevotes first.
-	for crate::SignedPrevote { prevote, id, signature } in catch_up.prevotes {
+	for crate::SignedPrevote {
+		prevote,
+		id,
+		signature,
+	} in catch_up.prevotes
+	{
 		match round.import_prevote(env, prevote, id, signature) {
 			Ok(_) => {},
 			Err(e) => {
@@ -748,7 +787,12 @@ fn validate_catch_up<H, N, S, I, E>(
 	}
 
 	// then precommits.
-	for crate::SignedPrecommit { precommit, id, signature } in catch_up.precommits {
+	for crate::SignedPrecommit {
+		precommit,
+		id,
+		signature,
+	} in catch_up.precommits
+	{
 		match round.import_precommit(env, precommit, id, signature) {
 			Ok(_) => {},
 			Err(e) => {
@@ -773,11 +817,12 @@ fn validate_catch_up<H, N, S, I, E>(
 #[cfg(test)]
 mod tests {
 	use super::*;
-	use tokio::prelude::FutureExt;
-	use tokio::runtime::current_thread;
-	use crate::SignedPrecommit;
-	use crate::testing::{self, GENESIS_HASH, Environment, Id};
+	use crate::{
+		testing::{self, Environment, Id, GENESIS_HASH},
+		SignedPrecommit,
+	};
 	use std::time::Duration;
+	use tokio::{prelude::FutureExt, runtime::current_thread};
 
 	#[test]
 	fn talking_to_myself() {
@@ -808,8 +853,11 @@ mod tests {
 				last_round_state,
 				last_finalized,
 			);
-			::tokio::spawn(exit.clone()
-				.until(voter.map_err(|_| panic!("Error voting"))).map(|_| ()));
+			::tokio::spawn(
+				exit.clone()
+					.until(voter.map_err(|_| panic!("Error voting")))
+					.map(|_| ()),
+			);
 
 			::tokio::spawn(exit.until(routing_task).map(|_| ()));
 
@@ -818,7 +866,8 @@ mod tests {
 				.take_while(|&(_, n, _)| Ok(n < 6))
 				.for_each(|_| Ok(()))
 				.map(|_| signal.fire())
-		})).unwrap();
+		}))
+		.unwrap();
 	}
 
 	#[test]
@@ -854,8 +903,11 @@ mod tests {
 					last_round_state,
 					last_finalized,
 				);
-				::tokio::spawn(exit.clone()
-					.until(voter.map_err(|_| panic!("Error voting"))).map(|_| ()));
+				::tokio::spawn(
+					exit.clone()
+						.until(voter.map_err(|_| panic!("Error voting")))
+						.map(|_| ()),
+				);
 
 				// wait for the best block to be finalized by all honest voters
 				finalized
@@ -864,7 +916,8 @@ mod tests {
 			});
 
 			::futures::future::join_all(finalized_streams).map(|_| signal.fire())
-		})).unwrap();
+		}))
+		.unwrap();
 	}
 
 	#[test]
@@ -897,24 +950,25 @@ mod tests {
 				last_round_state,
 				last_finalized,
 			);
-			::tokio::spawn(exit.clone()
-				.until(voter.map_err(|_| panic!("Error voting"))).map(|_| ()));
+			::tokio::spawn(
+				exit.clone()
+					.until(voter.map_err(|_| panic!("Error voting")))
+					.map(|_| ()),
+			);
 
 			::tokio::spawn(exit.until(routing_task).map(|_| ()));
 
 			// wait for the node to broadcast a commit message
 			commits.take(1).for_each(|_| Ok(())).map(|_| signal.fire())
-		})).unwrap();
+		}))
+		.unwrap();
 	}
 
 	#[test]
 	fn broadcast_commit_only_if_newer() {
 		let local_id = Id(5);
 		let test_id = Id(42);
-		let voters: VoterSet<_> = [
-			(local_id, 100),
-			(test_id, 201),
-		].iter().cloned().collect();
+		let voters: VoterSet<_> = [(local_id, 100), (test_id, 201)].iter().cloned().collect();
 
 		let (network, routing_task) = testing::make_network();
 		let (commits_stream, commits_sink) = network.make_global_comms();
@@ -930,15 +984,21 @@ mod tests {
 			target_number: 6,
 		});
 
-		let commit = (1, Commit {
-			target_hash: "E",
-			target_number: 6,
-			precommits: vec![SignedPrecommit {
-				precommit: Precommit { target_hash: "E", target_number: 6 },
-				signature: testing::Signature(test_id.0),
-				id: test_id
-			}],
-		});
+		let commit = (
+			1,
+			Commit {
+				target_hash: "E",
+				target_number: 6,
+				precommits: vec![SignedPrecommit {
+					precommit: Precommit {
+						target_hash: "E",
+						target_number: 6,
+					},
+					signature: testing::Signature(test_id.0),
+					id: test_id,
+				}],
+			},
+		);
 
 		let (signal, exit) = ::exit_future::signal();
 
@@ -962,56 +1022,82 @@ mod tests {
 				last_round_state,
 				last_finalized,
 			);
-			::tokio::spawn(exit.clone()
-				.until(voter.map_err(|e| panic!("Error voting: {:?}", e))).map(|_| ()));
+			::tokio::spawn(
+				exit.clone()
+					.until(voter.map_err(|e| panic!("Error voting: {:?}", e)))
+					.map(|_| ()),
+			);
 
 			::tokio::spawn(exit.clone().until(routing_task).map(|_| ()));
 
-			::tokio::spawn(exit.until(::futures::future::lazy(|| {
-				round_stream.into_future().map_err(|(e, _)| e)
-					.and_then(|(value, stream)| { // wait for a prevote
-						assert!(match value {
-							Some(SignedMessage { message: Message::Prevote(_), id: Id(5), .. }) => true,
-							_ => false,
-						});
-						let votes = vec![prevote, precommit].into_iter().map(Result::Ok);
-						round_sink.send_all(futures::stream::iter_result(votes)).map(|_| stream) // send our prevote
-					})
-					.and_then(|stream| {
-						stream.take_while(|value| match value { // wait for a precommit
-							SignedMessage { message: Message::Precommit(_), id: Id(5), .. } => Ok(false),
-							_ => Ok(true),
-						}).for_each(|_| Ok(()))
-					})
-					.and_then(|_| {
-						// send our commit
-						commits_sink.send(CommunicationOut::Commit(commit.0, commit.1))
-					})
-					.map_err(|_| ())
-			})).map(|_| ()));
+			::tokio::spawn(
+				exit.until(::futures::future::lazy(|| {
+					round_stream
+						.into_future()
+						.map_err(|(e, _)| e)
+						.and_then(|(value, stream)| {
+							// wait for a prevote
+							assert!(match value {
+								Some(SignedMessage {
+									message: Message::Prevote(_),
+									id: Id(5),
+									..
+								}) => true,
+								_ => false,
+							});
+							let votes = vec![prevote, precommit].into_iter().map(Result::Ok);
+							round_sink
+								.send_all(futures::stream::iter_result(votes))
+								.map(|_| stream) // send our prevote
+						})
+						.and_then(|stream| {
+							stream
+								.take_while(|value| match value {
+									// wait for a precommit
+									SignedMessage {
+										message: Message::Precommit(_),
+										id: Id(5),
+										..
+									} => Ok(false),
+									_ => Ok(true),
+								})
+								.for_each(|_| Ok(()))
+						})
+						.and_then(|_| {
+							// send our commit
+							commits_sink.send(CommunicationOut::Commit(commit.0, commit.1))
+						})
+						.map_err(|_| ())
+				}))
+				.map(|_| ()),
+			);
 
 			// wait for the first commit (ours)
-			commits_stream.into_future().map_err(|_| ())
+			commits_stream
+				.into_future()
+				.map_err(|_| ())
 				.and_then(|(_, stream)| {
-					stream.take(1).for_each(|_| Ok(())) // the second commit should never arrive
-						.timeout(Duration::from_millis(500)).map_err(|_| ())
+					// the second commit should never arrive
+					stream
+						.take(1)
+						.for_each(|_| Ok(()))
+						.timeout(Duration::from_millis(500))
+						.map_err(|_| ())
 				})
 				.then(|res| {
 					assert!(res.is_err()); // so the previous future times out
 					signal.fire();
 					futures::future::ok::<(), ()>(())
 				})
-		})).unwrap();
+		}))
+		.unwrap();
 	}
 
 	#[test]
 	fn import_commit_for_any_round() {
 		let local_id = Id(5);
 		let test_id = Id(42);
-		let voters: VoterSet<_> = [
-			(local_id, 100),
-			(test_id, 201),
-		].iter().cloned().collect();
+		let voters: VoterSet<_> = [(local_id, 100), (test_id, 201)].iter().cloned().collect();
 
 		let (network, routing_task) = testing::make_network();
 		let (_, commits_sink) = network.make_global_comms();
@@ -1019,15 +1105,21 @@ mod tests {
 		let (signal, exit) = ::exit_future::signal();
 
 		// this is a commit for a previous round
-		let commit = (0, Commit {
-			target_hash: "E",
-			target_number: 6,
-			precommits: vec![SignedPrecommit {
-				precommit: Precommit { target_hash: "E", target_number: 6 },
-				signature: testing::Signature(test_id.0),
-				id: test_id
-			}],
-		});
+		let commit = (
+			0,
+			Commit {
+				target_hash: "E",
+				target_number: 6,
+				precommits: vec![SignedPrecommit {
+					precommit: Precommit {
+						target_hash: "E",
+						target_number: 6,
+					},
+					signature: testing::Signature(test_id.0),
+					id: test_id,
+				}],
+			},
+		);
 
 		let global_comms = network.make_global_comms();
 		let env = Arc::new(Environment::new(network, local_id));
@@ -1049,20 +1141,28 @@ mod tests {
 				last_round_state,
 				last_finalized,
 			);
-			::tokio::spawn(exit.clone()
-				.until(voter.map_err(|_| panic!("Error voting"))).map(|_| ()));
+			::tokio::spawn(
+				exit.clone()
+					.until(voter.map_err(|_| panic!("Error voting")))
+					.map(|_| ()),
+			);
 
 			::tokio::spawn(exit.until(routing_task).map(|_| ()));
 
-			::tokio::spawn(commits_sink.send(CommunicationOut::Commit(commit.0, commit.1))
-				.map_err(|_| ()).map(|_| ()));
+			::tokio::spawn(
+				commits_sink
+					.send(CommunicationOut::Commit(commit.0, commit.1))
+					.map_err(|_| ())
+					.map(|_| ()),
+			);
 
 			// wait for the commit message to be processed which finalized block 6
 			env.finalized_stream()
 				.take_while(|&(_, n, _)| Ok(n < 6))
 				.for_each(|_| Ok(()))
 				.map(|_| signal.fire())
-		})).unwrap();
+		}))
+		.unwrap();
 	}
 
 	#[test]
@@ -1099,13 +1199,19 @@ mod tests {
 			};
 
 			let pv = |id| crate::SignedPrevote {
-				prevote: crate::Prevote { target_hash: "C", target_number: 4 },
+				prevote: crate::Prevote {
+					target_hash: "C",
+					target_number: 4,
+				},
 				id: Id(id),
 				signature: testing::Signature(99),
 			};
 
 			let pc = |id| crate::SignedPrecommit {
-				precommit: crate::Precommit { target_hash: "C", target_number: 4 },
+				precommit: crate::Precommit {
+					target_hash: "C",
+					target_number: 4,
+				},
 				id: Id(id),
 				signature: testing::Signature(99),
 			};
@@ -1131,7 +1237,9 @@ mod tests {
 				} else {
 					Ok(poll)
 				}
-			}).map(move |_| signal.fire())
-		})).unwrap();
+			})
+			.map(move |_| signal.fire())
+		}))
+		.unwrap();
 	}
 }

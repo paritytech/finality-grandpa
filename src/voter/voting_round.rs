@@ -14,24 +14,22 @@
 
 //! Logic for voting and handling messages within a single round.
 
+use std::{hash::Hash, sync::Arc};
+
 #[cfg(feature = "std")]
 use futures::try_ready;
-use futures::prelude::*;
-use futures::sync::mpsc::UnboundedSender;
+use futures::{prelude::*, sync::mpsc::UnboundedSender};
 #[cfg(feature = "std")]
-use log::{trace, warn, debug};
+use log::{debug, trace, warn};
 
-use std::hash::Hash;
-use std::sync::Arc;
-
-use crate::round::{Round, State as RoundState};
+use super::{Buffered, Environment};
 use crate::{
-	Commit, Message, Prevote, Precommit, PrimaryPropose, SignedMessage,
-	SignedPrecommit, BlockNumberOps, validate_commit, ImportResult,
-	HistoricalVotes,
+	round::{Round, State as RoundState},
+	validate_commit,
+	voter_set::VoterSet,
+	BlockNumberOps, Commit, HistoricalVotes, ImportResult, Message, Precommit, Prevote,
+	PrimaryPropose, SignedMessage, SignedPrecommit,
 };
-use crate::voter_set::VoterSet;
-use super::{Environment, Buffered};
 
 /// The state of a voting round.
 pub(super) enum State<T> {
@@ -53,7 +51,8 @@ impl<T> std::fmt::Debug for State<T> {
 }
 
 /// Logic for a voter on a specific round.
-pub(super) struct VotingRound<H, N, E: Environment<H, N>> where
+pub(super) struct VotingRound<H, N, E: Environment<H, N>>
+where
 	H: Hash + Clone + Eq + Ord + ::std::fmt::Debug,
 	N: Copy + BlockNumberOps + ::std::fmt::Debug,
 {
@@ -65,7 +64,7 @@ pub(super) struct VotingRound<H, N, E: Environment<H, N>> where
 	state: Option<State<E::Timer>>, // state machine driving votes.
 	bridged_round_state: Option<crate::bridge_state::PriorView<H, N>>, // updates to later round
 	last_round_state: Option<crate::bridge_state::LatterView<H, N>>, // updates from prior round
-	primary_block: Option<(H, N)>, // a block posted by primary as a hint.
+	primary_block: Option<(H, N)>,  // a block posted by primary as a hint.
 	finalized_sender: UnboundedSender<(H, N, u64, Commit<H, N, E::Signature, E::Id>)>,
 	best_finalized: Option<Commit<H, N, E::Signature, E::Id>>,
 }
@@ -100,12 +99,13 @@ impl Voting {
 	}
 }
 
-impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
+impl<H, N, E: Environment<H, N>> VotingRound<H, N, E>
+where
 	H: Hash + Clone + Eq + Ord + ::std::fmt::Debug,
 	N: Copy + BlockNumberOps + ::std::fmt::Debug,
 {
 	/// Create a new voting round.
-	pub (super) fn new(
+	pub(super) fn new(
 		round_number: u64,
 		voters: VoterSet<E::Id>,
 		base: (H, N),
@@ -124,7 +124,8 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 
 		let voting = if round_data.voter_id.as_ref() == Some(&votes.primary_voter().0) {
 			Voting::Primary
-		} else if round_data.voter_id
+		} else if round_data
+			.voter_id
 			.as_ref()
 			.map(|id| votes.voters().contains_key(id))
 			.unwrap_or(false)
@@ -139,9 +140,10 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 			voting,
 			incoming: round_data.incoming,
 			outgoing: Buffered::new(round_data.outgoing),
-			state: Some(
-				State::Start(round_data.prevote_timer, round_data.precommit_timer)
-			),
+			state: Some(State::Start(
+				round_data.prevote_timer,
+				round_data.precommit_timer,
+			)),
 			bridged_round_state: None,
 			primary_block: None,
 			best_finalized: None,
@@ -153,12 +155,11 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 
 	/// Create a voting round from a completed `Round`. We will not vote further
 	/// in this round.
-	pub (super) fn completed(
+	pub(super) fn completed(
 		votes: Round<E::Id, H, N, E::Signature>,
 		finalized_sender: UnboundedSender<(H, N, u64, Commit<H, N, E::Signature, E::Id>)>,
 		env: Arc<E>,
 	) -> VotingRound<H, N, E> {
-
 		let round_data = env.round_data(votes.number());
 
 		VotingRound {
@@ -176,10 +177,15 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 		}
 	}
 
-	/// Poll the round. When the round is completable and messages have been flushed, it will return `Async::Ready` but
-	/// can continue to be polled.
+	/// Poll the round. When the round is completable and messages have been
+	/// flushed, it will return `Async::Ready` but can continue to be polled.
 	pub(super) fn poll(&mut self) -> Poll<(), E::Error> {
-		trace!(target: "afg", "Polling round {}, state = {:?}, step = {:?}", self.votes.number(), self.votes.state(), self.state);
+		trace!(target: "afg",
+			"Polling round {}, state = {:?}, step = {:?}",
+			self.votes.number(),
+			self.votes.state(),
+			self.state,
+		);
 		let pre_state = self.votes.state();
 		self.process_incoming()?;
 
@@ -216,10 +222,11 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 				let finalized_in_last_round = last_round_estimate <= last_round_finalized;
 
 				// or it must be finalized in the current round
-				let finalized_in_current_round = self.finalized().map_or(
-					false,
-					|(_, current_round_finalized)| last_round_estimate <= *current_round_finalized,
-				);
+				let finalized_in_current_round = self
+					.finalized()
+					.map_or(false, |(_, current_round_finalized)| {
+						last_round_estimate <= *current_round_finalized
+					});
 
 				finalized_in_last_round || finalized_in_current_round
 			},
@@ -275,14 +282,28 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 	/// Returns the finalized base if it checks out.
 	pub(super) fn check_and_import_from_commit(
 		&mut self,
-		commit: &Commit<H, N, E::Signature, E::Id>
+		commit: &Commit<H, N, E::Signature, E::Id>,
 	) -> Result<Option<(H, N)>, E::Error> {
 		let base = validate_commit(&commit, self.voters(), &*self.env)?.ghost;
-		if base.is_none() { return Ok(None) }
+		if base.is_none() {
+			return Ok(None);
+		}
 
-		for SignedPrecommit { precommit, signature, id } in commit.precommits.iter().cloned() {
-			let import_result = self.votes.import_precommit(&*self.env, precommit, id, signature)?;
-			if let ImportResult { equivocation: Some(e), .. } = import_result {
+		for SignedPrecommit {
+			precommit,
+			signature,
+			id,
+		} in commit.precommits.iter().cloned()
+		{
+			let import_result = self
+				.votes
+				.import_precommit(&*self.env, precommit, id, signature)?;
+
+			if let ImportResult {
+				equivocation: Some(e),
+				..
+			} = import_result
+			{
 				self.env.precommit_equivocation(self.round_number(), e);
 			}
 		}
@@ -291,9 +312,9 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 	}
 
 	/// Get a clone of the finalized sender.
-	pub(super) fn finalized_sender(&self)
-		-> UnboundedSender<(H, N, u64, Commit<H, N, E::Signature, E::Id>)>
-	{
+	pub(super) fn finalized_sender(
+		&self,
+	) -> UnboundedSender<(H, N, u64, Commit<H, N, E::Signature, E::Id>)> {
 		self.finalized_sender.clone()
 	}
 
@@ -324,34 +345,57 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 	fn process_incoming(&mut self) -> Result<(), E::Error> {
 		while let Async::Ready(Some(incoming)) = self.incoming.poll()? {
 			trace!(target: "afg", "Got incoming message");
-			let SignedMessage { message, signature, id } = incoming;
-			if !self.env.is_equal_or_descendent_of(self.votes.base().0, message.target().0.clone()) {
+			let SignedMessage {
+				message,
+				signature,
+				id,
+			} = incoming;
+
+			if !self
+				.env
+				.is_equal_or_descendent_of(self.votes.base().0, message.target().0.clone())
+			{
 				trace!(target: "afg", "Ignoring message targeting {:?} lower than round base {:?}",
 					   message.target(),
 					   self.votes.base(),
 				);
+
 				continue;
 			}
 
 			match message {
 				Message::Prevote(prevote) => {
-					let import_result = self.votes.import_prevote(&*self.env, prevote, id, signature)?;
-					if let ImportResult { equivocation: Some(e), .. } = import_result {
+					let import_result = self
+						.votes
+						.import_prevote(&*self.env, prevote, id, signature)?;
+
+					if let ImportResult {
+						equivocation: Some(e),
+						..
+					} = import_result
+					{
 						self.env.prevote_equivocation(self.votes.number(), e);
 					}
-				}
+				},
 				Message::Precommit(precommit) => {
-					let import_result = self.votes.import_precommit(&*self.env, precommit, id, signature)?;
-					if let ImportResult { equivocation: Some(e), .. } = import_result {
+					let import_result = self
+						.votes
+						.import_precommit(&*self.env, precommit, id, signature)?;
+
+					if let ImportResult {
+						equivocation: Some(e),
+						..
+					} = import_result
+					{
 						self.env.precommit_equivocation(self.votes.number(), e);
 					}
-				}
+				},
 				Message::PrimaryPropose(primary) => {
 					let primary_id = self.votes.primary_voter().0.clone();
 					if id == primary_id {
 						self.primary_block = Some((primary.target_hash, primary.target_number));
 					}
-				}
+				},
 			};
 		}
 
@@ -368,9 +412,13 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 						let maybe_finalized = last_round_state.finalized.clone();
 
 						// Last round estimate has not been finalized.
-						let should_send_primary = maybe_finalized.map_or(true, |f| last_round_estimate.1 > f.1);
+						let should_send_primary =
+							maybe_finalized.map_or(true, |f| last_round_estimate.1 > f.1);
 						if should_send_primary {
-							debug!(target: "afg", "Sending primary block hint for round {}", self.votes.number());
+							debug!(target: "afg",
+								"Sending primary block hint for round {}",
+								self.votes.number(),
+							);
 							let primary = PrimaryPropose {
 								target_hash: last_round_estimate.0,
 								target_number: last_round_estimate.1,
@@ -394,7 +442,9 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 
 				self.state = Some(State::Start(prevote_timer, precommit_timer));
 			},
-			x => { self.state = x; }
+			x => {
+				self.state = x;
+			},
 		}
 
 		Ok(())
@@ -403,33 +453,37 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 	fn prevote(&mut self, last_round_state: &RoundState<H, N>) -> Result<(), E::Error> {
 		let state = self.state.take();
 
-		let mut handle_prevote = |mut prevote_timer: E::Timer, precommit_timer: E::Timer, proposed| {
-			let should_prevote = match prevote_timer.poll() {
-				Err(e) => return Err(e),
-				Ok(Async::Ready(())) => true,
-				Ok(Async::NotReady) => self.votes.completable(),
-			};
+		let mut handle_prevote =
+			|mut prevote_timer: E::Timer, precommit_timer: E::Timer, proposed| {
+				let should_prevote = match prevote_timer.poll() {
+					Err(e) => return Err(e),
+					Ok(Async::Ready(())) => true,
+					Ok(Async::NotReady) => self.votes.completable(),
+				};
 
-			if should_prevote {
-				if self.voting.is_active() {
-					if let Some(prevote) = self.construct_prevote(last_round_state)? {
-						debug!(target: "afg", "Casting prevote for round {}", self.votes.number());
-						self.env.prevoted(self.round_number(), prevote.clone())?;
-						self.votes.set_prevoted_index();
-						self.outgoing.push(Message::Prevote(prevote));
+				if should_prevote {
+					if self.voting.is_active() {
+						if let Some(prevote) = self.construct_prevote(last_round_state)? {
+							debug!(target: "afg",
+								"Casting prevote for round {}",
+								self.votes.number(),
+							);
+							self.env.prevoted(self.round_number(), prevote.clone())?;
+							self.votes.set_prevoted_index();
+							self.outgoing.push(Message::Prevote(prevote));
+						}
+					}
+					self.state = Some(State::Prevoted(precommit_timer));
+				} else {
+					if proposed {
+						self.state = Some(State::Proposed(prevote_timer, precommit_timer));
+					} else {
+						self.state = Some(State::Start(prevote_timer, precommit_timer));
 					}
 				}
-				self.state = Some(State::Prevoted(precommit_timer));
-			} else {
-				if proposed {
-					self.state = Some(State::Proposed(prevote_timer, precommit_timer));
-				} else {
-					self.state = Some(State::Start(prevote_timer, precommit_timer));
-				}
-			}
 
-			Ok(())
-		};
+				Ok(())
+			};
 
 		match state {
 			Some(State::Start(prevote_timer, precommit_timer)) => {
@@ -438,7 +492,9 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 			Some(State::Proposed(prevote_timer, precommit_timer)) => {
 				handle_prevote(prevote_timer, precommit_timer, true)?;
 			},
-			x => { self.state = x; }
+			x => {
+				self.state = x;
+			},
 		}
 
 		Ok(())
@@ -447,16 +503,25 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 	fn precommit(&mut self, last_round_state: &RoundState<H, N>) -> Result<(), E::Error> {
 		match self.state.take() {
 			Some(State::Prevoted(mut precommit_timer)) => {
-				let last_round_estimate = last_round_state.estimate.clone()
+				let last_round_estimate = last_round_state
+					.estimate
+					.clone()
 					.expect("Rounds only started when prior round completable; qed");
 
 				let should_precommit = {
 					// we wait for the last round's estimate to be equal to or
 					// the ancestor of the current round's p-Ghost before precommitting.
-					self.votes.state().prevote_ghost.as_ref().map_or(false, |p_g| {
-						p_g == &last_round_estimate ||
-							self.env.is_equal_or_descendent_of(last_round_estimate.0, p_g.0.clone())
-					})
+					self.votes
+						.state()
+						.prevote_ghost
+						.as_ref()
+						.map_or(false, |p_g| {
+							p_g == &last_round_estimate ||
+								self.env.is_equal_or_descendent_of(
+									last_round_estimate.0,
+									p_g.0.clone(),
+								)
+						})
 				} && match precommit_timer.poll() {
 					Err(e) => return Err(e),
 					Ok(Async::Ready(())) => true,
@@ -465,9 +530,13 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 
 				if should_precommit {
 					if self.voting.is_active() {
-						debug!(target: "afg", "Casting precommit for round {}", self.votes.number());
+						debug!(target: "afg",
+							"Casting precommit for round {}",
+							self.votes.number(),
+						);
 						let precommit = self.construct_precommit();
-						self.env.precommitted(self.round_number(), precommit.clone())?;
+						self.env
+							.precommitted(self.round_number(), precommit.clone())?;
 						self.votes.set_precommited_index();
 						self.outgoing.push(Message::Precommit(precommit));
 					}
@@ -475,29 +544,38 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 				} else {
 					self.state = Some(State::Prevoted(precommit_timer));
 				}
-			}
-			x => { self.state = x; }
+			},
+			x => {
+				self.state = x;
+			},
 		}
 
 		Ok(())
 	}
 
 	// construct a prevote message based on local state.
-	fn construct_prevote(&self, last_round_state: &RoundState<H, N>) -> Result<Option<Prevote<H, N>>, E::Error> {
-		let last_round_estimate = last_round_state.estimate.clone()
+	fn construct_prevote(
+		&self,
+		last_round_state: &RoundState<H, N>,
+	) -> Result<Option<Prevote<H, N>>, E::Error> {
+		let last_round_estimate = last_round_state
+			.estimate
+			.clone()
 			.expect("Rounds only started when prior round completable; qed");
 
 		let find_descendent_of = match self.primary_block {
 			None => {
 				// vote for best chain containing prior round-estimate.
 				last_round_estimate.0
-			}
+			},
 			Some(ref primary_block) => {
 				// we will vote for the best chain containing `p_hash` iff
 				// the last round's prevote-GHOST included that block and
 				// that block is a strict descendent of the last round-estimate that we are
 				// aware of.
-				let last_prevote_g = last_round_state.prevote_ghost.clone()
+				let last_prevote_g = last_round_state
+					.prevote_ghost
+					.clone()
 					.expect("Rounds only started when prior round completable; qed");
 
 				// if the blocks are equal, we don't check ancestry.
@@ -511,7 +589,10 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 					// if the primary block is in the ancestry of p-G we vote for the
 					// best chain containing it.
 					let &(ref p_hash, p_num) = primary_block;
-					match self.env.ancestry(last_round_estimate.0.clone(), last_prevote_g.0) {
+					match self
+						.env
+						.ancestry(last_round_estimate.0.clone(), last_prevote_g.0)
+					{
 						Ok(ancestry) => {
 							let to_sub = p_num + N::one();
 
@@ -526,24 +607,31 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 							} else {
 								last_round_estimate.0
 							}
-						}
+						},
 						Err(crate::Error::NotDescendent) => last_round_estimate.0,
 					}
 				}
-			}
+			},
 		};
 
 		let best_chain = self.env.best_chain_containing(find_descendent_of.clone());
-		debug_assert!(best_chain.is_some(), "Previously known block {:?} has disappeared from chain", find_descendent_of);
+		debug_assert!(
+			best_chain.is_some(),
+			"Previously known block {:?} has disappeared from chain",
+			find_descendent_of
+		);
 
 		let t = match best_chain {
 			Some(target) => target,
 			None => {
 				// If this block is considered unknown, something has gone wrong.
 				// log and handle, but skip casting a vote.
-				warn!(target: "afg", "Could not cast prevote: previously known block {:?} has disappeared", find_descendent_of);
-				return Ok(None)
-			}
+				warn!(target: "afg",
+					"Could not cast prevote: previously known block {:?} has disappeared",
+					find_descendent_of,
+				);
+				return Ok(None);
+			},
 		};
 
 		Ok(Some(Prevote {
@@ -567,7 +655,9 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 
 	// notify when new blocks are finalized or when the round-estimate is updated
 	fn notify(&mut self, last_state: RoundState<H, N>, new_state: RoundState<H, N>) {
-		if last_state == new_state { return }
+		if last_state == new_state {
+			return;
+		}
 
 		if let Some(ref b) = self.bridged_round_state {
 			b.update(new_state.clone());
@@ -580,19 +670,32 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 			// in this round or after.
 			match (&self.state, new_state.finalized) {
 				(&Some(State::Precommitted), Some((ref f_hash, ref f_number))) => {
+					let precommits = self
+						.votes
+						.finalizing_precommits(&*self.env)
+						.expect(
+							"always returns none if something was finalized; this is checked \
+							 above; qed",
+						)
+						.collect();
+
 					let commit = Commit {
 						target_hash: f_hash.clone(),
 						target_number: f_number.clone(),
-						precommits: self.votes.finalizing_precommits(&*self.env)
-							.expect("always returns none if something was finalized; this is checked above; qed")
-							.collect(),
+						precommits,
 					};
-					let finalized = (f_hash.clone(), f_number.clone(), self.votes.number(), commit.clone());
+
+					let finalized = (
+						f_hash.clone(),
+						f_number.clone(),
+						self.votes.number(),
+						commit.clone(),
+					);
 
 					let _ = self.finalized_sender.unbounded_send(finalized);
 					self.best_finalized = Some(commit);
-				}
-				_ => {}
+				},
+				_ => {},
 			}
 		}
 	}

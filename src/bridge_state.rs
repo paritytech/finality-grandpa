@@ -14,10 +14,12 @@
 
 //! Bridging round state between rounds.
 
-use crate::round::State as RoundState;
+use std::sync::Arc;
+
 use futures::task;
 use parking_lot::{RwLock, RwLockReadGuard};
-use std::sync::Arc;
+
+use crate::round::State as RoundState;
 
 // round state bridged across rounds.
 struct Bridged<H, N> {
@@ -65,16 +67,14 @@ impl<H, N> LatterView<H, N> {
 /// while waiting for events on an older round.
 pub(crate) fn bridge_state<H, N>(initial: RoundState<H, N>) -> (PriorView<H, N>, LatterView<H, N>) {
 	let inner = Arc::new(Bridged::new(RwLock::new(initial)));
-	(
-		PriorView(inner.clone()), LatterView(inner)
-	)
+	(PriorView(inner.clone()), LatterView(inner))
 }
 
 #[cfg(test)]
 mod tests {
+	use super::*;
 	use futures::prelude::*;
 	use std::sync::Barrier;
-	use super::*;
 
 	#[test]
 	fn bridging_state() {
