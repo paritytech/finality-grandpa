@@ -14,8 +14,12 @@
 
 //! Logic for voting and handling messages within a single round.
 
+#[cfg(feature = "std")]
+use futures::try_ready;
 use futures::prelude::*;
 use futures::sync::mpsc::UnboundedSender;
+#[cfg(feature = "std")]
+use log::{trace, warn, debug};
 
 use std::hash::Hash;
 use std::sync::Arc;
@@ -24,6 +28,7 @@ use crate::round::{Round, State as RoundState};
 use crate::{
 	Commit, Message, Prevote, Precommit, PrimaryPropose, SignedMessage,
 	SignedPrecommit, BlockNumberOps, validate_commit, ImportResult,
+	HistoricalVotes,
 };
 use crate::voter_set::VoterSet;
 use super::{Environment, Buffered};
@@ -146,6 +151,31 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 		}
 	}
 
+	/// Create a voting round from a completed `Round`. We will not vote further
+	/// in this round.
+	pub (super) fn completed(
+		votes: Round<E::Id, H, N, E::Signature>,
+		finalized_sender: UnboundedSender<(H, N, u64, Commit<H, N, E::Signature, E::Id>)>,
+		env: Arc<E>,
+	) -> VotingRound<H, N, E> {
+
+		let round_data = env.round_data(votes.number());
+
+		VotingRound {
+			votes,
+			voting: Voting::No,
+			incoming: round_data.incoming,
+			outgoing: Buffered::new(round_data.outgoing),
+			state: None,
+			bridged_round_state: None,
+			primary_block: None,
+			env,
+			last_round_state: None,
+			finalized_sender,
+			best_finalized: None,
+		}
+	}
+
 	/// Poll the round. When the round is completable and messages have been flushed, it will return `Async::Ready` but
 	/// can continue to be polled.
 	pub(super) fn poll(&mut self) -> Poll<(), E::Error> {
@@ -156,10 +186,11 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 		// we only cast votes when we have access to the previous round state.
 		// we might have started this round as a prospect "future" round to
 		// check whether the voter is lagging behind the current round.
-		if let Some(last_round_state) = self.last_round_state.as_ref().map(|s| s.get().clone()) {
-			self.primary_propose(&last_round_state)?;
-			self.prevote(&last_round_state)?;
-			self.precommit(&last_round_state)?;
+		let last_round_state = self.last_round_state.as_ref().map(|s| s.get().clone());
+		if let Some(ref last_round_state) = last_round_state {
+			self.primary_propose(last_round_state)?;
+			self.prevote(last_round_state)?;
+			self.precommit(last_round_state)?;
 		}
 
 		try_ready!(self.outgoing.poll());
@@ -169,11 +200,45 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 		let post_state = self.votes.state();
 		self.notify(pre_state, post_state);
 
-		if self.votes.completable() {
-			Ok(Async::Ready(()))
-		} else {
-			Ok(Async::NotReady)
+		// early exit if the current round is not completable
+		if !self.votes.completable() {
+			return Ok(Async::NotReady);
 		}
+
+		// make sure that the previous round estimate has been finalized
+		let last_round_estimate_finalized = match last_round_state {
+			Some(RoundState {
+				estimate: Some((_, last_round_estimate)),
+				finalized: Some((_, last_round_finalized)),
+				..
+			}) => {
+				// either it was already finalized in the previous round
+				let finalized_in_last_round = last_round_estimate <= last_round_finalized;
+
+				// or it must be finalized in the current round
+				let finalized_in_current_round = self.finalized().map_or(
+					false,
+					|(_, current_round_finalized)| last_round_estimate <= *current_round_finalized,
+				);
+
+				finalized_in_last_round || finalized_in_current_round
+			},
+			None => {
+				// NOTE: when we catch up to a round we complete the round
+				// without any last round state. in this case we already started
+				// a new round after we caught up so this guard is unneeded.
+				true
+			},
+			_ => false,
+		};
+
+		// the previous round estimate must be finalized
+		if !last_round_estimate_finalized {
+			return Ok(Async::NotReady);
+		}
+
+		// both exit conditions verified, we can complete this round
+		Ok(Async::Ready(()))
 	}
 
 	/// Inspect the state of this round.
@@ -186,14 +251,14 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 		self.votes.number()
 	}
 
-	/// Get the base block in the dag.
-	pub(super) fn dag_base(&self) -> (H, N) {
-		self.votes.base()
-	}
-
 	/// Get the round state.
 	pub(super) fn round_state(&self) -> RoundState<H, N> {
 		self.votes.state()
+	}
+
+	/// Get the base block in the dag.
+	pub(super) fn dag_base(&self) -> (H, N) {
+		self.votes.base()
 	}
 
 	/// Get the voters in this round.
@@ -245,35 +310,15 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 		latter_view
 	}
 
-	// call this to bridge state from another around.
-	pub(super) fn bridge_state_from(&mut self, other: &mut Self) {
-		self.last_round_state = Some(other.bridge_state())
-	}
-
 	/// Get a commit justifying the best finalized block.
 	pub(super) fn finalizing_commit(&self) -> Option<&Commit<H, N, E::Signature, E::Id>> {
 		self.best_finalized.as_ref()
 	}
 
-	/// Return all imported votes for the round (prevotes and precommits).
-	pub(super) fn votes(&self) -> Vec<SignedMessage<H, N, E::Signature, E::Id>> {
-		let prevotes = self.votes.prevotes().into_iter().map(|(id, prevote, signature)| {
-			SignedMessage {
-				id,
-				signature,
-				message: Message::Prevote(prevote),
-			}
-		});
-
-		let precommits = self.votes.precommits().into_iter().map(|(id, precommit, signature)| {
-			SignedMessage {
-				id,
-				signature,
-				message: Message::Precommit(precommit),
-			}
-		});
-
-		prevotes.chain(precommits).collect()
+	/// Return all votes for the round (prevotes and precommits),
+	/// sorted by imported order and indicating the indices where we voted.
+	pub(super) fn historical_votes(&self) -> &HistoricalVotes<H, N, E::Signature, E::Id> {
+		self.votes.historical_votes()
 	}
 
 	fn process_incoming(&mut self) -> Result<(), E::Error> {
@@ -370,6 +415,7 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 					if let Some(prevote) = self.construct_prevote(last_round_state)? {
 						debug!(target: "afg", "Casting prevote for round {}", self.votes.number());
 						self.env.prevoted(self.round_number(), prevote.clone())?;
+						self.votes.set_prevoted_index();
 						self.outgoing.push(Message::Prevote(prevote));
 					}
 				}
@@ -422,6 +468,7 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 						debug!(target: "afg", "Casting precommit for round {}", self.votes.number());
 						let precommit = self.construct_precommit();
 						self.env.precommitted(self.round_number(), precommit.clone())?;
+						self.votes.set_precommited_index();
 						self.outgoing.push(Message::Precommit(precommit));
 					}
 					self.state = Some(State::Precommitted);
