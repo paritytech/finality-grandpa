@@ -2,7 +2,7 @@
 
 [![crates.io link][crates-badge]][crates] [![Build Status][travis-badge]][travis]
 
-![GRANDPA](img/grandpa.png)
+<img align="right" width="150" height="150" src="img/grandpa.png">
 
 **GRANDPA**, **G**HOST-based **R**ecursive **AN**cestor **D**eriving **P**refix **A**greement, is a
 finality gadget for blockchains, implemented in Rust. It allows a set of nodes to come to BFT
