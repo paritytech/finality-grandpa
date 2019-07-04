@@ -699,7 +699,10 @@ impl<Id, H, N, Signature> Round<Id, H, N, Signature> where
 		self.precommit.votes()
 	}
 
-	/// Return all votes (prevotes and precommits) by importing order.
+	/// Return all votes for the round (prevotes and precommits), sorted by
+	/// imported order and indicating the indices where we voted. At most two
+	/// prevotes and two precommits per voter are present, further equivocations
+	/// are not stored (as they are redundant).
 	pub fn historical_votes(&self) -> &HistoricalVotes<H, N, Signature, Id> {
 		&self.historical_votes
 	}
