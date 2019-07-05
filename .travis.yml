@@ -30,7 +30,6 @@ jobs:
     env:
     - RUSTFLAGS='-C link-dead-code'
     script:
-    - cargo build --verbose
     - cargo test --verbose
     - |
       set -e
