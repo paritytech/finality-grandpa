@@ -9,6 +9,8 @@ matrix:
   allow_failures:
   - rust: nightly
 
+cache: cargo
+
 jobs:
   include:
   - stage: "Code coverage"
