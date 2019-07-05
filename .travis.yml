@@ -5,22 +5,26 @@ rust:
 - beta
 - nightly
 
-before_script:
-  - rustup toolchain install nightly
-  - rustup component add rustfmt --toolchain nightly
-script:
-  - cargo +nightly fmt --all -- --check
-  - cargo build
-  - cargo test
+cache: cargo
+
+env:
+  matrix:
+  - JOB="test"
 
 matrix:
   allow_failures:
   - rust: nightly
-
-cache: cargo
+    env: JOB="test"
 
 jobs:
   include:
+  - stage: "Style check"
+    rust: nightly
+    env: JOB="style"
+    before_script:
+    - rustup component add rustfmt
+    script:
+    - cargo fmt --all -- --check
   - stage: "Code coverage"
     rust: nightly
     os: linux
@@ -36,7 +40,8 @@ jobs:
         - zlib1g-dev
         - libiberty-dev
     env:
-    - RUSTFLAGS='-C link-dead-code'
+    - RUSTFLAGS="-C link-dead-code"
+    - JOB="coverage"
     script:
     - cargo test --verbose
     - |
