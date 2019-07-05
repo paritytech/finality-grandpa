@@ -336,8 +336,10 @@ where
 		self.best_finalized.as_ref()
 	}
 
-	/// Return all votes for the round (prevotes and precommits),
-	/// sorted by imported order and indicating the indices where we voted.
+	/// Return all votes for the round (prevotes and precommits), sorted by
+	/// imported order and indicating the indices where we voted. At most two
+	/// prevotes and two precommits per voter are present, further equivocations
+	/// are not stored (as they are redundant).
 	pub(super) fn historical_votes(&self) -> &HistoricalVotes<H, N, E::Signature, E::Id> {
 		self.votes.historical_votes()
 	}
