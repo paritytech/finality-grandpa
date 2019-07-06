@@ -361,8 +361,8 @@ pub fn process_commit_validation_result<H, N>(
 #[cfg_attr(feature = "derive-codec", derive(Encode, Decode))]
 pub struct HistoricalVotes<H, N, S, Id> {
 	seen: Vec<SignedMessage<H, N, S, Id>>,
-	prevote_idx: Option<u64>,
-	precommit_idx: Option<u64>,
+	prevote_index: Option<u32>,
+	precommit_index: Option<u32>,
 }
 
 impl<H, N, S, Id> HistoricalVotes<H, N, S, Id> {
@@ -370,25 +370,25 @@ impl<H, N, S, Id> HistoricalVotes<H, N, S, Id> {
 	pub fn new() -> Self {
 		HistoricalVotes {
 			seen: Vec::new(),
-			prevote_idx: None,
-			precommit_idx: None,
+			prevote_index: None,
+			precommit_index: None,
 		}
 	}
 
 	/// Create a new HistoricalVotes initialized from the parameters.
 	pub fn new_with(
 		seen: Vec<SignedMessage<H, N, S, Id>>,
-		prevote_idx: Option<u64>,
-		precommit_idx: Option<u64>
+		prevote_index: Option<u32>,
+		precommit_index: Option<u32>
 	) -> Self {
 		HistoricalVotes {
 			seen,
-			prevote_idx,
-			precommit_idx,
+			prevote_index,
+			precommit_index,
 		}
 	}
 
-	/// Push a vote into the list.
+	/// Push a message into the list.
 	pub fn push_vote(&mut self, msg: SignedMessage<H, N, S, Id>) {
 		self.seen.push(msg)
 	}
@@ -400,25 +400,33 @@ impl<H, N, S, Id> HistoricalVotes<H, N, S, Id> {
 
 	/// Return the number of messages seen before prevoting.
 	/// None in case we didn't prevote yet.
-	pub fn prevote_idx(&self) -> Option<u64> {
-		self.prevote_idx
+	pub fn prevote_index(&self) -> Option<u32> {
+		self.prevote_index
 	}
 
 	/// Return the number of messages seen before precommiting.
 	/// None in case we didn't precommit yet.
-	pub fn precommit_idx(&self) -> Option<u64> {
-		self.precommit_idx
+	pub fn precommit_index(&self) -> Option<u32> {
+		self.precommit_index
 	}
 
 	/// Set the number of messages seen before prevoting.
-	pub fn set_prevoted_idx(&mut self) {
-		self.prevote_idx = Some(self.seen.len() as u64)
+	pub fn set_prevoted_index(&mut self) {
+		self.prevote_index = Some(self.seen.len() as u32)
 	}
 
 	/// Set the number of messages seen before precommiting.
-	pub fn set_precommited_idx(&mut self) {
-		self.precommit_idx = Some(self.seen.len() as u64)
+	pub fn set_precommited_index(&mut self) {
+		self.precommit_index = Some(self.seen.len() as u32)
 	}
+}
+
+pub trait AccountableSafety {
+	type Messages;
+
+	fn prevotes_seen(&self, round: u64) -> Self::Messages;
+	fn votes_seen_when_prevoted(&self, round: u64) -> Self::Messages;
+	fn votes_seen_when_precommited(&self, round: u64) -> Self::Messages;
 }
 
 #[cfg(test)]

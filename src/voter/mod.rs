@@ -93,10 +93,20 @@ pub trait Environment<H: Eq, N: BlockNumberOps>: Chain<H, N> {
 	fn proposed(&self, round: u64, propose: PrimaryPropose<H, N>) -> Result<(), Self::Error>;
 
 	/// Note that we have prevoted in the given round.
-	fn prevoted(&self, round: u64, prevote: Prevote<H, N>) -> Result<(), Self::Error>;
+	fn prevoted(
+		&self,
+		round: u64,
+		prevote: Prevote<H, N>,
+		votes: &HistoricalVotes<H, N, Self::Signature, Self::Id>,
+	) -> Result<(), Self::Error>;
 
 	/// Note that we have precommitted in the given round.
-	fn precommitted(&self, round: u64, precommit: Precommit<H, N>) -> Result<(), Self::Error>;
+	fn precommitted(
+		&self,
+		round: u64,
+		precommit: Precommit<H, N>,
+		votes: &HistoricalVotes<H, N, Self::Signature, Self::Id>,
+	) -> Result<(), Self::Error>;
 
 	/// Note that a round was completed. This is called when a round has been
 	/// voted in. Should return an error when something fatal occurs.
@@ -105,7 +115,7 @@ pub trait Environment<H: Eq, N: BlockNumberOps>: Chain<H, N> {
 		round: u64,
 		state: RoundState<H, N>,
 		base: (H, N),
-		votes: &HistoricalVotes<H, N, Self::Signature, Self::Id>,
+		historical_votes: &HistoricalVotes<H, N, Self::Signature, Self::Id>,
 	) -> Result<(), Self::Error>;
 
 	/// Called when a block should be finalized.
@@ -133,6 +143,19 @@ pub enum CommitProcessingOutcome {
 	Good(GoodCommit),
 	/// It wasn't beneficial to process this commit. We wasted resources.
 	Bad(BadCommit),
+}
+
+#[cfg(any(test, feature = "test-helpers"))]
+impl CommitProcessingOutcome {
+	/// Returns a `Good` instance of commit processing outcome's opaque type. Useful for testing.
+	pub fn good() -> CommitProcessingOutcome {
+		CommitProcessingOutcome::Good(GoodCommit::new())
+	}
+
+	/// Returns a `Bad` instance of commit processing outcome's opaque type. Useful for testing.
+	pub fn bad() -> CommitProcessingOutcome {
+		CommitProcessingOutcome::Bad(CommitValidationResult::<(), ()>::default().into())
+	}
 }
 
 /// The result of processing for a good commit.
@@ -202,6 +225,19 @@ pub enum CatchUpProcessingOutcome {
 	/// The catch up wasn't processed because it is useless, e.g. it is for a
 	/// round lower than we're currently in.
 	Useless,
+}
+
+#[cfg(any(test, feature = "test-helpers"))]
+impl CatchUpProcessingOutcome {
+	/// Returns a `Bad` instance of catch up processing outcome's opaque type. Useful for testing.
+	pub fn bad() -> CatchUpProcessingOutcome {
+		CatchUpProcessingOutcome::Bad(BadCatchUp::new())
+	}
+
+	/// Returns a `Good` instance of catch up processing outcome's opaque type. Useful for testing.
+	pub fn good() -> CatchUpProcessingOutcome {
+		CatchUpProcessingOutcome::Good(GoodCatchUp::new())
+	}
 }
 
 /// The result of processing for a good catch up.

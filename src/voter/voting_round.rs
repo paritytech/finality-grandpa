@@ -315,8 +315,31 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 		self.best_finalized.as_ref()
 	}
 
-	/// Return all votes for the round (prevotes and precommits),
-	/// sorted by imported order and indicating the indices where we voted.
+	/// Return all imported votes for the round (prevotes and precommits).
+	pub(super) fn votes(&self) -> impl Iterator<Item = SignedMessage<H, N, E::Signature, E::Id>> {
+		let prevotes = self.votes.prevotes().into_iter().map(|(id, prevote, signature)| {
+			SignedMessage {
+				id,
+				signature,
+				message: Message::Prevote(prevote),
+			}
+		});
+
+		let precommits = self.votes.precommits().into_iter().map(|(id, precommit, signature)| {
+			SignedMessage {
+				id,
+				signature,
+				message: Message::Precommit(precommit),
+			}
+		});
+
+		prevotes.chain(precommits)
+	}
+
+	/// Return all votes for the round (prevotes and precommits), sorted by
+	/// imported order and indicating the indices where we voted. At most two
+	/// prevotes and two precommits per voter are present, further equivocations
+	/// are not stored (as they are redundant).
 	pub(super) fn historical_votes(&self) -> &HistoricalVotes<H, N, E::Signature, E::Id> {
 		self.votes.historical_votes()
 	}
@@ -414,8 +437,8 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 				if self.voting.is_active() {
 					if let Some(prevote) = self.construct_prevote(last_round_state)? {
 						debug!(target: "afg", "Casting prevote for round {}", self.votes.number());
-						self.env.prevoted(self.round_number(), prevote.clone())?;
 						self.votes.set_prevoted_index();
+						self.env.prevoted(self.round_number(), prevote.clone(), self.votes.historical_votes())?;
 						self.outgoing.push(Message::Prevote(prevote));
 					}
 				}
@@ -467,8 +490,8 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 					if self.voting.is_active() {
 						debug!(target: "afg", "Casting precommit for round {}", self.votes.number());
 						let precommit = self.construct_precommit();
-						self.env.precommitted(self.round_number(), precommit.clone())?;
 						self.votes.set_precommited_index();
+						self.env.precommitted(self.round_number(), precommit.clone(), self.votes.historical_votes())?;
 						self.outgoing.push(Message::Precommit(precommit));
 					}
 					self.state = Some(State::Precommitted);

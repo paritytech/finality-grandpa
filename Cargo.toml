@@ -1,6 +1,6 @@
 [package]
 name = "finality-grandpa"
-version = "0.8.0"
+version = "0.8.1"
 description = "PBFT-based finality gadget for blockchains"
 authors = ["Parity Technologies <admin@parity.io>"]
 license = "Apache-2.0"
@@ -26,3 +26,4 @@ tokio = "0.1.8"
 default = ["std"]
 std = ["parity-codec/std", "hashmap_core/disable"]
 derive-codec = ["parity-codec"]
+test-helpers = []

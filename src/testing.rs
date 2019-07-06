@@ -24,7 +24,10 @@ use tokio::timer::Delay;
 use parking_lot::Mutex;
 use futures::prelude::*;
 use futures::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
-use super::{Chain, Commit, Error, Equivocation, Message, Prevote, Precommit, PrimaryPropose, SignedMessage, HistoricalVotes};
+use super::{
+	Chain, Commit, Error, Equivocation, Message, Prevote, Precommit,
+	PrimaryPropose, SignedMessage, HistoricalVotes,
+};
 
 pub const GENESIS_HASH: &str = "genesis";
 const NULL_HASH: &str = "NULL";
@@ -216,7 +219,7 @@ impl crate::voter::Environment<&'static str, u32> for Environment {
 		_round: u64,
 		_state: RoundState<&'static str, u32>,
 		_base: (&'static str, u32),
-		_votes: &HistoricalVotes<&'static str, u32, Self::Signature, Self::Id>,
+		_historical_votes: &HistoricalVotes<&'static str, u32, Self::Signature, Self::Id>,
 	) -> Result<(), Error> {
 		Ok(())
 	}
@@ -236,11 +239,11 @@ impl crate::voter::Environment<&'static str, u32> for Environment {
 		Ok(())
 	}
 
-	fn prevoted(&self, _round: u64, _prevote: Prevote<&'static str, u32>) -> Result<(), Self::Error> {
+	fn prevoted(&self, _round: u64, _prevote: Prevote<&'static str, u32>, _votes: &HistoricalVotes<&'static str, u32, Self::Signature, Self::Id>) -> Result<(), Self::Error> {
 		Ok(())
 	}
 
-	fn precommitted(&self, _round: u64, _precommit: Precommit<&'static str, u32>) -> Result<(), Self::Error> {
+	fn precommitted(&self, _round: u64, _precommit: Precommit<&'static str, u32>, _votes: &HistoricalVotes<&'static str, u32, Self::Signature, Self::Id>) -> Result<(), Self::Error> {
 		Ok(())
 	}
 

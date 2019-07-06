@@ -330,4 +330,12 @@ impl<H, N: Copy> Message<H, N> {
 			Message::PrimaryPropose(ref v) => (&v.target_hash, v.target_number),
 		}
 	}
+
+	/// Return true if the message is a prevote.
+	pub fn is_prevote(&self) -> bool {
+		match *self {
+			Message::Prevote(_) => true,
+			_ => false,
+		}
+	}
 }

@@ -707,7 +707,10 @@ impl<Id, H, N, Signature> Round<Id, H, N, Signature> where
 		self.precommit.votes()
 	}
 
-	/// Return all votes (prevotes and precommits) by importing order.
+	/// Return all votes for the round (prevotes and precommits), sorted by
+	/// imported order and indicating the indices where we voted. At most two
+	/// prevotes and two precommits per voter are present, further equivocations
+	/// are not stored (as they are redundant).
 	pub fn historical_votes(&self) -> &HistoricalVotes<H, N, Signature, Id> {
 		&self.historical_votes
 	}
@@ -715,25 +718,25 @@ impl<Id, H, N, Signature> Round<Id, H, N, Signature> where
 	/// Set the number of prevotes and precommits received at the moment of prevoting.
 	/// It should be called inmediatly after prevoting.
 	pub fn set_prevoted_index(&mut self) {
-		self.historical_votes.set_prevoted_idx()
+		self.historical_votes.set_prevoted_index()
 	}
 
 	/// Set the number of prevotes and precommits received at the moment of precommiting.
 	/// It should be called inmediatly after precommiting.
 	pub fn set_precommited_index(&mut self) {
-		self.historical_votes.set_precommited_idx()
+		self.historical_votes.set_precommited_index()
 	}
 
 	/// Get the number of prevotes and precommits received at the moment of prevoting.
 	/// Returns None if the prevote wasn't realized.
-	pub fn prevoted_index(&self) -> Option<u64> {
-		self.historical_votes.prevote_idx
+	pub fn prevoted_index(&self) -> Option<u32> {
+		self.historical_votes.prevote_index
 	}
 
 	/// Get the number of prevotes and precommits received at the moment of precommiting.
 	/// Returns None if the precommit wasn't realized.
-	pub fn precommited_index(&self) -> Option<u64> {
-		self.historical_votes.precommit_idx
+	pub fn precommited_index(&self) -> Option<u32> {
+		self.historical_votes.precommit_index
 	}
 }
 
