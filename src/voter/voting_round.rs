@@ -316,7 +316,7 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 	}
 
 	/// Return all imported votes for the round (prevotes and precommits).
-	pub(super) fn votes(&self) -> Vec<SignedMessage<H, N, E::Signature, E::Id>> {
+	pub(super) fn votes(&self) -> impl Iterator<Item = SignedMessage<H, N, E::Signature, E::Id>> {
 		let prevotes = self.votes.prevotes().into_iter().map(|(id, prevote, signature)| {
 			SignedMessage {
 				id,
@@ -333,7 +333,7 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 			}
 		});
 
-		prevotes.chain(precommits).collect()
+		prevotes.chain(precommits)
 	}
 
 	/// Return all votes for the round (prevotes and precommits), sorted by

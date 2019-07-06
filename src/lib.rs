@@ -226,14 +226,6 @@ impl<H, N: Copy> Message<H, N> {
 			Message::PrimaryPropose(ref v) => (&v.target_hash, v.target_number),
 		}
 	}
-
-	/// Return true if the message is a prevote.
-	pub fn is_prevote(&self) -> bool {
-		match *self {
-			Message::Prevote(_) => true,
-			_ => false,
-		}
-	}
 }
 
 /// A signed message.
@@ -564,11 +556,11 @@ impl<H, N, S, Id> HistoricalVotes<H, N, S, Id> {
 }
 
 pub trait AccountableSafety {
-	type Message;
+	type Messages;
 
-	fn prevotes_seen(&self, round: u64) -> Vec<Self::Message>;
-	fn votes_seen_when_prevoted(&self, round: u64) -> Vec<Self::Message>;
-	fn votes_seen_when_precommited(&self, round: u64) -> Vec<Self::Message>;
+	fn prevotes_seen(&self, round: u64) -> Self::Messages;
+	fn votes_seen_when_prevoted(&self, round: u64) -> Self::Messages;
+	fn votes_seen_when_precommited(&self, round: u64) -> Self::Messages;
 }
 
 #[cfg(test)]
