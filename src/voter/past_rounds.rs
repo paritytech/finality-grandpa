@@ -21,10 +21,14 @@
 //!   - Informing it of any new finalized block heights
 //!   - Passing it any validated commits (so backgrounded rounds don't produce conflicting ones)
 
+#[cfg(feature = "std")]
+use futures::try_ready;
 use futures::prelude::*;
 use futures::stream::{self, futures_unordered::FuturesUnordered};
 use futures::task;
 use futures::sync::mpsc;
+#[cfg(feature = "std")]
+use log::{trace, debug};
 
 use std::cmp;
 use std::collections::HashMap;
@@ -58,8 +62,13 @@ impl<H, N, E: Environment<H, N>> BackgroundRound<H, N, E> where
 
 	fn is_done(&self) -> bool {
 		// no need to listen on a round anymore once the estimate is finalized.
+		//
+		// we map `None` to true because
+		//   - rounds are not backgrounded when incomplete unless we've skipped forward
+		//   - if we skipped forward we may never complete this round and we don't need
+		//     to keep it forever.
 		self.round_committer.is_none() && self.inner.round_state().estimate
-			.map_or(false, |x| (x.1) <= self.finalized_number)
+			.map_or(true, |x| x.1 <= self.finalized_number)
 	}
 
 	fn update_finalized(&mut self, new_finalized: N) {

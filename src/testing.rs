@@ -219,7 +219,6 @@ impl crate::voter::Environment<&'static str, u32> for Environment {
 		_round: u64,
 		_state: RoundState<&'static str, u32>,
 		_base: (&'static str, u32),
-		_votes: Vec<SignedMessage<H, N, Self::Signature, Self::Id>>,
 		_historical_votes: &HistoricalVotes<&'static str, u32, Self::Signature, Self::Id>,
 	) -> Result<(), Error> {
 		Ok(())
@@ -274,6 +273,10 @@ impl<M: Clone> BroadcastNetwork<M> {
 			senders: Vec::new(),
 			history: Vec::new(),
 		}
+	}
+
+	pub fn send_message(&self, message: M) {
+		let _ = self.raw_sender.unbounded_send(message);
 	}
 
 	// add a node to the network for a round.
@@ -358,8 +361,12 @@ impl Network {
 		let mut global_messages = self.global_messages.lock();
 		global_messages.add_node(|message| match message {
 			CommunicationOut::Commit(r, commit) => CommunicationIn::Commit(r, commit.into(), Callback::Blank),
-			CommunicationOut::Auxiliary(aux) => CommunicationIn::Auxiliary(aux),
 		})
+	}
+
+	/// Send a message to all nodes.
+	pub fn send_message(&self, message: CommunicationIn<&'static str, u32, Signature, Id>) {
+		self.global_messages.lock().send_message(message);
 	}
 }
 

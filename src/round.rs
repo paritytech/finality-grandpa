@@ -17,6 +17,9 @@
 use std::hash::Hash;
 use std::ops::AddAssign;
 
+#[cfg(feature = "derive-codec")]
+use parity_codec::{Encode, Decode};
+
 use crate::collections::{hash_map::{HashMap, Entry}, Vec};
 use crate::bitfield::{Shared as BitfieldContext, Bitfield};
 use crate::vote_graph::VoteGraph;
@@ -553,7 +556,6 @@ impl<Id, H, N, Signature> Round<Id, H, N, Signature> where
 
 		let voters = &self.voters;
 
-
 		let (g_hash, g_num) = match self.prevote_ghost.clone() {
 			None => return,
 			Some(x) => x,
@@ -697,7 +699,10 @@ impl<Id, H, N, Signature> Round<Id, H, N, Signature> where
 		self.precommit.votes()
 	}
 
-	/// Return all votes (prevotes and precommits) by importing order.
+	/// Return all votes for the round (prevotes and precommits), sorted by
+	/// imported order and indicating the indices where we voted. At most two
+	/// prevotes and two precommits per voter are present, further equivocations
+	/// are not stored (as they are redundant).
 	pub fn historical_votes(&self) -> &HistoricalVotes<H, N, Signature, Id> {
 		&self.historical_votes
 	}
@@ -716,13 +721,13 @@ impl<Id, H, N, Signature> Round<Id, H, N, Signature> where
 
 	/// Get the number of prevotes and precommits received at the moment of prevoting.
 	/// Returns None if the prevote wasn't realized.
-	pub fn prevoted_index(&self) -> Option<usize> {
+	pub fn prevoted_index(&self) -> Option<u64> {
 		self.historical_votes.prevote_idx
 	}
 
 	/// Get the number of prevotes and precommits received at the moment of precommiting.
 	/// Returns None if the precommit wasn't realized.
-	pub fn precommited_index(&self) -> Option<usize> {
+	pub fn precommited_index(&self) -> Option<u64> {
 		self.historical_votes.precommit_idx
 	}
 }

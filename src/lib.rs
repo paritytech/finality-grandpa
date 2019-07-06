@@ -28,28 +28,6 @@
 #![cfg_attr(not(feature = "std"), no_std)]
 #![cfg_attr(not(feature = "std"), feature(alloc))]
 
-extern crate parking_lot;
-extern crate num_traits as num;
-
-#[cfg_attr(feature = "std", macro_use)]
-extern crate futures;
-#[cfg_attr(feature = "std", macro_use)]
-extern crate log;
-
-#[cfg(test)]
-extern crate exit_future;
-#[cfg(test)]
-extern crate rand;
-#[cfg(test)]
-extern crate tokio;
-
-#[cfg(feature = "derive-codec")]
-#[macro_use]
-extern crate parity_codec_derive;
-
-#[cfg(feature = "derive-codec")]
-extern crate parity_codec;
-
 #[cfg(not(feature = "std"))]
 extern crate core as std;
 
@@ -75,6 +53,8 @@ use collections::Vec;
 use std::fmt;
 use crate::voter_set::VoterSet;
 use round::ImportResult;
+#[cfg(feature = "derive-codec")]
+use parity_codec::{Encode, Decode};
 
 #[cfg(not(feature = "std"))]
 mod collections {
@@ -165,9 +145,9 @@ pub trait BlockNumberOps:
 	std::cmp::Ord +
 	std::ops::Add<Output=Self> +
 	std::ops::Sub<Output=Self> +
-	crate::num::One +
-	crate::num::Zero +
-	crate::num::AsPrimitive<usize>
+	num::One +
+	num::Zero +
+	num::AsPrimitive<usize>
 {}
 
 impl<T> BlockNumberOps for T where
@@ -175,9 +155,9 @@ impl<T> BlockNumberOps for T where
 	T: std::cmp::Ord,
 	T: std::ops::Add<Output=Self>,
 	T: std::ops::Sub<Output=Self>,
-	T: crate::num::One,
-	T: crate::num::Zero,
-	T: crate::num::AsPrimitive<usize>,
+	T: num::One,
+	T: num::Zero,
+	T: num::AsPrimitive<usize>,
 {}
 
 /// Chain context necessary for implementation of the finality gadget.
@@ -287,6 +267,18 @@ pub struct Commit<H, N, S, Id> {
 	pub precommits: Vec<SignedPrecommit<H, N, S, Id>>,
 }
 
+/// A signed prevote message.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "derive-codec", derive(Encode, Decode))]
+pub struct SignedPrevote<H, N, S, Id> {
+	/// The prevote message which has been signed.
+	pub prevote: Prevote<H, N>,
+	/// The signature on the message.
+	pub signature: S,
+	/// The Id of the signer.
+	pub id: Id,
+}
+
 /// A signed precommit message.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "derive-codec", derive(Encode, Decode))]
@@ -310,12 +302,32 @@ pub struct CompactCommit<H, N, S, Id> {
 	/// Precommits for target block or any block after it that justify this commit.
 	pub precommits: Vec<Precommit<H, N>>,
 	/// Authentication data for the commit.
-	pub auth_data: CommitAuthData<S, Id>,
+	pub auth_data: MultiAuthData<S, Id>,
 }
 
-/// Authentication data for a commit, currently a set of precommit signatures but
+/// A catch-up message, which is an aggregate of prevotes and precommits necessary
+/// to complete a round.
+///
+/// This message contains a "base", which is a block all of the vote-targets are
+/// a descendent of.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "derive-codec", derive(Encode, Decode))]
+pub struct CatchUp<H, N, S, Id> {
+	/// Round number.
+	pub round_number: u64,
+	/// Prevotes for target block or any block after it that justify this catch-up.
+	pub prevotes: Vec<SignedPrevote<H, N, S, Id>>,
+	/// Precommits for target block or any block after it that justify this catch-up.
+	pub precommits: Vec<SignedPrecommit<H, N, S, Id>>,
+	/// The base hash. See struct docs.
+	pub base_hash: H,
+	/// The base number. See struct docs.
+	pub base_number: N,
+}
+
+/// Authentication data for a set of many messages, currently a set of precommit signatures but
 /// in the future could be optimized with BLS signature aggregation.
-pub type CommitAuthData<S, Id> = Vec<(S, Id)>;
+pub type MultiAuthData<S, Id> = Vec<(S, Id)>;
 
 impl<H, N, S, Id> From<CompactCommit<H, N, S, Id>> for Commit<H, N, S, Id> {
 	fn from(commit: CompactCommit<H, N, S, Id>) -> Commit<H, N, S, Id> {
@@ -473,7 +485,7 @@ pub fn threshold(total_weight: u64) -> u64 {
 /// good otherwise.
 pub fn process_commit_validation_result<H, N>(
 	validation_result: CommitValidationResult<H, N>,
-	mut callback: voter::Callback,
+	mut callback: voter::Callback<voter::CommitProcessingOutcome>,
 ) {
 	if let Some(_) = validation_result.ghost {
 		callback.run(
@@ -491,8 +503,8 @@ pub fn process_commit_validation_result<H, N>(
 #[cfg_attr(feature = "derive-codec", derive(Encode, Decode))]
 pub struct HistoricalVotes<H, N, S, Id> {
 	seen: Vec<SignedMessage<H, N, S, Id>>,
-	prevote_idx: Option<usize>,
-	precommit_idx: Option<usize>,
+	prevote_idx: Option<u64>,
+	precommit_idx: Option<u64>,
 }
 
 impl<H, N, S, Id> HistoricalVotes<H, N, S, Id> {
@@ -508,8 +520,8 @@ impl<H, N, S, Id> HistoricalVotes<H, N, S, Id> {
 	/// Create a new HistoricalVotes initialized from the parameters.
 	pub fn new_with(
 		seen: Vec<SignedMessage<H, N, S, Id>>,
-		prevote_idx: Option<usize>,
-		precommit_idx: Option<usize>
+		prevote_idx: Option<u64>,
+		precommit_idx: Option<u64>
 	) -> Self {
 		HistoricalVotes {
 			seen,
@@ -530,24 +542,24 @@ impl<H, N, S, Id> HistoricalVotes<H, N, S, Id> {
 
 	/// Return the number of messages seen before prevoting.
 	/// None in case we didn't prevote yet.
-	pub fn prevote_idx(&self) -> Option<usize> {
+	pub fn prevote_idx(&self) -> Option<u64> {
 		self.prevote_idx
 	}
 
 	/// Return the number of messages seen before precommiting.
 	/// None in case we didn't precommit yet.
-	pub fn precommit_idx(&self) -> Option<usize> {
+	pub fn precommit_idx(&self) -> Option<u64> {
 		self.precommit_idx
 	}
 
 	/// Set the number of messages seen before prevoting.
 	pub fn set_prevoted_idx(&mut self) {
-		self.prevote_idx = Some(self.seen.len())
+		self.prevote_idx = Some(self.seen.len() as u64)
 	}
 
 	/// Set the number of messages seen before precommiting.
 	pub fn set_precommited_idx(&mut self) {
-		self.precommit_idx = Some(self.seen.len())
+		self.precommit_idx = Some(self.seen.len() as u64)
 	}
 }
 
