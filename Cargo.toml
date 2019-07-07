@@ -24,6 +24,6 @@ tokio = "0.1.8"
 
 [features]
 default = ["std"]
-std = ["parity-codec/std", "hashmap_core/disable"]
+std = ["parity-codec/std", "hashmap_core/disable", "primitives/std"]
 derive-codec = ["parity-codec"]
 test-helpers = []

@@ -17,6 +17,8 @@
 use core::hash::Hash;
 use core::ops::AddAssign;
 
+use parity_codec::{Encode, Decode};
+
 use alloc::collections::{BTreeMap, btree_map::Entry};
 use alloc::vec::Vec;
 use crate::bitfield::{Shared as BitfieldContext, Bitfield};
@@ -184,8 +186,7 @@ impl<Id: Hash + Eq + Clone + Ord, Vote: Clone + Eq, Signature: Clone + Eq> VoteT
 }
 
 /// State of the round.
-#[derive(PartialEq, Clone, Debug)]
-#[cfg_attr(feature = "derive-codec", derive(Encode, Decode))]
+#[derive(PartialEq, Clone, Debug, Encode, Decode)]
 pub struct State<H, N> {
 	/// The prevote-GHOST block.
 	pub prevote_ghost: Option<(H, N)>,

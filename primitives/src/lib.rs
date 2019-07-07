@@ -27,6 +27,7 @@ mod round;
 
 #[cfg(feature = "std")]
 use serde::Serialize;
+
 use parity_codec::{Encode, Decode};
 use core::fmt;
 use alloc::vec::Vec;
@@ -36,7 +37,7 @@ use round::ImportResult;
 
 /// A commit message which is an aggregate of precommits.
 #[cfg_attr(feature = "std", derive(Serialize))]
-#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
+#[derive(Clone, Eq, PartialEq, Debug, Encode, Decode)]
 pub struct Commit<H, N, S, Id> {
 	/// The target block's hash.
 	pub target_hash: H,
