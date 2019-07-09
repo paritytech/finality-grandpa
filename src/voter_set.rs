@@ -49,7 +49,7 @@ impl<Id: Hash + Eq> VoterSet<Id> {
 	}
 
 	/// Get voter info by index.
-	pub fn weight_by_index<'a>(&'a self, idx: usize) -> Option<u64> {
+	pub fn weight_by_index(&self, idx: usize) -> Option<u64> {
 		self.voters.get(idx).map(|&(_, weight)| weight)
 	}
 
