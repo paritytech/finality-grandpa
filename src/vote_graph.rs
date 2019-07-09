@@ -243,12 +243,14 @@ impl<H, N, V> VoteGraph<H, N, V> where
 		// constrain it to be within the canonical chain.
 		let good_subchain = self.ghost_find_merge_point(node_key, active_node, None, condition);
 
-		// TODO: binding is required for some reason.
-		let x = good_subchain.blocks_reverse().find(|&(ref good_hash, good_number)|
-			canonical_node.in_direct_ancestry(good_hash, good_number).unwrap_or(false)
-		);
+		// FIXME: binding is required for some reason.
+		let mut blocks_reverse = good_subchain.blocks_reverse();
 
-		x
+		blocks_reverse.find(|&(ref good_hash, good_number)| {
+			canonical_node
+				.in_direct_ancestry(good_hash, good_number)
+				.unwrap_or(false)
+		})
 	}
 
 	/// Find the best GHOST descendent of the given block.
