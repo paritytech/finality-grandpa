@@ -260,7 +260,7 @@ pub enum Callback<O> {
 	/// Default value.
 	Blank,
 	/// Callback to execute given a processing outcome.
-	Work(Box<FnMut(O) + Send>),
+	Work(Box<dyn FnMut(O) + Send>),
 }
 
 #[cfg(test)]
