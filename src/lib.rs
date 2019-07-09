@@ -442,7 +442,7 @@ pub fn validate_commit<H, N, S, I, C: Chain<H, N>>(
 		base: (commit.target_hash.clone(), commit.target_number),
 	});
 
-	for SignedPrecommit { precommit, id, signature } in commit.precommits.iter() {
+	for SignedPrecommit { precommit, id, signature } in &commit.precommits {
 		match round.import_precommit(chain, precommit.clone(), id.clone(), signature.clone())? {
 			ImportResult { equivocation: Some(_), .. } => {
 				validation_result.num_equivocations += 1;

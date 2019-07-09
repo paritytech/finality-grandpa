@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Maintains the VoterSet of the blockchain.
+//! Maintains the `VoterSet` of the blockchain.
 //!
 //! See docs on `VoterSet` for more information.
 

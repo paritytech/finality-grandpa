@@ -362,7 +362,7 @@ impl<H, N, V> VoteGraph<H, N, V> where
 			offset = offset + N::one();
 
 			let mut new_best = None;
-			for d_node in descendent_nodes.iter() {
+			for d_node in &descendent_nodes {
 				if let Some(d_block) = d_node.ancestor_block(base_number + offset) {
 					match descendent_blocks.binary_search_by_key(&d_block, |&(ref x, _)| x) {
 						Ok(idx) => {

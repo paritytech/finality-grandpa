@@ -170,7 +170,7 @@ impl<Id: Hash + Eq + Clone, Vote: Clone + Eq, Signature: Clone + Eq> VoteTracker
 	fn votes(&self) -> Vec<(Id, Vote, Signature)> {
 		let mut votes = Vec::new();
 
-		for (id, vote) in self.votes.iter() {
+		for (id, vote) in &self.votes {
 			match vote {
 				VoteMultiplicity::Single(v, s) => {
 					votes.push((id.clone(), v.clone(), s.clone()))
