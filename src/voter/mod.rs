@@ -356,6 +356,13 @@ impl<S: Sink> Buffered<S> {
 	}
 }
 
+type FinalizedNotification<H, N, E> = (
+	H,
+	N,
+	u64,
+	Commit<H, N, <E as Environment<H, N>>::Signature, <E as Environment<H, N>>::Id>,
+);
+
 /// A future that maintains and multiplexes between different rounds,
 /// and caches votes.
 ///
@@ -384,7 +391,7 @@ pub struct Voter<H, N, E: Environment<H, N>, GlobalIn, GlobalOut> where
 	voters: VoterSet<E::Id>,
 	best_round: VotingRound<H, N, E>,
 	past_rounds: PastRounds<H, N, E>,
-	finalized_notifications: UnboundedReceiver<(H, N, u64, Commit<H, N, E::Signature, E::Id>)>,
+	finalized_notifications: UnboundedReceiver<FinalizedNotification<H, N, E>>,
 	last_finalized_number: N,
 	global_in: GlobalIn,
 	global_out: Buffered<GlobalOut>,

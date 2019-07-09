@@ -31,7 +31,7 @@ use crate::{
 	HistoricalVotes,
 };
 use crate::voter_set::VoterSet;
-use super::{Environment, Buffered};
+use super::{Environment, Buffered, FinalizedNotification};
 
 /// The state of a voting round.
 pub(super) enum State<T> {
@@ -66,7 +66,7 @@ pub(super) struct VotingRound<H, N, E: Environment<H, N>> where
 	bridged_round_state: Option<crate::bridge_state::PriorView<H, N>>, // updates to later round
 	last_round_state: Option<crate::bridge_state::LatterView<H, N>>, // updates from prior round
 	primary_block: Option<(H, N)>, // a block posted by primary as a hint.
-	finalized_sender: UnboundedSender<(H, N, u64, Commit<H, N, E::Signature, E::Id>)>,
+	finalized_sender: UnboundedSender<FinalizedNotification<H, N, E>>,
 	best_finalized: Option<Commit<H, N, E::Signature, E::Id>>,
 }
 
@@ -110,7 +110,7 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 		voters: VoterSet<E::Id>,
 		base: (H, N),
 		last_round_state: Option<crate::bridge_state::LatterView<H, N>>,
-		finalized_sender: UnboundedSender<(H, N, u64, Commit<H, N, E::Signature, E::Id>)>,
+		finalized_sender: UnboundedSender<FinalizedNotification<H, N, E>>,
 		env: Arc<E>,
 	) -> VotingRound<H, N, E> {
 		let round_data = env.round_data(round_number);
@@ -155,7 +155,7 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 	/// in this round.
 	pub (super) fn completed(
 		votes: Round<E::Id, H, N, E::Signature>,
-		finalized_sender: UnboundedSender<(H, N, u64, Commit<H, N, E::Signature, E::Id>)>,
+		finalized_sender: UnboundedSender<FinalizedNotification<H, N, E>>,
 		env: Arc<E>,
 	) -> VotingRound<H, N, E> {
 
@@ -291,9 +291,7 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 	}
 
 	/// Get a clone of the finalized sender.
-	pub(super) fn finalized_sender(&self)
-		-> UnboundedSender<(H, N, u64, Commit<H, N, E::Signature, E::Id>)>
-	{
+	pub(super) fn finalized_sender(&self) -> UnboundedSender<FinalizedNotification<H, N, E>> {
 		self.finalized_sender.clone()
 	}
 
