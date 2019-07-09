@@ -84,7 +84,7 @@ impl<Id: Hash + Eq + Clone + Ord> std::iter::FromIterator<(Id, u64)> for VoterSe
 		voters.sort_unstable();
 
 		for (idx, (id, weight)) in voters.iter().enumerate() {
-			weights.insert(id.clone(), VoterInfo { canon_idx: idx, weight: weight.clone() });
+			weights.insert(id.clone(), VoterInfo { canon_idx: idx, weight: *weight });
 		}
 
 		let threshold = threshold(total_weight);

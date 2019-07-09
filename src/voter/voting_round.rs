@@ -584,12 +584,12 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 				(&Some(State::Precommitted), Some((ref f_hash, ref f_number))) => {
 					let commit = Commit {
 						target_hash: f_hash.clone(),
-						target_number: f_number.clone(),
+						target_number: *f_number,
 						precommits: self.votes.finalizing_precommits(&*self.env)
 							.expect("always returns none if something was finalized; this is checked above; qed")
 							.collect(),
 					};
-					let finalized = (f_hash.clone(), f_number.clone(), self.votes.number(), commit.clone());
+					let finalized = (f_hash.clone(), *f_number, self.votes.number(), commit.clone());
 
 					let _ = self.finalized_sender.unbounded_send(finalized);
 					self.best_finalized = Some(commit);

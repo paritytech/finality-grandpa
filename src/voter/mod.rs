@@ -419,7 +419,7 @@ impl<H, N, E: Environment<H, N>, GlobalIn, GlobalOut> Voter<H, N, E, GlobalIn, G
 		last_finalized: (H, N),
 	) -> Self {
 		let (finalized_sender, finalized_notifications) = mpsc::unbounded();
-		let last_finalized_number = last_finalized.1.clone();
+		let last_finalized_number = last_finalized.1;
 		let (_, last_round_state) = crate::bridge_state::bridge_state(last_round_state);
 
 		let best_round = VotingRound::new(
@@ -464,8 +464,8 @@ impl<H, N, E: Environment<H, N>, GlobalIn, GlobalOut> Voter<H, N, E, GlobalIn, G
 
 			self.past_rounds.update_finalized(f_num);
 
-			if self.set_last_finalized_number(f_num.clone()) {
-				self.env.finalize_block(f_hash.clone(), f_num.clone(), round, commit)?;
+			if self.set_last_finalized_number(f_num) {
+				self.env.finalize_block(f_hash.clone(), f_num, round, commit)?;
 			}
 
 			if f_num > self.last_finalized_in_rounds.1 {
@@ -510,7 +510,7 @@ impl<H, N, E: Environment<H, N>, GlobalIn, GlobalOut> Voter<H, N, E, GlobalIn, G
 							let last_finalized_number = &mut self.last_finalized_number;
 
 							if finalized_number > *last_finalized_number {
-								*last_finalized_number = finalized_number.clone();
+								*last_finalized_number = finalized_number;
 								self.env.finalize_block(finalized_hash, finalized_number, round_number, commit)?;
 							}
 							process_commit_outcome.run(CommitProcessingOutcome::Good(GoodCommit::new()));
@@ -755,7 +755,7 @@ fn validate_catch_up<H, N, S, I, E>(
 	let mut round = crate::round::Round::new(crate::round::RoundParams {
 		round_number: catch_up.round_number,
 		voters: voters.clone(),
-		base: (catch_up.base_hash.clone(), catch_up.base_number.clone()),
+		base: (catch_up.base_hash.clone(), catch_up.base_number),
 	});
 
 	// import prevotes first.
