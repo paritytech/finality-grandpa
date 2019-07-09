@@ -296,7 +296,7 @@ impl<H, N, V> VoteGraph<H, N, V> where
 			let next_descendent = active_node.descendents
 				.iter()
 				.map(|d| (d.clone(), get_node(d)))
-				.filter(|&(_, ref node)| {
+				.filter(|&(_, node)| {
 					// take only descendents with our block in the ancestry.
 					if let (true, Some(&(ref h, n))) = (force_constrain, current_best.as_ref()) {
 						node.in_direct_ancestry(h, n).unwrap_or(false)
@@ -304,7 +304,7 @@ impl<H, N, V> VoteGraph<H, N, V> where
 						true
 					}
 				})
-				.find(|&(_, ref node)| condition(&node.cumulative_vote));
+				.find(|&(_, node)| condition(&node.cumulative_vote));
 
 			match next_descendent {
 				Some((key, node)) => {
@@ -498,7 +498,7 @@ impl<H, N, V> VoteGraph<H, N, V> where
 				let prev_ancestor_node = self.entries.get_mut(&prev_ancestor)
 					.expect("Prior ancestor is referenced from a node; qed");
 
-				prev_ancestor_node.descendents.retain(|h| !new_entry.descendents.contains(&h));
+				prev_ancestor_node.descendents.retain(|h| !new_entry.descendents.contains(h));
 				prev_ancestor_node.descendents.push(ancestor_hash.clone());
 			}
 
