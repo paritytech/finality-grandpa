@@ -420,13 +420,15 @@ pub fn validate_commit<H, N, S, I, C: Chain<H, N>>(
 
 	// check that all precommits are for blocks higher than the target
 	// commit block, and that they're its descendents
-	if !commit.precommits.iter().all(|signed| {
+	let all_precommits_higher_than_target = commit.precommits.iter().all(|signed| {
 		signed.precommit.target_number >= commit.target_number &&
 			chain.is_equal_or_descendent_of(
 				commit.target_hash.clone(),
 				signed.precommit.target_hash.clone(),
 			)
-	}) {
+	});
+
+	if !all_precommits_higher_than_target {
 		return Ok(validation_result);
 	}
 
