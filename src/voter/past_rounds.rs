@@ -157,7 +157,7 @@ impl<H, N, E: Environment<H, N>> RoundCommitter<H, N, E> where
 		commit: Commit<H, N, E::Signature, E::Id>,
 	) -> Result<bool, E::Error> {
 		// ignore commits for a block lower than we already finalized
-		if commit.target_number < voting_round.finalized().map(|(_, n)| *n).unwrap_or_else(N::zero) {
+		if commit.target_number < voting_round.finalized().map_or_else(N::zero, |(_, n)| *n) {
 			return Ok(true);
 		}
 
