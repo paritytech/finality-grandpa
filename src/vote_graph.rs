@@ -51,7 +51,7 @@ impl<H: Hash + PartialEq + Clone, N: BlockNumberOps, V> Entry<H, N, V> {
 
 	// get ancestor vote-node.
 	fn ancestor_node(&self) -> Option<H> {
-		self.ancestors.last().map(|x| x.clone())
+		self.ancestors.last().cloned()
 	}
 }
 
