@@ -734,7 +734,7 @@ fn validate_catch_up<H, N, S, I, E>(
 		let (pv, pc) = map.into_iter().fold(
 			(0, 0),
 			|(mut pv, mut pc), (id, (prevoted, precommitted))| {
-				let weight = voters.info(&id).map(|i| i.weight()).unwrap_or(0);
+				let weight = voters.info(&id).map_or(0, |i| i.weight());
 
 				if prevoted {
 					pv += weight;

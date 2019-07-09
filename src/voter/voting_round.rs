@@ -125,8 +125,7 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 			Voting::Primary
 		} else if round_data.voter_id
 			.as_ref()
-			.map(|id| votes.voters().contains_key(id))
-			.unwrap_or(false)
+			.map_or(false, |id| votes.voters().contains_key(id))
 		{
 			Voting::Yes
 		} else {
