@@ -302,8 +302,7 @@ impl<H, N, V> VoteGraph<H, N, V> where
 						true
 					}
 				})
-				.filter(|&(_, ref node)| condition(&node.cumulative_vote))
-				.next();
+				.find(|&(_, ref node)| condition(&node.cumulative_vote));
 
 			match next_descendent {
 				Some((key, node)) => {
