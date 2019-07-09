@@ -14,7 +14,7 @@
 
 //! Finality gadget for blockchains.
 //!
-//! https://github.com/w3f/consensus/blob/master/pdf/grandpa.pdf
+//! <https://github.com/w3f/consensus/blob/master/pdf/grandpa.pdf>
 //!
 //! Consensus proceeds in rounds. Each round, voters will cast a prevote
 //! and precommit message.
@@ -481,7 +481,7 @@ pub fn process_commit_validation_result<H, N>(
 	validation_result: CommitValidationResult<H, N>,
 	mut callback: voter::Callback<voter::CommitProcessingOutcome>,
 ) {
-	if let Some(_) = validation_result.ghost {
+	if validation_result.ghost.is_some() {
 		callback.run(
 			voter::CommitProcessingOutcome::Good(voter::GoodCommit::new())
 		)

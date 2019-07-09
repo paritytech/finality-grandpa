@@ -85,8 +85,7 @@ impl Voting {
 	/// Whether the voter should cast round votes (prevotes and precommits.)
 	fn is_active(&self) -> bool {
 		match self {
-			Voting::Yes => true,
-			Voting::Primary => true,
+			Voting::Yes | Voting::Primary => true,
 			_ => false,
 		}
 	}
@@ -420,12 +419,10 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 					}
 				}
 				self.state = Some(State::Prevoted(precommit_timer));
+			} else if proposed {
+				self.state = Some(State::Proposed(prevote_timer, precommit_timer));
 			} else {
-				if proposed {
-					self.state = Some(State::Proposed(prevote_timer, precommit_timer));
-				} else {
-					self.state = Some(State::Start(prevote_timer, precommit_timer));
-				}
+				self.state = Some(State::Start(prevote_timer, precommit_timer));
 			}
 
 			Ok(())
@@ -536,14 +533,13 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 		let best_chain = self.env.best_chain_containing(find_descendent_of.clone());
 		debug_assert!(best_chain.is_some(), "Previously known block {:?} has disappeared from chain", find_descendent_of);
 
-		let t = match best_chain {
-			Some(target) => target,
-			None => {
-				// If this block is considered unknown, something has gone wrong.
-				// log and handle, but skip casting a vote.
-				warn!(target: "afg", "Could not cast prevote: previously known block {:?} has disappeared", find_descendent_of);
-				return Ok(None)
-			}
+		let t = if let Some(target) = best_chain {
+			target
+		} else {
+			// If this block is considered unknown, something has gone wrong.
+			// log and handle, but skip casting a vote.
+			warn!(target: "afg", "Could not cast prevote: previously known block {:?} has disappeared", find_descendent_of);
+			return Ok(None);
 		};
 
 		Ok(Some(Prevote {
@@ -578,21 +574,18 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 			// this is a workaround that ensures when we re-instantiate the voter after
 			// a shutdown, we never re-create the same round with a base that was finalized
 			// in this round or after.
-			match (&self.state, new_state.finalized) {
-				(&Some(State::Precommitted), Some((ref f_hash, ref f_number))) => {
-					let commit = Commit {
-						target_hash: f_hash.clone(),
-						target_number: *f_number,
-						precommits: self.votes.finalizing_precommits(&*self.env)
-							.expect("always returns none if something was finalized; this is checked above; qed")
-							.collect(),
-					};
-					let finalized = (f_hash.clone(), *f_number, self.votes.number(), commit.clone());
+			if let (&Some(State::Precommitted), Some((ref f_hash, ref f_number))) = (&self.state, new_state.finalized) {
+				let commit = Commit {
+					target_hash: f_hash.clone(),
+					target_number: *f_number,
+					precommits: self.votes.finalizing_precommits(&*self.env)
+						.expect("always returns none if something was finalized; this is checked above; qed")
+						.collect(),
+				};
+				let finalized = (f_hash.clone(), *f_number, self.votes.number(), commit.clone());
 
-					let _ = self.finalized_sender.unbounded_send(finalized);
-					self.best_finalized = Some(commit);
-				}
-				_ => {}
+				let _ = self.finalized_sender.unbounded_send(finalized);
+				self.best_finalized = Some(commit);
 			}
 		}
 	}

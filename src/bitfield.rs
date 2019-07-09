@@ -87,12 +87,12 @@ impl Bitfield {
 			(&Bitfield::Live(ref live), &Bitfield::Blank) | (&Bitfield::Blank, &Bitfield::Live(ref live))
 				=> Ok(Bitfield::Live(live.clone())),
 			(&Bitfield::Live(ref a), &Bitfield::Live(ref b)) => {
-				if a.bits.len() != b.bits.len() {
-					// we can't merge two bitfields with different lengths.
-					Err(Error::LengthMismatch(a.bits.len(), b.bits.len()))
-				} else {
+				if a.bits.len() == b.bits.len() {
 					let bits = a.bits.iter().zip(&b.bits).map(|(a, b)| a | b).collect();
 					Ok(Bitfield::Live(LiveBitfield { bits }))
+				} else {
+					// we can't merge two bitfields with different lengths.
+					Err(Error::LengthMismatch(a.bits.len(), b.bits.len()))
 				}
 			}
 		}
@@ -102,13 +102,13 @@ impl Bitfield {
 	pub fn overlap(&self, other: &Self) -> Result<Self, Error> {
 		match (self, other) {
 			(&Bitfield::Live(ref a), &Bitfield::Live(ref b)) => {
-				if a.bits.len() != b.bits.len() {
-					// we can't find overlap of two bitfields with different lengths.
-					Err(Error::LengthMismatch(a.bits.len(), b.bits.len()))
-				} else {
+				if a.bits.len() == b.bits.len() {
 					Ok(Bitfield::Live(LiveBitfield {
 						bits: a.bits.iter().zip(&b.bits).map(|(a, b)| a & b).collect(),
 					}))
+				} else {
+					// we can't find overlap of two bitfields with different lengths.
+					Err(Error::LengthMismatch(a.bits.len(), b.bits.len()))
 				}
 			}
 			_ => Ok(Bitfield::Blank)

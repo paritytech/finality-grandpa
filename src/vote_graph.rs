@@ -164,13 +164,14 @@ impl<H, N, V> VoteGraph<H, N, V> where
 
 	/// Insert a vote with given value into the graph at given hash and number.
 	pub fn insert<C: Chain<H, N>>(&mut self, hash: H, number: N, vote: V, chain: &C) -> Result<(), Error> {
-		match self.find_containing_nodes(hash.clone(), number) {
-			Some(containing) => if containing.is_empty() {
+		if let Some(containing) = self.find_containing_nodes(hash.clone(), number) {
+			if containing.is_empty() {
 				self.append(hash.clone(), number, chain)?;
 			} else {
 				self.introduce_branch(containing, hash.clone(), number);
-			},
-			None => {}, // this entry already exists
+			}
+		} else {
+			// this entry already exists
 		}
 
 		// update cumulative vote data.

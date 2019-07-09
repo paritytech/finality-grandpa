@@ -535,17 +535,16 @@ impl<H, N, E: Environment<H, N>, GlobalIn, GlobalOut> Voter<H, N, E, GlobalIn, G
 				CommunicationIn::CatchUp(catch_up, mut process_catch_up_outcome) => {
 					trace!(target: "afg", "Got catch-up message for round {}", catch_up.round_number);
 
-					let round = match validate_catch_up(
+					let round = if let Some(round) = validate_catch_up(
 						catch_up,
 						&*self.env,
 						&self.voters,
 						self.best_round.round_number(),
 					) {
-						Some(round) => round,
-						None => {
-							process_catch_up_outcome.run(CatchUpProcessingOutcome::Bad(BadCatchUp::new()));
-							return Ok(());
-						},
+						round
+					} else {
+						process_catch_up_outcome.run(CatchUpProcessingOutcome::Bad(BadCatchUp::new()));
+						return Ok(());
 					};
 
 					let state = round.state();
