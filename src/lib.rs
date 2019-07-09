@@ -413,7 +413,7 @@ pub fn validate_commit<H, N, S, I, C: Chain<H, N>>(
 	H: std::hash::Hash + Clone + Eq + Ord + std::fmt::Debug,
 	N: Copy + BlockNumberOps + std::fmt::Debug,
 	I: Clone + std::hash::Hash + Eq + std::fmt::Debug,
-	S: Eq,
+	S: Clone + Eq,
 {
 	let mut validation_result = CommitValidationResult::default();
 	validation_result.num_precommits = commit.precommits.len();
