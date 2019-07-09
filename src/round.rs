@@ -135,10 +135,10 @@ impl<Id: Hash + Eq + Clone, Vote: Clone + Eq, Signature: Clone + Eq> VoteTracker
 				self.current_weight += weight;
 				let multiplicity = vacant.insert(VoteMultiplicity::Single(vote, signature));
 
-				return AddVoteResult {
+				AddVoteResult {
 					multiplicity: Some(multiplicity),
 					duplicated: false,
-				};
+				}
 			}
 			Entry::Occupied(mut occupied) => {
 				if occupied.get().contains(&vote, &signature) {
