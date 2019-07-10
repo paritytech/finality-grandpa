@@ -799,18 +799,22 @@ fn validate_catch_up<H, N, S, I, E>(
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use crate::SignedPrecommit;
+	use crate::testing::{
+		self,
+		chain::GENESIS_HASH,
+		environment::{Environment, Id, Signature},
+	};
+	use std::time::Duration;
 	use tokio::prelude::FutureExt;
 	use tokio::runtime::current_thread;
-	use crate::SignedPrecommit;
-	use crate::testing::{self, GENESIS_HASH, Environment, Id};
-	use std::time::Duration;
 
 	#[test]
 	fn talking_to_myself() {
 		let local_id = Id(5);
 		let voters = std::iter::once((local_id, 100)).collect();
 
-		let (network, routing_task) = testing::make_network();
+		let (network, routing_task) = testing::environment::make_network();
 		let (signal, exit) = ::exit_future::signal();
 
 		let global_comms = network.make_global_comms();
@@ -852,7 +856,7 @@ mod tests {
 		// 10 voters
 		let voters: VoterSet<_> = (0..10).map(|i| (Id(i), 1)).collect();
 
-		let (network, routing_task) = testing::make_network();
+		let (network, routing_task) = testing::environment::make_network();
 		let (signal, exit) = ::exit_future::signal();
 
 		current_thread::block_on_all(::futures::future::lazy(move || {
@@ -898,7 +902,7 @@ mod tests {
 		let local_id = Id(5);
 		let voters: VoterSet<_> = std::iter::once((local_id, 100)).collect();
 
-		let (network, routing_task) = testing::make_network();
+		let (network, routing_task) = testing::environment::make_network();
 		let (commits, _) = network.make_global_comms();
 
 		let (signal, exit) = ::exit_future::signal();
@@ -942,7 +946,7 @@ mod tests {
 			(test_id, 201),
 		].iter().cloned().collect();
 
-		let (network, routing_task) = testing::make_network();
+		let (network, routing_task) = testing::environment::make_network();
 		let (commits_stream, commits_sink) = network.make_global_comms();
 		let (round_stream, round_sink) = network.make_round_comms(1, test_id);
 
@@ -961,7 +965,7 @@ mod tests {
 			target_number: 6,
 			precommits: vec![SignedPrecommit {
 				precommit: Precommit { target_hash: "E", target_number: 6 },
-				signature: testing::Signature(test_id.0),
+				signature: Signature(test_id.0),
 				id: test_id
 			}],
 		});
@@ -1039,7 +1043,7 @@ mod tests {
 			(test_id, 201),
 		].iter().cloned().collect();
 
-		let (network, routing_task) = testing::make_network();
+		let (network, routing_task) = testing::environment::make_network();
 		let (_, commits_sink) = network.make_global_comms();
 
 		let (signal, exit) = ::exit_future::signal();
@@ -1050,7 +1054,7 @@ mod tests {
 			target_number: 6,
 			precommits: vec![SignedPrecommit {
 				precommit: Precommit { target_hash: "E", target_number: 6 },
-				signature: testing::Signature(test_id.0),
+				signature: Signature(test_id.0),
 				id: test_id
 			}],
 		});
@@ -1096,7 +1100,7 @@ mod tests {
 		// 3 voters
 		let voters: VoterSet<_> = (0..3).map(|i| (Id(i), 1)).collect();
 
-		let (network, routing_task) = testing::make_network();
+		let (network, routing_task) = testing::environment::make_network();
 		let (signal, exit) = ::exit_future::signal();
 
 		current_thread::block_on_all(::futures::future::lazy(move || {
@@ -1127,13 +1131,13 @@ mod tests {
 			let pv = |id| crate::SignedPrevote {
 				prevote: crate::Prevote { target_hash: "C", target_number: 4 },
 				id: Id(id),
-				signature: testing::Signature(99),
+				signature: Signature(99),
 			};
 
 			let pc = |id| crate::SignedPrecommit {
 				precommit: crate::Precommit { target_hash: "C", target_number: 4 },
 				id: Id(id),
-				signature: testing::Signature(99),
+				signature: Signature(99),
 			};
 
 			// send in a catch-up message for round 5.

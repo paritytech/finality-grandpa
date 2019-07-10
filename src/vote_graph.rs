@@ -545,7 +545,7 @@ impl<H, N, V> VoteGraph<H, N, V> where
 #[cfg(test)]
 mod tests {
 	use super::*;
-	use crate::testing::{GENESIS_HASH, DummyChain};
+	use crate::testing::chain::{GENESIS_HASH, DummyChain};
 
 	#[test]
 	fn graph_fork_not_at_node() {
