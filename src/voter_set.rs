@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Maintains the VoterSet of the blockchain.
+//! Maintains the `VoterSet` of the blockchain.
 //!
 //! See docs on `VoterSet` for more information.
 
@@ -49,7 +49,7 @@ impl<Id: Hash + Eq> VoterSet<Id> {
 	}
 
 	/// Get voter info by index.
-	pub fn weight_by_index<'a>(&'a self, idx: usize) -> Option<u64> {
+	pub fn weight_by_index(&self, idx: usize) -> Option<u64> {
 		self.voters.get(idx).map(|&(_, weight)| weight)
 	}
 
@@ -84,7 +84,7 @@ impl<Id: Hash + Eq + Clone + Ord> std::iter::FromIterator<(Id, u64)> for VoterSe
 		voters.sort_unstable();
 
 		for (idx, (id, weight)) in voters.iter().enumerate() {
-			weights.insert(id.clone(), VoterInfo { canon_idx: idx, weight: weight.clone() });
+			weights.insert(id.clone(), VoterInfo { canon_idx: idx, weight: *weight });
 		}
 
 		let threshold = threshold(total_weight);

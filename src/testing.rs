@@ -187,11 +187,11 @@ pub mod environment {
 	}
 
 	impl crate::voter::Environment<&'static str, u32> for Environment {
-		type Timer = Box<Future<Item=(),Error=Error> + Send + 'static>;
+		type Timer = Box<dyn Future<Item=(),Error=Error> + Send + 'static>;
 		type Id = Id;
 		type Signature = Signature;
-		type In = Box<Stream<Item=SignedMessage<&'static str, u32, Signature, Id>,Error=Error> + Send + 'static>;
-		type Out = Box<Sink<SinkItem=Message<&'static str, u32>,SinkError=Error> + Send + 'static>;
+		type In = Box<dyn Stream<Item=SignedMessage<&'static str, u32, Signature, Id>,Error=Error> + Send + 'static>;
+		type Out = Box<dyn Sink<SinkItem=Message<&'static str, u32>,SinkError=Error> + Send + 'static>;
 		type Error = Error;
 
 		fn round_data(&self, round: u64) -> RoundData<Self::Id, Self::Timer, Self::In, Self::Out> {
