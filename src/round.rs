@@ -735,7 +735,7 @@ impl<Id, H, N, Signature> Round<Id, H, N, Signature> where
 #[cfg(test)]
 mod tests {
 	use super::*;
-	use crate::testing::{GENESIS_HASH, DummyChain};
+	use crate::testing::chain::{GENESIS_HASH, DummyChain};
 
 	fn voters() -> VoterSet<&'static str> {
 		[

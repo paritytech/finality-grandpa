@@ -26,7 +26,6 @@
 //! The work for actually casting votes is done in the `voter` module.
 
 #![cfg_attr(not(feature = "std"), no_std)]
-#![cfg_attr(not(feature = "std"), feature(alloc))]
 
 #[cfg(not(feature = "std"))]
 extern crate core as std;
@@ -477,6 +476,7 @@ pub fn threshold(total_weight: u64) -> u64 {
 /// Runs the callback with the appropriate `CommitProcessingOutcome` based on
 /// the given `CommitValidationResult`. Outcome is bad if ghost is undefined,
 /// good otherwise.
+#[cfg(feature = "std")]
 pub fn process_commit_validation_result<H, N>(
 	validation_result: CommitValidationResult<H, N>,
 	mut callback: voter::Callback<voter::CommitProcessingOutcome>,
