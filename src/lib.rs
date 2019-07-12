@@ -14,7 +14,7 @@
 
 //! Finality gadget for blockchains.
 //!
-//! https://github.com/w3f/consensus/blob/master/pdf/grandpa.pdf
+//! <https://github.com/w3f/consensus/blob/master/pdf/grandpa.pdf>
 //!
 //! Consensus proceeds in rounds. Each round, voters will cast a prevote
 //! and precommit message.
@@ -26,7 +26,6 @@
 //! The work for actually casting votes is done in the `voter` module.
 
 #![cfg_attr(not(feature = "std"), no_std)]
-#![cfg_attr(not(feature = "std"), feature(alloc))]
 
 #[cfg(not(feature = "std"))]
 extern crate core as std;
@@ -421,20 +420,22 @@ pub fn validate_commit<H, N, S, I, C: Chain<H, N>>(
 	H: std::hash::Hash + Clone + Eq + Ord + std::fmt::Debug,
 	N: Copy + BlockNumberOps + std::fmt::Debug,
 	I: Clone + std::hash::Hash + Eq + std::fmt::Debug,
-	S: Eq,
+	S: Clone + Eq,
 {
 	let mut validation_result = CommitValidationResult::default();
 	validation_result.num_precommits = commit.precommits.len();
 
 	// check that all precommits are for blocks higher than the target
 	// commit block, and that they're its descendents
-	if !commit.precommits.iter().all(|signed| {
+	let all_precommits_higher_than_target = commit.precommits.iter().all(|signed| {
 		signed.precommit.target_number >= commit.target_number &&
 			chain.is_equal_or_descendent_of(
 				commit.target_hash.clone(),
 				signed.precommit.target_hash.clone(),
 			)
-	}) {
+	});
+
+	if !all_precommits_higher_than_target {
 		return Ok(validation_result);
 	}
 
@@ -448,7 +449,7 @@ pub fn validate_commit<H, N, S, I, C: Chain<H, N>>(
 		base: (commit.target_hash.clone(), commit.target_number),
 	});
 
-	for SignedPrecommit { precommit, id, signature } in commit.precommits.iter() {
+	for SignedPrecommit { precommit, id, signature } in &commit.precommits {
 		match round.import_precommit(chain, precommit.clone(), id.clone(), signature.clone())? {
 			ImportResult { equivocation: Some(_), .. } => {
 				validation_result.num_equivocations += 1;
@@ -483,11 +484,12 @@ pub fn threshold(total_weight: u64) -> u64 {
 /// Runs the callback with the appropriate `CommitProcessingOutcome` based on
 /// the given `CommitValidationResult`. Outcome is bad if ghost is undefined,
 /// good otherwise.
+#[cfg(feature = "std")]
 pub fn process_commit_validation_result<H, N>(
 	validation_result: CommitValidationResult<H, N>,
 	mut callback: voter::Callback<voter::CommitProcessingOutcome>,
 ) {
-	if let Some(_) = validation_result.ghost {
+	if validation_result.ghost.is_some() {
 		callback.run(
 			voter::CommitProcessingOutcome::Good(voter::GoodCommit::new())
 		)
@@ -499,7 +501,7 @@ pub fn process_commit_validation_result<H, N>(
 }
 
 /// Historical votes seen in a round.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "derive-codec", derive(Encode, Decode))]
 pub struct HistoricalVotes<H, N, S, Id> {
 	seen: Vec<SignedMessage<H, N, S, Id>>,

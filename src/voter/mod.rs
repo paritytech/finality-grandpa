@@ -270,7 +270,7 @@ pub enum Callback<O> {
 	/// Default value.
 	Blank,
 	/// Callback to execute given a processing outcome.
-	Work(Box<FnMut(O) + Send>),
+	Work(Box<dyn FnMut(O) + Send>),
 }
 
 #[cfg(test)]
@@ -366,6 +366,13 @@ impl<S: Sink> Buffered<S> {
 	}
 }
 
+type FinalizedNotification<H, N, E> = (
+	H,
+	N,
+	u64,
+	Commit<H, N, <E as Environment<H, N>>::Signature, <E as Environment<H, N>>::Id>,
+);
+
 /// A future that maintains and multiplexes between different rounds,
 /// and caches votes.
 ///
@@ -394,7 +401,7 @@ pub struct Voter<H, N, E: Environment<H, N>, GlobalIn, GlobalOut> where
 	voters: VoterSet<E::Id>,
 	best_round: VotingRound<H, N, E>,
 	past_rounds: PastRounds<H, N, E>,
-	finalized_notifications: UnboundedReceiver<(H, N, u64, Commit<H, N, E::Signature, E::Id>)>,
+	finalized_notifications: UnboundedReceiver<FinalizedNotification<H, N, E>>,
 	last_finalized_number: N,
 	global_in: GlobalIn,
 	global_out: Buffered<GlobalOut>,
@@ -429,7 +436,7 @@ impl<H, N, E: Environment<H, N>, GlobalIn, GlobalOut> Voter<H, N, E, GlobalIn, G
 		last_finalized: (H, N),
 	) -> Self {
 		let (finalized_sender, finalized_notifications) = mpsc::unbounded();
-		let last_finalized_number = last_finalized.1.clone();
+		let last_finalized_number = last_finalized.1;
 		let (_, last_round_state) = crate::bridge_state::bridge_state(last_round_state);
 
 		let best_round = VotingRound::new(
@@ -474,8 +481,8 @@ impl<H, N, E: Environment<H, N>, GlobalIn, GlobalOut> Voter<H, N, E, GlobalIn, G
 
 			self.past_rounds.update_finalized(f_num);
 
-			if self.set_last_finalized_number(f_num.clone()) {
-				self.env.finalize_block(f_hash.clone(), f_num.clone(), round, commit)?;
+			if self.set_last_finalized_number(f_num) {
+				self.env.finalize_block(f_hash.clone(), f_num, round, commit)?;
 			}
 
 			if f_num > self.last_finalized_in_rounds.1 {
@@ -520,7 +527,7 @@ impl<H, N, E: Environment<H, N>, GlobalIn, GlobalOut> Voter<H, N, E, GlobalIn, G
 							let last_finalized_number = &mut self.last_finalized_number;
 
 							if finalized_number > *last_finalized_number {
-								*last_finalized_number = finalized_number.clone();
+								*last_finalized_number = finalized_number;
 								self.env.finalize_block(finalized_hash, finalized_number, round_number, commit)?;
 							}
 							process_commit_outcome.run(CommitProcessingOutcome::Good(GoodCommit::new()));
@@ -538,17 +545,16 @@ impl<H, N, E: Environment<H, N>, GlobalIn, GlobalOut> Voter<H, N, E, GlobalIn, G
 				CommunicationIn::CatchUp(catch_up, mut process_catch_up_outcome) => {
 					trace!(target: "afg", "Got catch-up message for round {}", catch_up.round_number);
 
-					let round = match validate_catch_up(
+					let round = if let Some(round) = validate_catch_up(
 						catch_up,
 						&*self.env,
 						&self.voters,
 						self.best_round.round_number(),
 					) {
-						Some(round) => round,
-						None => {
-							process_catch_up_outcome.run(CatchUpProcessingOutcome::Bad(BadCatchUp::new()));
-							return Ok(());
-						},
+						round
+					} else {
+						process_catch_up_outcome.run(CatchUpProcessingOutcome::Bad(BadCatchUp::new()));
+						return Ok(());
 					};
 
 					let state = round.state();
@@ -738,7 +744,7 @@ fn validate_catch_up<H, N, S, I, E>(
 		let (pv, pc) = map.into_iter().fold(
 			(0, 0),
 			|(mut pv, mut pc), (id, (prevoted, precommitted))| {
-				let weight = voters.info(&id).map(|i| i.weight()).unwrap_or(0);
+				let weight = voters.info(&id).map_or(0, |i| i.weight());
 
 				if prevoted {
 					pv += weight;
@@ -765,7 +771,7 @@ fn validate_catch_up<H, N, S, I, E>(
 	let mut round = crate::round::Round::new(crate::round::RoundParams {
 		round_number: catch_up.round_number,
 		voters: voters.clone(),
-		base: (catch_up.base_hash.clone(), catch_up.base_number.clone()),
+		base: (catch_up.base_hash.clone(), catch_up.base_number),
 	});
 
 	// import prevotes first.
@@ -809,18 +815,22 @@ fn validate_catch_up<H, N, S, I, E>(
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use crate::SignedPrecommit;
+	use crate::testing::{
+		self,
+		chain::GENESIS_HASH,
+		environment::{Environment, Id, Signature},
+	};
+	use std::time::Duration;
 	use tokio::prelude::FutureExt;
 	use tokio::runtime::current_thread;
-	use crate::SignedPrecommit;
-	use crate::testing::{self, GENESIS_HASH, Environment, Id};
-	use std::time::Duration;
 
 	#[test]
 	fn talking_to_myself() {
 		let local_id = Id(5);
 		let voters = std::iter::once((local_id, 100)).collect();
 
-		let (network, routing_task) = testing::make_network();
+		let (network, routing_task) = testing::environment::make_network();
 		let (signal, exit) = ::exit_future::signal();
 
 		let global_comms = network.make_global_comms();
@@ -862,7 +872,7 @@ mod tests {
 		// 10 voters
 		let voters: VoterSet<_> = (0..10).map(|i| (Id(i), 1)).collect();
 
-		let (network, routing_task) = testing::make_network();
+		let (network, routing_task) = testing::environment::make_network();
 		let (signal, exit) = ::exit_future::signal();
 
 		current_thread::block_on_all(::futures::future::lazy(move || {
@@ -908,7 +918,7 @@ mod tests {
 		let local_id = Id(5);
 		let voters: VoterSet<_> = std::iter::once((local_id, 100)).collect();
 
-		let (network, routing_task) = testing::make_network();
+		let (network, routing_task) = testing::environment::make_network();
 		let (commits, _) = network.make_global_comms();
 
 		let (signal, exit) = ::exit_future::signal();
@@ -952,7 +962,7 @@ mod tests {
 			(test_id, 201),
 		].iter().cloned().collect();
 
-		let (network, routing_task) = testing::make_network();
+		let (network, routing_task) = testing::environment::make_network();
 		let (commits_stream, commits_sink) = network.make_global_comms();
 		let (round_stream, round_sink) = network.make_round_comms(1, test_id);
 
@@ -971,7 +981,7 @@ mod tests {
 			target_number: 6,
 			precommits: vec![SignedPrecommit {
 				precommit: Precommit { target_hash: "E", target_number: 6 },
-				signature: testing::Signature(test_id.0),
+				signature: Signature(test_id.0),
 				id: test_id
 			}],
 		});
@@ -1049,7 +1059,7 @@ mod tests {
 			(test_id, 201),
 		].iter().cloned().collect();
 
-		let (network, routing_task) = testing::make_network();
+		let (network, routing_task) = testing::environment::make_network();
 		let (_, commits_sink) = network.make_global_comms();
 
 		let (signal, exit) = ::exit_future::signal();
@@ -1060,7 +1070,7 @@ mod tests {
 			target_number: 6,
 			precommits: vec![SignedPrecommit {
 				precommit: Precommit { target_hash: "E", target_number: 6 },
-				signature: testing::Signature(test_id.0),
+				signature: Signature(test_id.0),
 				id: test_id
 			}],
 		});
@@ -1106,7 +1116,7 @@ mod tests {
 		// 3 voters
 		let voters: VoterSet<_> = (0..3).map(|i| (Id(i), 1)).collect();
 
-		let (network, routing_task) = testing::make_network();
+		let (network, routing_task) = testing::environment::make_network();
 		let (signal, exit) = ::exit_future::signal();
 
 		current_thread::block_on_all(::futures::future::lazy(move || {
@@ -1137,13 +1147,13 @@ mod tests {
 			let pv = |id| crate::SignedPrevote {
 				prevote: crate::Prevote { target_hash: "C", target_number: 4 },
 				id: Id(id),
-				signature: testing::Signature(99),
+				signature: Signature(99),
 			};
 
 			let pc = |id| crate::SignedPrecommit {
 				precommit: crate::Precommit { target_hash: "C", target_number: 4 },
 				id: Id(id),
-				signature: testing::Signature(99),
+				signature: Signature(99),
 			};
 
 			// send in a catch-up message for round 5.

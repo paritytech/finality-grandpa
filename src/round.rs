@@ -135,10 +135,10 @@ impl<Id: Hash + Eq + Clone, Vote: Clone + Eq, Signature: Clone + Eq> VoteTracker
 				self.current_weight += weight;
 				let multiplicity = vacant.insert(VoteMultiplicity::Single(vote, signature));
 
-				return AddVoteResult {
+				AddVoteResult {
 					multiplicity: Some(multiplicity),
 					duplicated: false,
-				};
+				}
 			}
 			Entry::Occupied(mut occupied) => {
 				if occupied.get().contains(&vote, &signature) {
@@ -170,7 +170,7 @@ impl<Id: Hash + Eq + Clone, Vote: Clone + Eq, Signature: Clone + Eq> VoteTracker
 	fn votes(&self) -> Vec<(Id, Vote, Signature)> {
 		let mut votes = Vec::new();
 
-		for (id, vote) in self.votes.iter() {
+		for (id, vote) in &self.votes {
 			match vote {
 				VoteMultiplicity::Single(v, s) => {
 					votes.push((id.clone(), v.clone(), s.clone()))
@@ -522,7 +522,7 @@ impl<Id, H, N, Signature> Round<Id, H, N, Signature> where
 
 		let (f_hash, _f_num) = self.finalized.clone()?;
 		let find_valid_precommits = self.precommit.votes.iter()
-			.filter(move |&(_id, ref multiplicity)| {
+			.filter(move |&(_id, multiplicity)| {
 				if let VoteMultiplicity::Single(ref v, _) = *multiplicity {
 					// if there is a single vote from this voter, we only include it
 					// if it branches off of the target.
@@ -569,7 +569,7 @@ impl<Id, H, N, Signature> Round<Id, H, N, Signature> where
 			self.finalized = self.graph.find_ancestor(
 				g_hash.clone(),
 				g_num,
-				|v| v.total_weight(&equivocators, voters).precommit >= threshold,
+				|v| v.total_weight(equivocators, voters).precommit >= threshold,
 			);
 		};
 
@@ -593,7 +593,7 @@ impl<Id, H, N, Signature> Round<Id, H, N, Signature> where
 
 			move |weight: &VoteWeight| {
 				// total precommits for this block, including equivocations.
-				let precommitted_for = weight.total_weight(&equivocators, voters)
+				let precommitted_for = weight.total_weight(equivocators, voters)
 					.precommit;
 
 				// equivocations we could still get are out of those who
@@ -735,7 +735,7 @@ impl<Id, H, N, Signature> Round<Id, H, N, Signature> where
 #[cfg(test)]
 mod tests {
 	use super::*;
-	use crate::testing::{GENESIS_HASH, DummyChain};
+	use crate::testing::chain::{GENESIS_HASH, DummyChain};
 
 	fn voters() -> VoterSet<&'static str> {
 		[

@@ -13,6 +13,11 @@ cache: cargo
 
 jobs:
   include:
+  - stage: "Test (no std)"
+    rust: nightly
+    os: linux
+    script:
+    - cargo test --no-default-features
   - stage: "Code coverage"
     rust: nightly
     os: linux

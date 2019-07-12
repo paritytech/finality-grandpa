@@ -51,7 +51,7 @@ impl<H: Hash + PartialEq + Clone, N: BlockNumberOps, V> Entry<H, N, V> {
 
 	// get ancestor vote-node.
 	fn ancestor_node(&self) -> Option<H> {
-		self.ancestors.last().map(|x| x.clone())
+		self.ancestors.last().cloned()
 	}
 }
 
@@ -164,13 +164,14 @@ impl<H, N, V> VoteGraph<H, N, V> where
 
 	/// Insert a vote with given value into the graph at given hash and number.
 	pub fn insert<C: Chain<H, N>>(&mut self, hash: H, number: N, vote: V, chain: &C) -> Result<(), Error> {
-		match self.find_containing_nodes(hash.clone(), number) {
-			Some(containing) => if containing.is_empty() {
+		if let Some(containing) = self.find_containing_nodes(hash.clone(), number) {
+			if containing.is_empty() {
 				self.append(hash.clone(), number, chain)?;
 			} else {
 				self.introduce_branch(containing, hash.clone(), number);
-			},
-			None => {}, // this entry already exists
+			}
+		} else {
+			// this entry already exists
 		}
 
 		// update cumulative vote data.
@@ -242,12 +243,14 @@ impl<H, N, V> VoteGraph<H, N, V> where
 		// constrain it to be within the canonical chain.
 		let good_subchain = self.ghost_find_merge_point(node_key, active_node, None, condition);
 
-		// TODO: binding is required for some reason.
-		let x = good_subchain.blocks_reverse().find(|&(ref good_hash, good_number)|
-			canonical_node.in_direct_ancestry(good_hash, good_number).unwrap_or(false)
-		);
+		// FIXME: binding is required for some reason.
+		let mut blocks_reverse = good_subchain.blocks_reverse();
 
-		x
+		blocks_reverse.find(|&(ref good_hash, good_number)| {
+			canonical_node
+				.in_direct_ancestry(good_hash, good_number)
+				.unwrap_or(false)
+		})
 	}
 
 	/// Find the best GHOST descendent of the given block.
@@ -293,7 +296,7 @@ impl<H, N, V> VoteGraph<H, N, V> where
 			let next_descendent = active_node.descendents
 				.iter()
 				.map(|d| (d.clone(), get_node(d)))
-				.filter(|&(_, ref node)| {
+				.filter(|&(_, node)| {
 					// take only descendents with our block in the ancestry.
 					if let (true, Some(&(ref h, n))) = (force_constrain, current_best.as_ref()) {
 						node.in_direct_ancestry(h, n).unwrap_or(false)
@@ -301,8 +304,7 @@ impl<H, N, V> VoteGraph<H, N, V> where
 						true
 					}
 				})
-				.filter(|&(_, ref node)| condition(&node.cumulative_vote))
-				.next();
+				.find(|&(_, node)| condition(&node.cumulative_vote));
 
 			match next_descendent {
 				Some((key, node)) => {
@@ -360,7 +362,7 @@ impl<H, N, V> VoteGraph<H, N, V> where
 			offset = offset + N::one();
 
 			let mut new_best = None;
-			for d_node in descendent_nodes.iter() {
+			for d_node in &descendent_nodes {
 				if let Some(d_block) = d_node.ancestor_block(base_number + offset) {
 					match descendent_blocks.binary_search_by_key(&d_block, |&(ref x, _)| x) {
 						Ok(idx) => {
@@ -496,7 +498,7 @@ impl<H, N, V> VoteGraph<H, N, V> where
 				let prev_ancestor_node = self.entries.get_mut(&prev_ancestor)
 					.expect("Prior ancestor is referenced from a node; qed");
 
-				prev_ancestor_node.descendents.retain(|h| !new_entry.descendents.contains(&h));
+				prev_ancestor_node.descendents.retain(|h| !new_entry.descendents.contains(h));
 				prev_ancestor_node.descendents.push(ancestor_hash.clone());
 			}
 
@@ -545,7 +547,7 @@ impl<H, N, V> VoteGraph<H, N, V> where
 #[cfg(test)]
 mod tests {
 	use super::*;
-	use crate::testing::{GENESIS_HASH, DummyChain};
+	use crate::testing::chain::{GENESIS_HASH, DummyChain};
 
 	#[test]
 	fn graph_fork_not_at_node() {

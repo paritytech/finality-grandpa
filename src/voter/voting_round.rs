@@ -31,7 +31,7 @@ use crate::{
 	HistoricalVotes,
 };
 use crate::voter_set::VoterSet;
-use super::{Environment, Buffered};
+use super::{Environment, Buffered, FinalizedNotification};
 
 /// The state of a voting round.
 pub(super) enum State<T> {
@@ -66,7 +66,7 @@ pub(super) struct VotingRound<H, N, E: Environment<H, N>> where
 	bridged_round_state: Option<crate::bridge_state::PriorView<H, N>>, // updates to later round
 	last_round_state: Option<crate::bridge_state::LatterView<H, N>>, // updates from prior round
 	primary_block: Option<(H, N)>, // a block posted by primary as a hint.
-	finalized_sender: UnboundedSender<(H, N, u64, Commit<H, N, E::Signature, E::Id>)>,
+	finalized_sender: UnboundedSender<FinalizedNotification<H, N, E>>,
 	best_finalized: Option<Commit<H, N, E::Signature, E::Id>>,
 }
 
@@ -85,8 +85,7 @@ impl Voting {
 	/// Whether the voter should cast round votes (prevotes and precommits.)
 	fn is_active(&self) -> bool {
 		match self {
-			Voting::Yes => true,
-			Voting::Primary => true,
+			Voting::Yes | Voting::Primary => true,
 			_ => false,
 		}
 	}
@@ -110,7 +109,7 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 		voters: VoterSet<E::Id>,
 		base: (H, N),
 		last_round_state: Option<crate::bridge_state::LatterView<H, N>>,
-		finalized_sender: UnboundedSender<(H, N, u64, Commit<H, N, E::Signature, E::Id>)>,
+		finalized_sender: UnboundedSender<FinalizedNotification<H, N, E>>,
 		env: Arc<E>,
 	) -> VotingRound<H, N, E> {
 		let round_data = env.round_data(round_number);
@@ -126,8 +125,7 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 			Voting::Primary
 		} else if round_data.voter_id
 			.as_ref()
-			.map(|id| votes.voters().contains_key(id))
-			.unwrap_or(false)
+			.map_or(false, |id| votes.voters().contains_key(id))
 		{
 			Voting::Yes
 		} else {
@@ -155,7 +153,7 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 	/// in this round.
 	pub (super) fn completed(
 		votes: Round<E::Id, H, N, E::Signature>,
-		finalized_sender: UnboundedSender<(H, N, u64, Commit<H, N, E::Signature, E::Id>)>,
+		finalized_sender: UnboundedSender<FinalizedNotification<H, N, E>>,
 		env: Arc<E>,
 	) -> VotingRound<H, N, E> {
 
@@ -277,7 +275,7 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 		&mut self,
 		commit: &Commit<H, N, E::Signature, E::Id>
 	) -> Result<Option<(H, N)>, E::Error> {
-		let base = validate_commit(&commit, self.voters(), &*self.env)?.ghost;
+		let base = validate_commit(commit, self.voters(), &*self.env)?.ghost;
 		if base.is_none() { return Ok(None) }
 
 		for SignedPrecommit { precommit, signature, id } in commit.precommits.iter().cloned() {
@@ -291,9 +289,7 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 	}
 
 	/// Get a clone of the finalized sender.
-	pub(super) fn finalized_sender(&self)
-		-> UnboundedSender<(H, N, u64, Commit<H, N, E::Signature, E::Id>)>
-	{
+	pub(super) fn finalized_sender(&self) -> UnboundedSender<FinalizedNotification<H, N, E>> {
 		self.finalized_sender.clone()
 	}
 
@@ -443,12 +439,10 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 					}
 				}
 				self.state = Some(State::Prevoted(precommit_timer));
+			} else if proposed {
+				self.state = Some(State::Proposed(prevote_timer, precommit_timer));
 			} else {
-				if proposed {
-					self.state = Some(State::Proposed(prevote_timer, precommit_timer));
-				} else {
-					self.state = Some(State::Start(prevote_timer, precommit_timer));
-				}
+				self.state = Some(State::Start(prevote_timer, precommit_timer));
 			}
 
 			Ok(())
@@ -559,14 +553,13 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 		let best_chain = self.env.best_chain_containing(find_descendent_of.clone());
 		debug_assert!(best_chain.is_some(), "Previously known block {:?} has disappeared from chain", find_descendent_of);
 
-		let t = match best_chain {
-			Some(target) => target,
-			None => {
-				// If this block is considered unknown, something has gone wrong.
-				// log and handle, but skip casting a vote.
-				warn!(target: "afg", "Could not cast prevote: previously known block {:?} has disappeared", find_descendent_of);
-				return Ok(None)
-			}
+		let t = if let Some(target) = best_chain {
+			target
+		} else {
+			// If this block is considered unknown, something has gone wrong.
+			// log and handle, but skip casting a vote.
+			warn!(target: "afg", "Could not cast prevote: previously known block {:?} has disappeared", find_descendent_of);
+			return Ok(None);
 		};
 
 		Ok(Some(Prevote {
@@ -601,21 +594,18 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 			// this is a workaround that ensures when we re-instantiate the voter after
 			// a shutdown, we never re-create the same round with a base that was finalized
 			// in this round or after.
-			match (&self.state, new_state.finalized) {
-				(&Some(State::Precommitted), Some((ref f_hash, ref f_number))) => {
-					let commit = Commit {
-						target_hash: f_hash.clone(),
-						target_number: f_number.clone(),
-						precommits: self.votes.finalizing_precommits(&*self.env)
-							.expect("always returns none if something was finalized; this is checked above; qed")
-							.collect(),
-					};
-					let finalized = (f_hash.clone(), f_number.clone(), self.votes.number(), commit.clone());
+			if let (&Some(State::Precommitted), Some((ref f_hash, ref f_number))) = (&self.state, new_state.finalized) {
+				let commit = Commit {
+					target_hash: f_hash.clone(),
+					target_number: *f_number,
+					precommits: self.votes.finalizing_precommits(&*self.env)
+						.expect("always returns none if something was finalized; this is checked above; qed")
+						.collect(),
+				};
+				let finalized = (f_hash.clone(), *f_number, self.votes.number(), commit.clone());
 
-					let _ = self.finalized_sender.unbounded_send(finalized);
-					self.best_finalized = Some(commit);
-				}
-				_ => {}
+				let _ = self.finalized_sender.unbounded_send(finalized);
+				self.best_finalized = Some(commit);
 			}
 		}
 	}
