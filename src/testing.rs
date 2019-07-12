@@ -248,6 +248,9 @@ pub mod environment {
 			chain.set_last_finalized((hash, number));
 			self.listeners.lock().retain(|s| s.unbounded_send((hash, number as _, commit.clone())).is_ok());
 
+			Ok(())
+		}
+
 		fn proposed(&self, _round: u64, _propose: PrimaryPropose<&'static str, u32>) -> Result<(), Self::Error> {
 			Ok(())
 		}
