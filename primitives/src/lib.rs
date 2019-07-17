@@ -341,4 +341,12 @@ impl<H, N: Copy> Message<H, N> {
 			_ => false,
 		}
 	}
+
+	/// Return true if the message is a precommit.
+	pub fn is_precommit(&self) -> bool {
+		match *self {
+			Message::Precommit(_) => true,
+			_ => false,
+		}
+	}
 }
