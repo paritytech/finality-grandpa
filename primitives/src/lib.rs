@@ -283,6 +283,7 @@ impl<H, N> Precommit<H, N> {
 }
 
 /// A primary proposed block, this is a broadcast of the last round's estimate.
+#[cfg_attr(feature = "std", derive(Serialize))]
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 pub struct PrimaryPropose<H, N> {
 	/// The target block's hash.
@@ -312,6 +313,7 @@ pub struct Equivocation<Id, V, S> {
 
 
 /// A protocol message or vote.
+#[cfg_attr(feature = "std", derive(Serialize))]
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 pub enum Message<H, N> {
 	/// A prevote message.

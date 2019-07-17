@@ -425,8 +425,7 @@ pub trait AccountableSafety {
 	type Messages;
 
 	fn prevotes_seen(&self, round: u64) -> Self::Messages;
-	fn votes_seen_when_prevoted(&self, round: u64) -> Self::Messages;
-	fn votes_seen_when_precommited(&self, round: u64) -> Self::Messages;
+	fn precommits_seen(&self, round: u64) -> Self::Messages;
 }
 
 #[cfg(test)]

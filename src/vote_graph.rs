@@ -56,6 +56,7 @@ impl<H: Hash + PartialEq + Clone, N: BlockNumberOps, V> Entry<H, N, V> {
 }
 
 // a subchain of blocks by hash.
+#[derive(Debug)]
 struct Subchain<H, N> {
 	hashes: Vec<H>, // forward order.
 	best_number: N,
@@ -79,6 +80,7 @@ impl<H: Clone, N: Copy + BlockNumberOps> Subchain<H, N> {
 
 /// Maintains a DAG of blocks in the chain which have votes attached to them,
 /// and vote data which is accumulated along edges.
+#[derive(Debug)]
 pub struct VoteGraph<H: Hash + Eq, N, V> {
 	entries: HashMap<H, Entry<H, N, V>>,
 	heads: HashSet<H>,
@@ -225,15 +227,19 @@ impl<H, N, V> VoteGraph<H, N, V> where
 			Some(_) => return None,
 		};
 
+		println!("hash {:?} number {:?}, k {:?} c {:?}", hash, number, node_key, canonical_node);
+
 		// search backwards until we find the first vote-node that
 		// meets the condition.
 		let mut active_node = get_node(&node_key);
+		println!("before loop active_node {:?} {:?}", node_key, active_node);
 		while !condition(&active_node.cumulative_vote) {
+			println!("prev_active_node {:?}", active_node);
 			node_key = match active_node.ancestor_node() {
 				Some(n) => n,
 				None => return None,
 			};
-
+			println!("prev_active_node {:?} node_key {:?}", active_node, node_key);
 			canonical_node = active_node;
 			active_node = get_node(&node_key);
 		}
@@ -241,6 +247,7 @@ impl<H, N, V> VoteGraph<H, N, V> where
 		// find the GHOST merge-point after the active_node.
 		// constrain it to be within the canonical chain.
 		let good_subchain = self.ghost_find_merge_point(node_key, active_node, None, condition);
+		println!("good chain {:?}", good_subchain);
 
 		// TODO: binding is required for some reason.
 		let x = good_subchain.blocks_reverse().find(|&(ref good_hash, good_number)|
@@ -458,7 +465,7 @@ impl<H, N, V> VoteGraph<H, N, V> where
 				.expect("this function only invoked with keys of vote-nodes; qed");
 
 			debug_assert!(entry.in_direct_ancestry(&ancestor_hash, ancestor_number).unwrap());
-
+			
 			// example: splitting number 10 at ancestor 4
 			// before: [9 8 7 6 5 4 3 2 1]
 			// after: [9 8 7 6 5 4], [3 2 1]
@@ -480,7 +487,6 @@ impl<H, N, V> VoteGraph<H, N, V> where
 						descendents: vec![],
 						cumulative_vote: V::default(),
 					};
-
 					(new_entry, prev_ancestor)
 				});
 
@@ -495,7 +501,6 @@ impl<H, N, V> VoteGraph<H, N, V> where
 			if let Some(prev_ancestor) = prev_ancestor {
 				let prev_ancestor_node = self.entries.get_mut(&prev_ancestor)
 					.expect("Prior ancestor is referenced from a node; qed");
-
 				prev_ancestor_node.descendents.retain(|h| !new_entry.descendents.contains(&h));
 				prev_ancestor_node.descendents.push(ancestor_hash.clone());
 			}
@@ -671,8 +676,12 @@ mod tests {
 
 		assert_eq!(tracker.entries.get(GENESIS_HASH).unwrap().descendents, vec!["FC", "ED"]);
 
+		println!("tracker before = {:?}", tracker);
 		// introduce a branch in the middle.
 		tracker.insert("E", 6, 3, &chain).unwrap();
+
+		println!("tracker after = {:?}", tracker);
+		
 
 		assert_eq!(tracker.entries.get(GENESIS_HASH).unwrap().descendents, vec!["E"]);
 		let descendents = &tracker.entries.get("E").unwrap().descendents;
