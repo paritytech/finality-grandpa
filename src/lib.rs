@@ -53,7 +53,7 @@ use std::fmt;
 use crate::voter_set::VoterSet;
 use round::ImportResult;
 #[cfg(feature = "derive-codec")]
-use parity_codec::{Encode, Decode};
+use parity_scale_codec::{Encode, Decode};
 
 #[cfg(not(feature = "std"))]
 mod collections {
@@ -578,7 +578,7 @@ mod tests {
 	#[cfg(feature = "derive-codec")]
 	#[test]
 	fn codec_was_derived() {
-		use parity_codec::{Encode, Decode};
+		use parity_scale_codec::{Encode, Decode};
 
 		let signed = crate::SignedMessage {
 			message: crate::Message::Prevote(crate::Prevote {
