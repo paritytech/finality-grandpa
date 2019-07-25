@@ -8,11 +8,11 @@ repository = "https://github.com/paritytech/finality-grandpa"
 edition = "2018"
 
 [dependencies]
-parking_lot = "0.6"
-log = "0.4"
+parking_lot = "0.9"
 futures = "0.1"
+log = "0.4"
 parity-codec = { version = "4.1", optional = true, default-features = false, features = ["derive"] }
-num = { package = "num-traits", version = "0.2" }
+num = { package = "num-traits", version = "0.2", default-features = false }
 hashmap_core = { version = "0.1.10", default-features = false }
 
 [dev-dependencies]
@@ -22,6 +22,6 @@ tokio = "0.1.8"
 
 [features]
 default = ["std"]
-std = ["parity-codec/std", "hashmap_core/disable"]
+std = ["parity-codec/std", "hashmap_core/disable", "num/std"]
 derive-codec = ["parity-codec"]
 test-helpers = []
