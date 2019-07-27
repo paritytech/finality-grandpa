@@ -29,13 +29,12 @@
 //! bitfield will be mostly empty.
 
 use std::fmt;
+
+#[cfg(feature = "std")]
 use parking_lot::RwLock;
 
 #[cfg(feature = "std")]
 use std::sync::Arc;
-
-#[cfg(not(feature = "std"))]
-use alloc::sync::Arc;
 
 use crate::collections::Vec;
 use crate::voter_set::VoterInfo;
@@ -212,7 +211,10 @@ fn total_weight<Iter, Lookup>(iterable: Iter, lookup: Lookup) -> (u64, u64) wher
 #[derive(Debug)]
 pub struct Shared {
 	n_voters: usize,
+	#[cfg(feature = "std")]
 	equivocators: Arc<RwLock<Bitfield>>,
+	#[cfg(not(feature = "std"))]
+	equivocators: Bitfield,
 }
 
 impl Clone for Shared {
@@ -229,7 +231,10 @@ impl Shared {
 	pub fn new(n_voters: usize) -> Self {
 		Shared {
 			n_voters,
+			#[cfg(feature = "std")]
 			equivocators: Arc::new(RwLock::new(Bitfield::Blank)),
+			#[cfg(not(feature = "std"))]
+			equivocators: Bitfield::Blank,
 		}
 	}
 
@@ -250,19 +255,29 @@ impl Shared {
 	}
 
 	/// Get the equivocators bitfield.
-	pub fn equivocators(&self) -> &Arc<RwLock<Bitfield>> {
-		&self.equivocators
+	pub fn equivocators(&self) -> Bitfield {
+		#[cfg(feature = "std")]
+		let equivocators = self.equivocators.read().clone();
+		#[cfg(not(feature = "std"))]
+		let equivocators = self.equivocators.clone();
+		equivocators
 	}
 
 	/// Note a voter's equivocation in prevote.
-	pub fn equivocated_prevote(&self, info: &VoterInfo) -> Result<(), Error> {
+	pub fn equivocated_prevote(&mut self, info: &VoterInfo) -> Result<(), Error> {
+		#[cfg(feature = "std")]
 		self.equivocators.write().set_bit(info.canon_idx() * 2, self.n_voters)?;
+		#[cfg(not(feature = "std"))]
+		self.equivocators.set_bit(info.canon_idx() * 2, self.n_voters)?;
 		Ok(())
 	}
 
 	/// Note a voter's equivocation in precommit.
-	pub fn equivocated_precommit(&self, info: &VoterInfo) -> Result<(), Error> {
+	pub fn equivocated_precommit(&mut self, info: &VoterInfo) -> Result<(), Error> {
+		#[cfg(feature = "std")]
 		self.equivocators.write().set_bit(info.canon_idx() * 2 + 1, self.n_voters)?;
+		#[cfg(not(feature = "std"))]
+		self.equivocators.set_bit(info.canon_idx() * 2 + 1, self.n_voters)?;
 		Ok(())
 	}
 }
