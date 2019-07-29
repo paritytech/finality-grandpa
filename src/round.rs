@@ -21,7 +21,7 @@ use std::ops::AddAssign;
 use parity_codec::{Encode, Decode};
 
 use crate::collections::{hash_map::{HashMap, Entry}, Vec};
-use crate::bitfield::{Shared as BitfieldContext, Bitfield};
+use crate::bitfield::{Context as BitfieldContext, Bitfield};
 use crate::vote_graph::VoteGraph;
 use crate::voter_set::VoterSet;
 
