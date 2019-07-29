@@ -35,9 +35,14 @@ extern crate core as std;
 extern crate alloc;
 
 pub mod bitfield;
+
 pub mod round;
+use round::ImportResult;
+
 pub mod vote_graph;
+
 pub mod voter_set;
+use crate::voter_set::VoterSet;
 
 #[cfg(feature = "std")]
 pub mod voter;
@@ -48,12 +53,12 @@ mod bridge_state;
 #[cfg(test)]
 mod testing;
 
-use collections::Vec;
 use std::fmt;
-use crate::voter_set::VoterSet;
-use round::ImportResult;
+
 #[cfg(feature = "derive-codec")]
 use parity_codec::{Encode, Decode};
+
+use collections::Vec;
 
 #[cfg(not(feature = "std"))]
 mod collections {

@@ -29,13 +29,12 @@
 //! bitfield will be mostly empty.
 
 use std::fmt;
+
+#[cfg(feature = "std")]
 use parking_lot::RwLock;
 
 #[cfg(feature = "std")]
 use std::sync::Arc;
-
-#[cfg(not(feature = "std"))]
-use alloc::sync::Arc;
 
 use crate::collections::Vec;
 use crate::voter_set::VoterInfo;
@@ -208,31 +207,75 @@ fn total_weight<Iter, Lookup>(iterable: Iter, lookup: Lookup) -> (u64, u64) wher
 	(state.prevote, state.precommit)
 }
 
-/// Shared data among all live bitfield instances.
+/// Context data for bitfields, shared among all live bitfield instances.
+/// (only usable under std environment.)
+#[cfg(feature = "std")]
 #[derive(Debug)]
-pub struct Shared {
+pub struct Context {
 	n_voters: usize,
 	equivocators: Arc<RwLock<Bitfield>>,
 }
 
-impl Clone for Shared {
+/// Context data for bitfields, shared among all live bitfield instances.
+/// (usable under no-std environment, where it is not expected that this data
+/// will be shared across different threads.)
+#[cfg(not(feature = "std"))]
+pub struct Context {
+	n_voters: usize,
+	equivocators: Bitfield,
+}
+
+impl Clone for Context {
 	fn clone(&self) -> Self {
-		Shared {
+		Context {
 			n_voters: self.n_voters,
 			equivocators: self.equivocators.clone(),
 		}
 	}
 }
 
-impl Shared {
-	/// Create new shared equivocation detection data. Provide the number of voters.
+#[cfg(feature = "std")]
+impl Context {
 	pub fn new(n_voters: usize) -> Self {
-		Shared {
+		Context {
 			n_voters,
 			equivocators: Arc::new(RwLock::new(Bitfield::Blank)),
 		}
 	}
 
+	/// Get a reference to the equivocators bitfield.
+	pub fn equivocators(&self) -> parking_lot::RwLockReadGuard<Bitfield> {
+		self.equivocators.read()
+	}
+
+	/// Get a mutable reference to the equivocators bitfield.
+	pub fn equivocators_mut(&mut self) -> parking_lot::RwLockWriteGuard<Bitfield> {
+		self.equivocators.write()
+	}
+}
+
+#[cfg(not(feature = "std"))]
+impl Context {
+	/// Create new shared equivocation detection data. Provide the number of voters.
+	pub fn new(n_voters: usize) -> Self {
+		Context {
+			n_voters,
+			equivocators: Bitfield::Blank,
+		}
+	}
+
+	/// Get a reference to the equivocators bitfield.
+	pub fn equivocators(&self) -> &Bitfield {
+		&self.equivocators
+	}
+
+	/// Get a mutable reference to the equivocators bitfield.
+	pub fn equivocators_mut(&mut self) -> &mut Bitfield {
+		&mut self.equivocators
+	}
+}
+
+impl Context {
 	/// Construct a new bitfield for a specific voter prevoting.
 	pub fn prevote_bitfield(&self, info: &VoterInfo) -> Result<Bitfield, Error> {
 		let mut bitfield = LiveBitfield::with_voters(self.n_voters);
@@ -249,20 +292,19 @@ impl Shared {
 		Ok(Bitfield::Live(bitfield))
 	}
 
-	/// Get the equivocators bitfield.
-	pub fn equivocators(&self) -> &Arc<RwLock<Bitfield>> {
-		&self.equivocators
-	}
-
 	/// Note a voter's equivocation in prevote.
-	pub fn equivocated_prevote(&self, info: &VoterInfo) -> Result<(), Error> {
-		self.equivocators.write().set_bit(info.canon_idx() * 2, self.n_voters)?;
+	pub fn equivocated_prevote(&mut self, info: &VoterInfo) -> Result<(), Error> {
+		let n_voters = self.n_voters;
+		self.equivocators_mut().set_bit(info.canon_idx() * 2, n_voters)?;
+
 		Ok(())
 	}
 
 	/// Note a voter's equivocation in precommit.
-	pub fn equivocated_precommit(&self, info: &VoterInfo) -> Result<(), Error> {
-		self.equivocators.write().set_bit(info.canon_idx() * 2 + 1, self.n_voters)?;
+	pub fn equivocated_precommit(&mut self, info: &VoterInfo) -> Result<(), Error> {
+		let n_voters = self.n_voters;
+		self.equivocators_mut().set_bit(info.canon_idx() * 2 + 1, n_voters)?;
+
 		Ok(())
 	}
 }
