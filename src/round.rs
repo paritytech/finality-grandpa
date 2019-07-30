@@ -18,7 +18,7 @@ use std::hash::Hash;
 use std::ops::AddAssign;
 
 #[cfg(feature = "derive-codec")]
-use parity_codec::{Encode, Decode};
+use parity_scale_codec::{Encode, Decode};
 
 use crate::collections::{hash_map::{HashMap, Entry}, Vec};
 use crate::bitfield::{Context as BitfieldContext, Bitfield};

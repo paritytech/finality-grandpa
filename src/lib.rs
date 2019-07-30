@@ -56,7 +56,7 @@ mod testing;
 use std::fmt;
 
 #[cfg(feature = "derive-codec")]
-use parity_codec::{Encode, Decode};
+use parity_scale_codec::{Encode, Decode};
 
 use collections::Vec;
 
@@ -583,7 +583,7 @@ mod tests {
 	#[cfg(feature = "derive-codec")]
 	#[test]
 	fn codec_was_derived() {
-		use parity_codec::{Encode, Decode};
+		use parity_scale_codec::{Encode, Decode};
 
 		let signed = crate::SignedMessage {
 			message: crate::Message::Prevote(crate::Prevote {
