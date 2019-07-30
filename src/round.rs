@@ -21,7 +21,7 @@ use std::ops::AddAssign;
 use parity_scale_codec::{Encode, Decode};
 
 use crate::collections::{hash_map::{HashMap, Entry}, Vec};
-use crate::bitfield::{Shared as BitfieldContext, Bitfield};
+use crate::bitfield::{Context as BitfieldContext, Bitfield};
 use crate::vote_graph::VoteGraph;
 use crate::voter_set::VoterSet;
 
@@ -368,7 +368,7 @@ impl<Id, H, N, Signature> Round<Id, H, N, Signature> where
 		// update prevote-GHOST
 		let threshold = self.threshold();
 		if self.prevote.current_weight >= threshold {
-			let equivocators = self.bitfield_context.equivocators().read();
+			let equivocators = self.bitfield_context.equivocators();
 
 			self.prevote_ghost = self.graph.find_ghost(
 				self.prevote_ghost.take(),
@@ -471,7 +471,7 @@ impl<Id, H, N, Signature> Round<Id, H, N, Signature> where
 		// update precommit-GHOST
 		let threshold = self.threshold();
 		if self.precommit.current_weight >= threshold {
-			let equivocators = self.bitfield_context.equivocators().read();
+			let equivocators = self.bitfield_context.equivocators();
 
 			self.precommit_ghost = self.graph.find_ghost(
 				self.precommit_ghost.take(),
@@ -551,8 +551,7 @@ impl<Id, H, N, Signature> Round<Id, H, N, Signature> where
 		if self.prevote.current_weight < threshold { return }
 
 		let remaining_commit_votes = self.total_weight - self.precommit.current_weight;
-		let equivocators = self.bitfield_context.equivocators().read();
-		let equivocators = &*equivocators;
+		let equivocators = &self.bitfield_context.equivocators();
 
 		let voters = &self.voters;
 
