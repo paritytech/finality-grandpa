@@ -133,12 +133,14 @@ pub mod environment {
 	use crate::voter::{RoundData, CommunicationIn, CommunicationOut, Callback};
 	use crate::{Chain, Commit, Error, Equivocation, Message, Prevote, Precommit, PrimaryPropose, SignedMessage, HistoricalVotes};
 	use futures::prelude::*;
-	use futures::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
+	use futures::channel::mpsc::{self, UnboundedReceiver, UnboundedSender};
+	use futures_timer::Delay;
 	use parking_lot::Mutex;
 	use std::collections::HashMap;
+	use std::pin::Pin;
 	use std::sync::Arc;
-	use std::time::{Instant, Duration};
-	use tokio::timer::Delay;
+	use std::task::{Context, Poll};
+	use std::time::Duration;
 
 	#[derive(Hash, Debug, Clone, Copy, PartialEq, Eq, Ord, PartialOrd)]
 	pub struct Id(pub u32);
@@ -187,26 +189,25 @@ pub mod environment {
 	}
 
 	impl crate::voter::Environment<&'static str, u32> for Environment {
-		type Timer = Box<dyn Future<Item=(),Error=Error> + Send + 'static>;
+		type Timer = Pin<Box<dyn Future<Output=Result<(),Error>> + Send + 'static>>;
 		type Id = Id;
 		type Signature = Signature;
-		type In = Box<dyn Stream<Item=SignedMessage<&'static str, u32, Signature, Id>,Error=Error> + Send + 'static>;
-		type Out = Box<dyn Sink<SinkItem=Message<&'static str, u32>,SinkError=Error> + Send + 'static>;
+		type In = Pin<Box<dyn Stream<Item=Result<SignedMessage<&'static str, u32, Signature, Id>,Error>> + Send + 'static>>;
+		type Out = Pin<Box<dyn Sink<Message<&'static str, u32>,Error=Error> + Send + 'static>>;
 		type Error = Error;
 
 		fn round_data(&self, round: u64) -> RoundData<Self::Id, Self::Timer, Self::In, Self::Out> {
 			const GOSSIP_DURATION: Duration = Duration::from_millis(500);
 
-			let now = Instant::now();
 			let (incoming, outgoing) = self.network.make_round_comms(round, self.local_id);
 			RoundData {
 				voter_id: Some(self.local_id),
-				prevote_timer: Box::new(Delay::new(now + GOSSIP_DURATION)
+				prevote_timer: Box::pin(Delay::new(GOSSIP_DURATION)
 										.map_err(|_| panic!("Timer failed"))),
-				precommit_timer: Box::new(Delay::new(now + GOSSIP_DURATION + GOSSIP_DURATION)
+				precommit_timer: Box::pin(Delay::new(GOSSIP_DURATION + GOSSIP_DURATION)
 										  .map_err(|_| panic!("Timer failed"))),
-				incoming: Box::new(incoming),
-				outgoing: Box::new(outgoing),
+				incoming: Box::pin(incoming),
+				outgoing: Box::pin(outgoing),
 			}
 		}
 
@@ -218,8 +219,7 @@ pub mod environment {
 			let delay = Duration::from_millis(
 				rand::thread_rng().gen_range(0, COMMIT_DELAY_MILLIS));
 
-			let now = Instant::now();
-			Box::new(Delay::new(now + delay).map_err(|_| panic!("Timer failed")))
+			Box::pin(Delay::new(delay).map_err(|_| panic!("Timer failed")))
 		}
 
 		fn completed(
@@ -297,13 +297,13 @@ pub mod environment {
 
 		// add a node to the network for a round.
 		fn add_node<N, F: Fn(N) -> M>(&mut self, f: F) -> (
-			impl Stream<Item=M,Error=Error>,
-			impl Sink<SinkItem=N,SinkError=Error>
+			impl Stream<Item=Result<M,Error>>,
+			impl Sink<N,Error=Error>
 		) {
 			let (tx, rx) = mpsc::unbounded();
 			let messages_out = self.raw_sender.clone()
 				.sink_map_err(|e| panic!("Error sending messages: {:?}", e))
-				.with(move |message| Ok(f(message)));
+				.with(move |message| future::ready(Ok(f(message))));
 
 			// get history to the node.
 			for prior_message in self.history.iter().cloned() {
@@ -311,18 +311,17 @@ pub mod environment {
 			}
 
 			self.senders.push(tx);
-			let rx = rx.map_err(|e| panic!("Error receiving messages: {:?}", e));
 
-			(rx, messages_out)
+			(rx.map(Ok), messages_out)
 		}
 
 		// do routing work
-		fn route(&mut self) -> Poll<(), ()> {
+		fn route(&mut self, cx: &mut Context) -> Poll<()> {
 			loop {
-				match self.receiver.poll().map_err(|e| panic!("Error routing messages: {:?}", e))? {
-					Async::NotReady => return Ok(Async::NotReady),
-					Async::Ready(None) => return Ok(Async::Ready(())),
-					Async::Ready(Some(item)) => {
+				match Stream::poll_next(Pin::new(&mut self.receiver), cx) {
+					Poll::Pending => return Poll::Pending,
+					Poll::Ready(None) => return Poll::Ready(()),
+					Poll::Ready(Some(item)) => {
 						self.history.push(item.clone());
 						for sender in &self.senders {
 							let _ = sender.unbounded_send(item.clone());
@@ -357,8 +356,8 @@ pub mod environment {
 
 	impl Network {
 		pub fn make_round_comms(&self, round_number: u64, node_id: Id) -> (
-			impl Stream<Item=SignedMessage<&'static str, u32, Signature, Id>,Error=Error>,
-			impl Sink<SinkItem=Message<&'static str, u32>,SinkError=Error>
+			impl Stream<Item=Result<SignedMessage<&'static str, u32, Signature, Id>,Error>>,
+			impl Sink<Message<&'static str, u32>,Error=Error>
 		) {
 			let mut rounds = self.rounds.lock();
 			rounds.entry(round_number)
@@ -371,8 +370,8 @@ pub mod environment {
 		}
 
 		pub fn make_global_comms(&self) -> (
-			impl Stream<Item=CommunicationIn<&'static str, u32, Signature, Id>,Error=Error>,
-			impl Sink<SinkItem=CommunicationOut<&'static str, u32, Signature, Id>,SinkError=Error>
+			impl Stream<Item=Result<CommunicationIn<&'static str, u32, Signature, Id>,Error>>,
+			impl Sink<CommunicationOut<&'static str, u32, Signature, Id>,Error=Error>
 		) {
 			let mut global_messages = self.global_messages.lock();
 			global_messages.add_node(|message| match message {
@@ -393,20 +392,22 @@ pub mod environment {
 	}
 
 	impl Future for NetworkRouting {
-		type Item = ();
-		type Error = ();
+		type Output = ();
 
-		fn poll(&mut self) -> Poll<(), ()> {
+		fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<()> {
 			let mut rounds = self.rounds.lock();
-			rounds.retain(|_, round| match round.route() {
-				Ok(Async::Ready(())) | Err(()) => false,
-				Ok(Async::NotReady) => true,
+			rounds.retain(|_, round| match round.route(cx) {
+				Poll::Ready(()) => false,
+				Poll::Pending => true,
 			});
 
 			let mut global_messages = self.global_messages.lock();
-			let _ = global_messages.route();
+			let _ = global_messages.route(cx);
 
-			Ok(Async::NotReady)
+			Poll::Pending
 		}
+	}
+
+	impl Unpin for NetworkRouting {
 	}
 }
