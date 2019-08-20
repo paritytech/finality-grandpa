@@ -13,7 +13,7 @@ log = "0.4"
 parking_lot = { version = "0.9", optional = true }
 parity-scale-codec = { version = "1.0.3", optional = true, default-features = false, features = ["derive"] }
 num = { package = "num-traits", version = "0.2", default-features = false }
-hashmap_core = { version = "0.1.10", default-features = false }
+hashbrown = { version = "0.6" }
 
 [dev-dependencies]
 exit-future = "0.1.2"
@@ -22,6 +22,6 @@ tokio = "0.1.8"
 
 [features]
 default = ["std"]
-std = ["parity-scale-codec/std", "hashmap_core/disable", "num/std", "parking_lot"]
+std = ["parity-scale-codec/std", "num/std", "parking_lot"]
 derive-codec = ["parity-scale-codec"]
 test-helpers = []

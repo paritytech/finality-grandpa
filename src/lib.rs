@@ -64,7 +64,7 @@ use collections::Vec;
 mod collections {
 	pub use alloc::collections::*;
 	pub use alloc::vec::Vec;
-	pub use hashmap_core::{map as hash_map, HashMap, HashSet};
+	pub use hashbrown::{hash_map, HashMap, HashSet};
 }
 
 #[cfg(feature = "std")]
