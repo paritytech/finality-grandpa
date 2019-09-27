@@ -16,13 +16,13 @@
 //!
 //! See docs on `VoterSet` for more information.
 
-use std::hash::Hash;
+use crate::std::{self, collections::HashMap, hash::Hash, vec::Vec};
 
-use crate::collections::{HashMap, Vec};
 use super::threshold;
 
 /// A voter set, with accompanying indices.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "std", derive(Debug))]
 pub struct VoterSet<Id: Hash + Eq> {
 	weights: HashMap<Id, VoterInfo>,
 	voters: Vec<(Id, u64)>,
@@ -92,7 +92,8 @@ impl<Id: Hash + Eq + Clone + Ord> std::iter::FromIterator<(Id, u64)> for VoterSe
 	}
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "std", derive(Debug))]
 pub struct VoterInfo {
 	canon_idx: usize,
 	weight: u64,

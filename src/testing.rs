@@ -16,7 +16,7 @@
 
 pub mod chain {
 	use crate::{Chain, Error};
-	use crate::collections::{HashMap, Vec};
+	use crate::std::{collections::HashMap, vec::Vec};
 
 	pub const GENESIS_HASH: &str = "genesis";
 	const NULL_HASH: &str = "NULL";
