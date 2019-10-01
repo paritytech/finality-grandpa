@@ -14,29 +14,31 @@
 
 //! Logic for a single round of GRANDPA.
 
-use std::hash::Hash;
-use std::ops::AddAssign;
-
 #[cfg(feature = "derive-codec")]
 use parity_scale_codec::{Encode, Decode};
 
-use crate::collections::{hash_map::{HashMap, Entry}, Vec};
 use crate::bitfield::{Context as BitfieldContext, Bitfield};
+use crate::std::{
+	self, collections::hash_map::{HashMap, Entry}, hash::Hash, fmt, ops::AddAssign, vec::Vec,
+};
 use crate::vote_graph::VoteGraph;
 use crate::voter_set::VoterSet;
 
 use super::{Equivocation, Prevote, Precommit, Chain, BlockNumberOps, HistoricalVotes, Message, SignedMessage};
 
-#[derive(Hash, Eq, PartialEq)]
+#[derive(Eq, PartialEq)]
+#[cfg_attr(feature = "std", derive(Hash))]
 struct Address;
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(PartialEq, Eq)]
+#[cfg_attr(feature = "std", derive(Debug))]
 struct TotalWeight {
 	prevote: u64,
 	precommit: u64,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
+#[cfg_attr(feature = "std", derive(Debug))]
 struct VoteWeight {
 	bitfield: Bitfield,
 }
@@ -58,6 +60,7 @@ impl VoteWeight {
 		voter_set: &VoterSet<Id>,
 	) -> TotalWeight {
 		let with_equivocators = self.bitfield.merge(equivocators)
+			.ok()
 			.expect("this function is never invoked with \
 				equivocators of different canonicality; qed");
 
@@ -73,6 +76,7 @@ impl VoteWeight {
 impl AddAssign for VoteWeight {
 	fn add_assign(&mut self, rhs: VoteWeight) {
 		self.bitfield = self.bitfield.merge(&rhs.bitfield)
+			.ok()
 			.expect("both bitfields set to same length; qed");
 	}
 }
@@ -187,7 +191,8 @@ impl<Id: Hash + Eq + Clone, Vote: Clone + Eq, Signature: Clone + Eq> VoteTracker
 }
 
 /// State of the round.
-#[derive(PartialEq, Clone, Debug)]
+#[derive(PartialEq, Clone)]
+#[cfg_attr(feature = "std", derive(Debug))]
 #[cfg_attr(feature = "derive-codec", derive(Encode, Decode))]
 pub struct State<H, N> {
 	/// The prevote-GHOST block.
@@ -260,9 +265,9 @@ impl<Id, P, Signature> Default for ImportResult<Id, P, Signature> {
 }
 
 impl<Id, H, N, Signature> Round<Id, H, N, Signature> where
-	Id: Hash + Clone + Eq + ::std::fmt::Debug,
-	H: Hash + Clone + Eq + Ord + ::std::fmt::Debug,
-	N: Copy + ::std::fmt::Debug + BlockNumberOps,
+	Id: Hash + Clone + Eq + fmt::Debug,
+	H: Hash + Clone + Eq + Ord + fmt::Debug,
+	N: Copy + fmt::Debug + BlockNumberOps,
 	Signature: Eq + Clone,
 {
 	/// Create a new round accumulator for given round number and with given weight.
@@ -328,6 +333,7 @@ impl<Id, H, N, Signature> Round<Id, H, N, Signature> where
 				VoteMultiplicity::Single(single_vote, _) => {
 					let vote_weight = VoteWeight {
 						bitfield: self.bitfield_context.prevote_bitfield(info)
+							.ok()
 							.expect("info is instantiated from same voter set as context; qed"),
 					};
 
@@ -348,6 +354,7 @@ impl<Id, H, N, Signature> Round<Id, H, N, Signature> where
 				VoteMultiplicity::Equivocated(ref first, ref second) => {
 					// mark the equivocator as such. no need to "undo" the first vote.
 					self.bitfield_context.equivocated_prevote(info)
+						.ok()
 						.expect("info is instantiated from same voter set as bitfield; qed");
 
 					// Push the vote into HistoricalVotes.
@@ -415,6 +422,7 @@ impl<Id, H, N, Signature> Round<Id, H, N, Signature> where
 				VoteMultiplicity::Single(single_vote, _) => {
 					let vote_weight = VoteWeight {
 						bitfield: self.bitfield_context.precommit_bitfield(info)
+							.ok()
 							.expect("info is instantiated from same voter set as context; qed"),
 					};
 
@@ -434,6 +442,7 @@ impl<Id, H, N, Signature> Round<Id, H, N, Signature> where
 				VoteMultiplicity::Equivocated(ref first, ref second) => {
 					// mark the equivocator as such. no need to "undo" the first vote.
 					self.bitfield_context.equivocated_precommit(info)
+						.ok()
 						.expect("info is instantiated from same voter set as bitfield; qed");
 
 					// Push the vote into HistoricalVotes.

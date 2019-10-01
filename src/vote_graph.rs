@@ -16,14 +16,13 @@
 //!
 //! See docs on `VoteGraph` for more information.
 
-use std::fmt::Debug;
-use std::hash::Hash;
-use std::ops::AddAssign;
+use crate::std::{
+	self, collections::{HashMap, HashSet}, fmt::Debug, hash::Hash, ops::AddAssign, vec::Vec,
+};
 
-use crate::collections::{HashMap, HashSet, Vec};
 use super::{Chain, Error, BlockNumberOps};
 
-#[derive(Debug)]
+#[cfg_attr(feature = "std", derive(Debug))]
 struct Entry<H, N, V> {
 	number: N,
 	// ancestor hashes in reverse order, e.g. ancestors[0] is the parent
@@ -516,7 +515,7 @@ impl<H, N, V> VoteGraph<H, N, V> where
 		ancestry.push(self.base.clone()); // ancestry doesn't include base.
 
 		let mut ancestor_index = None;
-		for (i, ancestor) in ancestry.iter().chain(::std::iter::once(&self.base)).enumerate() {
+		for (i, ancestor) in ancestry.iter().chain(std::iter::once(&self.base)).enumerate() {
 			if let Some(entry) = self.entries.get_mut(ancestor) {
 				entry.descendents.push(hash.clone());
 				ancestor_index = Some(i);

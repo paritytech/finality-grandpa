@@ -28,19 +28,18 @@
 //! Bitfields on regular vote-nodes will tend to be live, but the equivocating
 //! bitfield will be mostly empty.
 
-use std::fmt;
-
 #[cfg(feature = "std")]
 use parking_lot::RwLock;
 
 #[cfg(feature = "std")]
 use std::sync::Arc;
 
-use crate::collections::Vec;
+use crate::std::{self, vec::Vec};
 use crate::voter_set::VoterInfo;
 
 /// Errors that can occur when using the equivocation weighting tools.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "std", derive(Debug))]
 pub enum Error {
 	/// Attempted to index bitfield past its length.
 	IndexOutOfBounds(usize, usize),
@@ -48,8 +47,9 @@ pub enum Error {
 	LengthMismatch(usize, usize),
 }
 
-impl fmt::Display for Error {
-	fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+#[cfg(feature = "std")]
+impl std::fmt::Display for Error {
+	fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
 		match *self {
 			Error::IndexOutOfBounds(ref idx, ref n)
 				=> write!(f, "Attempted to set voter {}. Maximum specified was {}", idx, n),
@@ -60,10 +60,11 @@ impl fmt::Display for Error {
 }
 
 #[cfg(feature = "std")]
-impl ::std::error::Error for Error {}
+impl std::error::Error for Error {}
 
 /// Bitfield for tracking voters who have equivocated.
-#[derive(Debug, Eq, PartialEq, Clone)]
+#[derive(Eq, PartialEq, Clone)]
+#[cfg_attr(feature = "std", derive(Debug))]
 pub enum Bitfield {
 	/// Blank bitfield,
 	Blank,
@@ -125,7 +126,7 @@ impl Bitfield {
 
 	/// Set a bit in the bitfield.
 	fn set_bit(&mut self, bit: usize, n_voters: usize) -> Result<(), Error> {
-		let mut live = match ::std::mem::replace(self, Bitfield::Blank) {
+		let mut live = match std::mem::replace(self, Bitfield::Blank) {
 			Bitfield::Blank => LiveBitfield::with_voters(n_voters),
 			Bitfield::Live(live) => live,
 		};
@@ -137,7 +138,8 @@ impl Bitfield {
 }
 
 /// Live bitfield instance.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "std", derive(Debug))]
 pub struct LiveBitfield {
 	bits: Vec<u64>,
 }
