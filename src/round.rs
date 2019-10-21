@@ -299,6 +299,7 @@ impl<Id, H, N, Signature> Round<Id, H, N, Signature> where
 		self.round_number
 	}
 
+	#[allow(unused)]
 	/// Import a prevote. Returns an equivocation proof, if the vote is an equivocation,
 	/// and a bool indicating if the vote is duplicated (see `ImportResult`).
 	///
