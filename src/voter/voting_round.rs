@@ -368,7 +368,6 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 		let (prevote_weight, n_prevotes) = self.votes.prevote_participation();
 		let (precommit_weight, n_precommits) = self.votes.precommit_participation();
 
-
 		trace!(target: "afg", "round {} completable.", number);
 
 		trace!(target: "afg", "round {}: prevotes: {}/{}/{} weight, {}/{} actual",
