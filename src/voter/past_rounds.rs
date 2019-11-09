@@ -22,19 +22,17 @@
 //!   - Passing it any validated commits (so backgrounded rounds don't produce conflicting ones)
 
 #[cfg(feature = "std")]
-use futures::ready;
+use futures::try_ready;
 use futures::prelude::*;
 use futures::stream::{self, futures_unordered::FuturesUnordered};
 use futures::task;
-use futures::channel::mpsc;
+use futures::sync::mpsc;
 #[cfg(feature = "std")]
 use log::{trace, debug};
 
 use std::cmp;
 use std::collections::HashMap;
 use std::hash::Hash;
-use std::pin::Pin;
-use std::task::{Context, Poll};
 
 use crate::{Commit, BlockNumberOps};
 use super::Environment;
@@ -49,7 +47,7 @@ struct BackgroundRound<H, N, E: Environment<H, N>> where
 	N: Copy + BlockNumberOps + ::std::fmt::Debug,
 {
 	inner: VotingRound<H, N, E>,
-	waker: Option<task::Waker>,
+	task: Option<task::Task>,
 	finalized_number: N,
 	round_committer: Option<RoundCommitter<H, N, E>>,
 }
@@ -78,8 +76,8 @@ impl<H, N, E: Environment<H, N>> BackgroundRound<H, N, E> where
 
 		// wake up the future to be polled if done.
 		if self.is_done() {
-			if let Some(ref waker) = self.waker {
-				waker.wake_by_ref();
+			if let Some(ref task) = self.task {
+				task.notify();
 			}
 		}
 	}
@@ -100,38 +98,33 @@ impl<H, N, E: Environment<H, N>> Future for BackgroundRound<H, N, E> where
 	H: Hash + Clone + Eq + Ord + ::std::fmt::Debug,
 	N: Copy + BlockNumberOps + ::std::fmt::Debug,
 {
-	type Output = Result<BackgroundRoundChange<H, N, E>, E::Error>;
+	type Item = BackgroundRoundChange<H, N, E>;
+	type Error = E::Error;
 
-	fn poll(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
-		self.waker = Some(cx.waker().clone());
+	fn poll(&mut self) -> Poll<Self::Item, E::Error> {
+		self.task = Some(::futures::task::current());
 
-		self.inner.poll(cx)?;
+		self.inner.poll()?;
 
 		self.round_committer = match self.round_committer.take() {
 			None => None,
-			Some(mut committer) => match committer.commit(cx, &mut self.inner)? {
-				Poll::Ready(None) => None,
-				Poll::Ready(Some(commit)) => return Poll::Ready(Ok(
+			Some(mut committer) => match committer.commit(&mut self.inner)? {
+				Async::Ready(None) => None,
+				Async::Ready(Some(commit)) => return Ok(Async::Ready(
 					BackgroundRoundChange::Committed(commit)
 				)),
-				Poll::Pending => Some(committer),
+				Async::NotReady => Some(committer),
 			}
 		};
 
 		if self.is_done() {
 			// if this is fully done (has committed _and_ estimate finalized)
 			// we bail for real.
-			Poll::Ready(Ok(BackgroundRoundChange::Irrelevant(self.round_number())))
+			Ok(Async::Ready(BackgroundRoundChange::Irrelevant(self.round_number())))
 		} else {
-			Poll::Pending
+			Ok(Async::NotReady)
 		}
 	}
-}
-
-impl<H, N, E: Environment<H, N>> Unpin for BackgroundRound<H, N, E> where
-	H: Hash + Clone + Eq + Ord + ::std::fmt::Debug,
-	N: Copy + BlockNumberOps + ::std::fmt::Debug,
-{
 }
 
 struct RoundCommitter<H, N, E: Environment<H, N>> where
@@ -177,26 +170,26 @@ impl<H, N, E: Environment<H, N>> RoundCommitter<H, N, E> where
 		Ok(true)
 	}
 
-	fn commit(&mut self, cx: &mut Context, voting_round: &mut VotingRound<H, N, E>)
-		-> Poll<Result<Option<Commit<H, N, E::Signature, E::Id>>, E::Error>>
+	fn commit(&mut self, voting_round: &mut VotingRound<H, N, E>)
+		-> Poll<Option<Commit<H, N, E::Signature, E::Id>>, E::Error>
 	{
-		while let Poll::Ready(Some(commit)) = Stream::poll_next(Pin::new(&mut self.import_commits), cx) {
+		while let Ok(Async::Ready(Some(commit))) = self.import_commits.poll() {
 			if !self.import_commit(voting_round, commit)? {
 				trace!(target: "afg", "Ignoring invalid commit");
 			}
 		}
 
-		ready!(Future::poll(Pin::new(&mut self.commit_timer), cx))?;
+		try_ready!(self.commit_timer.poll());
 
 		match (self.last_commit.take(), voting_round.finalized()) {
 			(None, Some(_)) => {
-				Poll::Ready(Ok(voting_round.finalizing_commit().cloned()))
+				Ok(Async::Ready(voting_round.finalizing_commit().cloned()))
 			},
 			(Some(Commit { target_number, .. }), Some((_, finalized_number))) if target_number < *finalized_number => {
-				Poll::Ready(Ok(voting_round.finalizing_commit().cloned()))
+				Ok(Async::Ready(voting_round.finalizing_commit().cloned()))
 			},
 			_ => {
-				Poll::Ready(Ok(None))
+				Ok(Async::Ready(None))
 			},
 		}
 	}
@@ -220,24 +213,22 @@ impl<F> SelfReturningFuture<F> {
 	}
 }
 
-impl<F: Future + Unpin> Future for SelfReturningFuture<F> {
-	type Output = (F::Output, F);
+impl<F: Future> Future for SelfReturningFuture<F> {
+	type Item = (F::Item, F);
+	type Error = F::Error;
 
-	fn poll(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
+	fn poll(&mut self) -> Poll<Self::Item, F::Error> {
 		match self.inner.take() {
 			None => panic!("poll after return is not done in this module; qed"),
-			Some(mut f) => match Future::poll(Pin::new(&mut f), cx) {
-				Poll::Ready(item) => Poll::Ready((item, f)),
-				Poll::Pending => {
+			Some(mut f) => match f.poll()? {
+				Async::Ready(item) => Ok(Async::Ready((item, f))),
+				Async::NotReady => {
 					self.inner = Some(f);
-					Poll::Pending
+					Ok(Async::NotReady)
 				}
 			}
 		}
 	}
-}
-
-impl<F> Unpin for SelfReturningFuture<F> {
 }
 
 /// A stream for past rounds, which produces any commit messages from those
@@ -268,7 +259,7 @@ impl<H, N, E: Environment<H, N>> PastRounds<H, N, E> where
 		let (tx, rx) = mpsc::unbounded();
 		let background = BackgroundRound {
 			inner: round,
-			waker: None,
+			task: None,
 			// https://github.com/paritytech/finality-grandpa/issues/50
 			finalized_number: N::zero(),
 			round_committer: Some(RoundCommitter::new(
@@ -307,15 +298,16 @@ impl<H, N, E: Environment<H, N>> Stream for PastRounds<H, N, E> where
 	H: Hash + Clone + Eq + Ord + ::std::fmt::Debug,
 	N: Copy + BlockNumberOps + ::std::fmt::Debug,
 {
-	type Item = Result<(u64, Commit<H, N, E::Signature, E::Id>), E::Error>;
+	type Item = (u64, Commit<H, N, E::Signature, E::Id>);
+	type Error = E::Error;
 
-	fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
+	fn poll(&mut self) -> Poll<Option<Self::Item>, E::Error> {
 		loop {
-			match Stream::poll_next(Pin::new(&mut self.past_rounds), cx) {
-				Poll::Ready(Some((Ok(BackgroundRoundChange::Irrelevant(number)), _))) => {
+			match self.past_rounds.poll()? {
+				Async::Ready(Some((BackgroundRoundChange::Irrelevant(number), _))) => {
 					self.commit_senders.remove(&number);
 				}
-				Poll::Ready(Some((Ok(BackgroundRoundChange::Committed(commit)), round))) => {
+				Async::Ready(Some((BackgroundRoundChange::Committed(commit), round))) => {
 					let number = round.round_number();
 
 					// reschedule until irrelevant.
@@ -329,18 +321,11 @@ impl<H, N, E: Environment<H, N>> Stream for PastRounds<H, N, E> where
 						commit.target_hash,
 					);
 
-					return Poll::Ready(Some(Ok((number, commit))));
+					return Ok(Async::Ready(Some((number, commit))));
 				}
-				Poll::Ready(Some((Err(err), _))) => return Poll::Ready(Some(Err(err))),
-				Poll::Ready(None) => return Poll::Ready(None),
-				Poll::Pending => return Poll::Pending,
+				Async::Ready(None) => return Ok(Async::Ready(None)),
+				Async::NotReady => return Ok(Async::NotReady),
 			}
 		}
 	}
-}
-
-impl<H, N, E: Environment<H, N>> Unpin for PastRounds<H, N, E> where
-	H: Hash + Clone + Eq + Ord + ::std::fmt::Debug,
-	N: Copy + BlockNumberOps + ::std::fmt::Debug,
-{
 }
