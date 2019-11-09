@@ -25,16 +25,14 @@
 //!  votes will not be pushed to the sink. The protocol state machine still
 //!  transitions state as if the votes had been pushed out.
 
-use futures::{prelude::*, ready};
-use futures::channel::mpsc::{self, UnboundedReceiver};
+use futures::prelude::*;
+use futures::sync::mpsc::{self, UnboundedReceiver};
 #[cfg(feature = "std")]
 use log::trace;
 
 use std::collections::VecDeque;
 use std::hash::Hash;
-use std::pin::Pin;
 use std::sync::Arc;
-use std::task::{Context, Poll};
 
 use crate::round::State as RoundState;
 use crate::{
@@ -53,11 +51,11 @@ mod voting_round;
 ///
 /// This encapsulates the database and networking layers of the chain.
 pub trait Environment<H: Eq, N: BlockNumberOps>: Chain<H, N> {
-	type Timer: Future<Output=Result<(),Self::Error>> + Unpin;
+	type Timer: Future<Item=(),Error=Self::Error>;
 	type Id: Hash + Clone + Eq + ::std::fmt::Debug;
 	type Signature: Eq + Clone;
-	type In: Stream<Item=Result<SignedMessage<H, N, Self::Signature, Self::Id>, Self::Error>> + Unpin;
-	type Out: Sink<Message<H, N>, Error=Self::Error> + Unpin;
+	type In: Stream<Item=SignedMessage<H, N, Self::Signature, Self::Id>, Error=Self::Error>;
+	type Out: Sink<SinkItem=Message<H, N>, SinkError=Self::Error>;
 	type Error: From<crate::Error> + ::std::error::Error;
 
 	/// Produce data necessary to start a round of voting.
@@ -304,13 +302,13 @@ pub struct RoundData<Id, Timer, Input, Output> {
 	pub outgoing: Output,
 }
 
-struct Buffered<S, I> {
+struct Buffered<S: Sink> {
 	inner: S,
-	buffer: VecDeque<I>,
+	buffer: VecDeque<S::SinkItem>,
 }
 
-impl<S: Sink<I> + Unpin, I> Buffered<S, I> {
-	fn new(inner: S) -> Buffered<S, I> {
+impl<S: Sink> Buffered<S> {
+	fn new(inner: S) -> Buffered<S> {
 		Buffered {
 			buffer: VecDeque::new(),
 			inner
@@ -319,33 +317,40 @@ impl<S: Sink<I> + Unpin, I> Buffered<S, I> {
 
 	// push an item into the buffered sink.
 	// the sink _must_ be driven to completion with `poll` afterwards.
-	fn push(&mut self, item: I) {
+	fn push(&mut self, item: S::SinkItem) {
 		self.buffer.push_back(item);
 	}
 
 	// returns ready when the sink and the buffer are completely flushed.
-	fn poll(&mut self, cx: &mut Context) -> Poll<Result<(), S::Error>> {
-		let polled = self.schedule_all(cx)?;
+	fn poll(&mut self) -> Poll<(), S::SinkError> {
+		let polled = self.schedule_all()?;
 
 		match polled {
-			Poll::Ready(()) => Sink::poll_flush(Pin::new(&mut self.inner), cx),
-			Poll::Pending => {
-				ready!(Sink::poll_flush(Pin::new(&mut self.inner), cx))?;
-				Poll::Pending
+			Async::Ready(()) => self.inner.poll_complete(),
+			Async::NotReady => {
+				self.inner.poll_complete()?;
+				Ok(Async::NotReady)
 			}
 		}
 	}
 
-	fn schedule_all(&mut self, cx: &mut Context) -> Poll<Result<(), S::Error>> {
-		while !self.buffer.is_empty() {
-			ready!(Sink::poll_ready(Pin::new(&mut self.inner), cx))?;
-
-			let item = self.buffer.pop_front()
-				.expect("we checked self.buffer.is_empty() just above; qed");
-			Sink::start_send(Pin::new(&mut self.inner), item)?;
+	fn schedule_all(&mut self) -> Poll<(), S::SinkError> {
+		while let Some(front) = self.buffer.pop_front() {
+			match self.inner.start_send(front) {
+				Ok(AsyncSink::Ready) => continue,
+				Ok(AsyncSink::NotReady(front)) => {
+					self.buffer.push_front(front);
+					break;
+				}
+				Err(e) => return Err(e),
+			}
 		}
 
-		Poll::Ready(Ok(()))
+		if self.buffer.is_empty() {
+			Ok(Async::Ready(()))
+		} else {
+			Ok(Async::NotReady)
+		}
 	}
 }
 
@@ -377,8 +382,8 @@ type FinalizedNotification<H, N, E> = (
 pub struct Voter<H, N, E: Environment<H, N>, GlobalIn, GlobalOut> where
 	H: Hash + Clone + Eq + Ord + ::std::fmt::Debug,
 	N: Copy + BlockNumberOps + ::std::fmt::Debug,
-	GlobalIn: Stream<Item=Result<CommunicationIn<H, N, E::Signature, E::Id>, E::Error>> + Unpin,
-	GlobalOut: Sink<CommunicationOut<H, N, E::Signature, E::Id>, Error=E::Error> + Unpin,
+	GlobalIn: Stream<Item=CommunicationIn<H, N, E::Signature, E::Id>, Error=E::Error>,
+	GlobalOut: Sink<SinkItem=CommunicationOut<H, N, E::Signature, E::Id>, SinkError=E::Error>,
 {
 	env: Arc<E>,
 	voters: VoterSet<E::Id>,
@@ -387,7 +392,7 @@ pub struct Voter<H, N, E: Environment<H, N>, GlobalIn, GlobalOut> where
 	finalized_notifications: UnboundedReceiver<FinalizedNotification<H, N, E>>,
 	last_finalized_number: N,
 	global_in: GlobalIn,
-	global_out: Buffered<GlobalOut, CommunicationOut<H, N, E::Signature, E::Id>>,
+	global_out: Buffered<GlobalOut>,
 	// the commit protocol might finalize further than the current round (if we're
 	// behind), we keep track of last finalized in round so we don't violate any
 	// assumptions from round-to-round.
@@ -397,8 +402,8 @@ pub struct Voter<H, N, E: Environment<H, N>, GlobalIn, GlobalOut> where
 impl<H, N, E: Environment<H, N>, GlobalIn, GlobalOut> Voter<H, N, E, GlobalIn, GlobalOut> where
 	H: Hash + Clone + Eq + Ord + ::std::fmt::Debug,
 	N: Copy + BlockNumberOps + ::std::fmt::Debug,
-	GlobalIn: Stream<Item=Result<CommunicationIn<H, N, E::Signature, E::Id>, E::Error>> + Unpin,
-	GlobalOut: Sink<CommunicationOut<H, N, E::Signature, E::Id>, Error=E::Error> + Unpin,
+	GlobalIn: Stream<Item=CommunicationIn<H, N, E::Signature, E::Id>, Error=E::Error>,
+	GlobalOut: Sink<SinkItem=CommunicationOut<H, N, E::Signature, E::Id>, SinkError=E::Error>,
 {
 	/// Create new `Voter` tracker with given round number and base block.
 	///
@@ -449,14 +454,15 @@ impl<H, N, E: Environment<H, N>, GlobalIn, GlobalOut> Voter<H, N, E, GlobalIn, G
 		}
 	}
 
-	fn prune_background_rounds(&mut self, cx: &mut Context) -> Result<(), E::Error> {
+	fn prune_background_rounds(&mut self) -> Result<(), E::Error> {
 		// Do work on all background rounds, broadcasting any commits generated.
-		while let Poll::Ready(Some(item)) = Stream::poll_next(Pin::new(&mut self.past_rounds), cx) {
-			let (number, commit) = item?;
+		while let Async::Ready(Some((number, commit))) = self.past_rounds.poll()? {
 			self.global_out.push(CommunicationOut::Commit(number, commit));
 		}
 
-		while let Poll::Ready(res) = Stream::poll_next(Pin::new(&mut self.finalized_notifications), cx) {
+		while let Async::Ready(res) = self.finalized_notifications.poll()
+			.expect("unbounded receivers do not have spurious errors; qed")
+		{
 			let (f_hash, f_num, round, commit) =
 				res.expect("one sender always kept alive in self.best_round; qed");
 
@@ -483,9 +489,9 @@ impl<H, N, E: Environment<H, N>, GlobalIn, GlobalOut> Voter<H, N, E, GlobalIn, G
 	///
 	/// Otherwise, we will simply handle the commit and issue a finalization command
 	/// to the environment.
-	fn process_incoming(&mut self, cx: &mut Context) -> Result<(), E::Error> {
-		while let Poll::Ready(Some(item)) = Stream::poll_next(Pin::new(&mut self.global_in), cx) {
-			match item? {
+	fn process_incoming(&mut self) -> Result<(), E::Error> {
+		while let Async::Ready(Some(item)) = self.global_in.poll()? {
+			match item {
 				CommunicationIn::Commit(round_number, commit, mut process_commit_outcome) => {
 					trace!(target: "afg", "Got commit for round_number {:?}: target_number: {:?}, target_hash: {:?}",
 						round_number,
@@ -589,13 +595,13 @@ impl<H, N, E: Environment<H, N>, GlobalIn, GlobalOut> Voter<H, N, E, GlobalIn, G
 	}
 
 	// process the logic of the best round.
-	fn process_best_round(&mut self, cx: &mut Context) -> Poll<Result<(), E::Error>> {
+	fn process_best_round(&mut self) -> Poll<(), E::Error> {
 		// If the current `best_round` is completable and we've already precommitted,
 		// we start a new round at `best_round + 1`.
 		let should_start_next = {
-			let completable = match self.best_round.poll(cx)? {
-				Poll::Ready(()) => true,
-				Poll::Pending => false,
+			let completable = match self.best_round.poll()? {
+				Async::Ready(()) => true,
+				Async::NotReady => false,
 			};
 
 			let precommitted = match self.best_round.state() {
@@ -606,7 +612,7 @@ impl<H, N, E: Environment<H, N>, GlobalIn, GlobalOut> Voter<H, N, E, GlobalIn, G
 			completable && precommitted
 		};
 
-		if !should_start_next { return Poll::Pending }
+		if !should_start_next { return Ok(Async::NotReady) }
 
 		trace!(target: "afg", "Best round at {} has become completable. Starting new best round at {}",
 			self.best_round.round_number(),
@@ -616,7 +622,7 @@ impl<H, N, E: Environment<H, N>, GlobalIn, GlobalOut> Voter<H, N, E, GlobalIn, G
 		self.completed_best_round()?;
 
 		// round has been updated. so we need to re-poll.
-		Future::poll(Pin::new(self), cx)
+		self.poll()
 	}
 
 	fn completed_best_round(&mut self) -> Result<(), E::Error> {
@@ -656,26 +662,19 @@ impl<H, N, E: Environment<H, N>, GlobalIn, GlobalOut> Voter<H, N, E, GlobalIn, G
 impl<H, N, E: Environment<H, N>, GlobalIn, GlobalOut> Future for Voter<H, N, E, GlobalIn, GlobalOut> where
 	H: Hash + Clone + Eq + Ord + ::std::fmt::Debug,
 	N: Copy + BlockNumberOps + ::std::fmt::Debug,
-	GlobalIn: Stream<Item=Result<CommunicationIn<H, N, E::Signature, E::Id>, E::Error>> + Unpin,
-	GlobalOut: Sink<CommunicationOut<H, N, E::Signature, E::Id>, Error=E::Error> + Unpin,
+	GlobalIn: Stream<Item=CommunicationIn<H, N, E::Signature, E::Id>, Error=E::Error>,
+	GlobalOut: Sink<SinkItem=CommunicationOut<H, N, E::Signature, E::Id>, SinkError=E::Error>,
 {
-	type Output = Result<(), E::Error>;
+	type Item = ();
+	type Error = E::Error;
 
-	fn poll(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Result<(), E::Error>> {
-		self.process_incoming(cx)?;
-		self.prune_background_rounds(cx)?;
-		self.global_out.poll(cx)?;
+	fn poll(&mut self) -> Poll<(), E::Error> {
+		self.process_incoming()?;
+		self.prune_background_rounds()?;
+		self.global_out.poll()?;
 
-		self.process_best_round(cx)
+		self.process_best_round()
 	}
-}
-
-impl<H, N, E: Environment<H, N>, GlobalIn, GlobalOut> Unpin for Voter<H, N, E, GlobalIn, GlobalOut> where
-	H: Hash + Clone + Eq + Ord + ::std::fmt::Debug,
-	N: Copy + BlockNumberOps + ::std::fmt::Debug,
-	GlobalIn: Stream<Item=Result<CommunicationIn<H, N, E::Signature, E::Id>, E::Error>> + Unpin,
-	GlobalOut: Sink<CommunicationOut<H, N, E::Signature, E::Id>, Error=E::Error> + Unpin,
-{
 }
 
 /// Validate the given catch up and return a completed round with all prevotes
@@ -810,8 +809,9 @@ mod tests {
 		chain::GENESIS_HASH,
 		environment::{Environment, Id, Signature},
 	};
-	use futures_timer::TryFutureExt as _;
 	use std::time::Duration;
+	use tokio::prelude::FutureExt;
+	use tokio::runtime::current_thread;
 
 	#[test]
 	fn talking_to_myself() {
@@ -819,11 +819,11 @@ mod tests {
 		let voters = std::iter::once((local_id, 100)).collect();
 
 		let (network, routing_task) = testing::environment::make_network();
-		let threads_pool = futures::executor::ThreadPool::new().unwrap();
+		let (signal, exit) = ::exit_future::signal();
 
 		let global_comms = network.make_global_comms();
 		let env = Arc::new(Environment::new(network, local_id));
-		futures::executor::block_on(::futures::future::lazy(move |_| {
+		current_thread::block_on_all(::futures::future::lazy(move || {
 			// initialize chain
 			let last_finalized = env.with_chain(|chain| {
 				chain.push_blocks(GENESIS_HASH, &["A", "B", "C", "D", "E"]);
@@ -842,15 +842,17 @@ mod tests {
 				last_round_state,
 				last_finalized,
 			);
-			threads_pool.spawn_ok(voter.map(|v| v.expect("Error voting")));
+			::tokio::spawn(exit.clone()
+				.until(voter.map_err(|_| panic!("Error voting"))).map(|_| ()));
 
-			threads_pool.spawn_ok(routing_task);
+			::tokio::spawn(exit.until(routing_task).map(|_| ()));
 
 			// wait for the best block to finalize.
 			finalized
-				.take_while(|&(_, n, _)| future::ready(n < 6))
-				.for_each(|_| future::ready(()))
-		}).flatten());
+				.take_while(|&(_, n, _)| Ok(n < 6))
+				.for_each(|_| Ok(()))
+				.map(|_| signal.fire())
+		})).unwrap();
 	}
 
 	#[test]
@@ -859,11 +861,13 @@ mod tests {
 		let voters: VoterSet<_> = (0..10).map(|i| (Id(i), 1)).collect();
 
 		let (network, routing_task) = testing::environment::make_network();
-		let threads_pool = futures::executor::ThreadPool::new().unwrap();
+		let (signal, exit) = ::exit_future::signal();
 
-		futures::executor::block_on(::futures::future::lazy(move |_| {
+		current_thread::block_on_all(::futures::future::lazy(move || {
+			::tokio::spawn(exit.clone().until(routing_task).map(|_| ()));
+
 			// 3 voters offline.
-			let finalized_streams = (0..7).map(|i| {
+			let finalized_streams = (0..7).map(move |i| {
 				let local_id = Id(i);
 				// initialize chain
 				let env = Arc::new(Environment::new(network.clone(), local_id));
@@ -884,17 +888,17 @@ mod tests {
 					last_round_state,
 					last_finalized,
 				);
-				threads_pool.spawn_ok(voter.map(|v| v.expect("Error voting")));
+				::tokio::spawn(exit.clone()
+					.until(voter.map_err(|_| panic!("Error voting"))).map(|_| ()));
 
 				// wait for the best block to be finalized by all honest voters
 				finalized
-					.take_while(|&(_, n, _)| future::ready(n < 6))
-					.for_each(|_| future::ready(()))
-			}).collect::<Vec<_>>();
+					.take_while(|&(_, n, _)| Ok(n < 6))
+					.for_each(|_| Ok(()))
+			});
 
-			threads_pool.spawn_ok(routing_task.map(|_| ()));
-			::futures::future::join_all(finalized_streams.into_iter())
-		}).flatten());
+			::futures::future::join_all(finalized_streams).map(|_| signal.fire())
+		})).unwrap();
 	}
 
 	#[test]
@@ -905,11 +909,11 @@ mod tests {
 		let (network, routing_task) = testing::environment::make_network();
 		let (commits, _) = network.make_global_comms();
 
-		let threads_pool = futures::executor::ThreadPool::new().unwrap();
+		let (signal, exit) = ::exit_future::signal();
 
 		let global_comms = network.make_global_comms();
 		let env = Arc::new(Environment::new(network, local_id));
-		futures::executor::block_on(::futures::future::lazy(move |_| {
+		current_thread::block_on_all(::futures::future::lazy(move || {
 			// initialize chain
 			let last_finalized = env.with_chain(|chain| {
 				chain.push_blocks(GENESIS_HASH, &["A", "B", "C", "D", "E"]);
@@ -927,13 +931,14 @@ mod tests {
 				last_round_state,
 				last_finalized,
 			);
-			threads_pool.spawn_ok(voter.map(|v| v.expect("Error voting")));
+			::tokio::spawn(exit.clone()
+				.until(voter.map_err(|_| panic!("Error voting"))).map(|_| ()));
 
-			threads_pool.spawn_ok(routing_task);
+			::tokio::spawn(exit.until(routing_task).map(|_| ()));
 
 			// wait for the node to broadcast a commit message
-			commits.take(1).for_each(|_| future::ready(()))
-		}).flatten());
+			commits.take(1).for_each(|_| Ok(())).map(|_| signal.fire())
+		})).unwrap();
 	}
 
 	#[test]
@@ -969,11 +974,11 @@ mod tests {
 			}],
 		});
 
-		let threads_pool = futures::executor::ThreadPool::new().unwrap();
+		let (signal, exit) = ::exit_future::signal();
 
 		let global_comms = network.make_global_comms();
 		let env = Arc::new(Environment::new(network, local_id));
-		futures::executor::block_on(::futures::future::lazy(move |_| {
+		current_thread::block_on_all(::futures::future::lazy(move || {
 			// initialize chain
 			let last_finalized = env.with_chain(|chain| {
 				chain.push_blocks(GENESIS_HASH, &["A", "B", "C", "D", "E"]);
@@ -991,45 +996,46 @@ mod tests {
 				last_round_state,
 				last_finalized,
 			);
-			threads_pool.spawn_ok(voter.map(|v| v.expect("Error voting: {:?}")));
+			::tokio::spawn(exit.clone()
+				.until(voter.map_err(|e| panic!("Error voting: {:?}", e))).map(|_| ()));
 
-			threads_pool.spawn_ok(routing_task.map(|_| ()));
+			::tokio::spawn(exit.clone().until(routing_task).map(|_| ()));
 
-			threads_pool.spawn_ok(::futures::future::lazy(move |_| {
-				round_stream.into_future()
-					.then(|(value, stream)| { // wait for a prevote
+			::tokio::spawn(exit.until(::futures::future::lazy(|| {
+				round_stream.into_future().map_err(|(e, _)| e)
+					.and_then(|(value, stream)| { // wait for a prevote
 						assert!(match value {
-							Some(Ok(SignedMessage { message: Message::Prevote(_), id: Id(5), .. })) => true,
+							Some(SignedMessage { message: Message::Prevote(_), id: Id(5), .. }) => true,
 							_ => false,
 						});
 						let votes = vec![prevote, precommit].into_iter().map(Result::Ok);
-						futures::stream::iter(votes).forward(round_sink).map(|_| stream) // send our prevote
+						round_sink.send_all(futures::stream::iter_result(votes)).map(|_| stream) // send our prevote
 					})
-					.then(|stream| {
+					.and_then(|stream| {
 						stream.take_while(|value| match value { // wait for a precommit
-							Ok(SignedMessage { message: Message::Precommit(_), id: Id(5), .. }) => future::ready(false),
-							_ => future::ready(true),
-						}).for_each(|_| future::ready(()))
+							SignedMessage { message: Message::Precommit(_), id: Id(5), .. } => Ok(false),
+							_ => Ok(true),
+						}).for_each(|_| Ok(()))
 					})
-					.then(|_| {
+					.and_then(|_| {
 						// send our commit
-						stream::iter(std::iter::once(Ok(CommunicationOut::Commit(commit.0, commit.1)))).forward(commits_sink)
+						commits_sink.send(CommunicationOut::Commit(commit.0, commit.1))
 					})
 					.map_err(|_| ())
-			}).flatten().map(|_| ()));
+			})).map(|_| ()));
 
 			// wait for the first commit (ours)
-			commits_stream.into_future()
-				.then(|(_, stream)| {
-					stream.take(1).for_each(|_| future::ready(())) // the second commit should never arrive
-						.map(|()| Ok::<(), std::io::Error>(()))
+			commits_stream.into_future().map_err(|_| ())
+				.and_then(|(_, stream)| {
+					stream.take(1).for_each(|_| Ok(())) // the second commit should never arrive
 						.timeout(Duration::from_millis(500)).map_err(|_| ())
 				})
 				.then(|res| {
 					assert!(res.is_err()); // so the previous future times out
+					signal.fire();
 					futures::future::ok::<(), ()>(())
 				})
-		}).flatten()).unwrap();
+		})).unwrap();
 	}
 
 	#[test]
@@ -1044,7 +1050,7 @@ mod tests {
 		let (network, routing_task) = testing::environment::make_network();
 		let (_, commits_sink) = network.make_global_comms();
 
-		let threads_pool = futures::executor::ThreadPool::new().unwrap();
+		let (signal, exit) = ::exit_future::signal();
 
 		// this is a commit for a previous round
 		let commit = (0, Commit {
@@ -1059,7 +1065,7 @@ mod tests {
 
 		let global_comms = network.make_global_comms();
 		let env = Arc::new(Environment::new(network, local_id));
-		futures::executor::block_on(::futures::future::lazy(move |_| {
+		current_thread::block_on_all(::futures::future::lazy(move || {
 			// initialize chain
 			let last_finalized = env.with_chain(|chain| {
 				chain.push_blocks(GENESIS_HASH, &["A", "B", "C", "D", "E"]);
@@ -1077,18 +1083,20 @@ mod tests {
 				last_round_state,
 				last_finalized,
 			);
-			threads_pool.spawn_ok(voter.map(|v| v.expect("Error voting")));
+			::tokio::spawn(exit.clone()
+				.until(voter.map_err(|_| panic!("Error voting"))).map(|_| ()));
 
-			threads_pool.spawn_ok(routing_task.map(|_| ()));
+			::tokio::spawn(exit.until(routing_task).map(|_| ()));
 
-			threads_pool.spawn_ok(stream::iter(std::iter::once(Ok(CommunicationOut::Commit(commit.0, commit.1)))).forward(commits_sink)
+			::tokio::spawn(commits_sink.send(CommunicationOut::Commit(commit.0, commit.1))
 				.map_err(|_| ()).map(|_| ()));
 
 			// wait for the commit message to be processed which finalized block 6
 			env.finalized_stream()
-				.take_while(|&(_, n, _)| future::ready(n < 6))
-				.for_each(|_| future::ready(()))
-		}).flatten());
+				.take_while(|&(_, n, _)| Ok(n < 6))
+				.for_each(|_| Ok(()))
+				.map(|_| signal.fire())
+		})).unwrap();
 	}
 
 	#[test]
@@ -1097,10 +1105,10 @@ mod tests {
 		let voters: VoterSet<_> = (0..3).map(|i| (Id(i), 1)).collect();
 
 		let (network, routing_task) = testing::environment::make_network();
-		let threads_pool = futures::executor::ThreadPool::new().unwrap();
+		let (signal, exit) = ::exit_future::signal();
 
-		futures::executor::block_on(::futures::future::lazy(move |_| {
-			threads_pool.spawn_ok(routing_task.map(|_| ()));
+		current_thread::block_on_all(::futures::future::lazy(move || {
+			::tokio::spawn(exit.clone().until(routing_task).map(|_| ()));
 
 			// initialize unsynced voter at round 0
 			let mut unsynced_voter = {
@@ -1150,15 +1158,14 @@ mod tests {
 
 			// poll until it's caught up.
 			// should skip to round 6
-			::futures::future::poll_fn(move |cx| -> Poll<Result<(), ()>> {
-				let poll = Future::poll(Pin::new(&mut unsynced_voter), cx);
+			::futures::future::poll_fn(move || -> Poll<(), ()> {
+				let poll = unsynced_voter.poll().map_err(|_| ())?;
 				if unsynced_voter.best_round.round_number() == 6 {
-					Poll::Ready(Ok(()))
+					Ok(Async::Ready(()))
 				} else {
-					futures::ready!(poll).map_err(|_| ())?;
-					Poll::Ready(Ok(()))
+					Ok(poll)
 				}
-			})
-		}).flatten()).unwrap();
+			}).map(move |_| signal.fire())
+		})).unwrap();
 	}
 }
