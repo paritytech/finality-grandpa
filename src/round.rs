@@ -188,6 +188,11 @@ impl<Id: Hash + Eq + Clone, Vote: Clone + Eq, Signature: Clone + Eq> VoteTracker
 
 		votes
 	}
+
+	// weight and number of participants.
+	fn participation(&self) -> (u64, usize) {
+		(self.current_weight, self.votes.len())
+	}
 }
 
 /// State of the round.
@@ -696,6 +701,16 @@ impl<Id, H, N, Signature> Round<Id, H, N, Signature> where
 	/// Return the primary voter of the round.
 	pub fn primary_voter(&self) -> &(Id, u64) {
 		self.voters.voter_by_index(self.round_number as usize % self.voters.len())
+	}
+
+	/// Get the (weight, number) of voters who have participated in prevoting.
+	pub fn prevote_participation(&self) -> (u64, usize) {
+		self.prevote.participation()
+	}
+
+	/// Get the (weight, number) of voters who have participated in precommitting.
+	pub fn precommit_participation(&self) -> (u64, usize) {
+		self.precommit.participation()
 	}
 
 	/// Return all imported prevotes.

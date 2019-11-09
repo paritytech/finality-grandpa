@@ -154,6 +154,7 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 	pub (super) fn completed(
 		votes: Round<E::Id, H, N, E::Signature>,
 		finalized_sender: UnboundedSender<FinalizedNotification<H, N, E>>,
+		last_round_state: Option<crate::bridge_state::LatterView<H, N>>,
 		env: Arc<E>,
 	) -> VotingRound<H, N, E> {
 
@@ -168,7 +169,7 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 			bridged_round_state: None,
 			primary_block: None,
 			env,
-			last_round_state: None,
+			last_round_state,
 			finalized_sender,
 			best_finalized: None,
 		}
@@ -178,6 +179,7 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 	/// can continue to be polled.
 	pub(super) fn poll(&mut self) -> Poll<(), E::Error> {
 		trace!(target: "afg", "Polling round {}, state = {:?}, step = {:?}", self.votes.number(), self.votes.state(), self.state);
+
 		let pre_state = self.votes.state();
 		self.process_incoming()?;
 
@@ -230,8 +232,11 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 			_ => false,
 		};
 
+		self.log_participation();
+
 		// the previous round estimate must be finalized
 		if !last_round_estimate_finalized {
+			trace!("round {} completable but estimate not finalized.", self.round_number());
 			return Ok(Async::NotReady);
 		}
 
@@ -319,38 +324,64 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 		self.votes.historical_votes()
 	}
 
+	/// Handle a vote manually.
+	pub(super) fn handle_vote(&mut self, vote: SignedMessage<H, N, E::Signature, E::Id>) -> Result<(), E::Error> {
+		let SignedMessage { message, signature, id } = vote;
+		if !self.env.is_equal_or_descendent_of(self.votes.base().0, message.target().0.clone()) {
+			trace!(target: "afg", "Ignoring message targeting {:?} lower than round base {:?}",
+				message.target(),
+				self.votes.base(),
+			);
+			return Ok(())
+		}
+
+		match message {
+			Message::Prevote(prevote) => {
+				let import_result = self.votes.import_prevote(&*self.env, prevote, id, signature)?;
+				if let ImportResult { equivocation: Some(e), .. } = import_result {
+					self.env.prevote_equivocation(self.votes.number(), e);
+				}
+			}
+			Message::Precommit(precommit) => {
+				let import_result = self.votes.import_precommit(&*self.env, precommit, id, signature)?;
+				if let ImportResult { equivocation: Some(e), .. } = import_result {
+					self.env.precommit_equivocation(self.votes.number(), e);
+				}
+			}
+			Message::PrimaryPropose(primary) => {
+				let primary_id = self.votes.primary_voter().0.clone();
+				if id == primary_id {
+					self.primary_block = Some((primary.target_hash, primary.target_number));
+				}
+			}
+		}
+
+		Ok(())
+	}
+
+	fn log_participation(&self) {
+		let total_weight = self.voters().total_weight();
+		let threshold = self.voters().threshold();
+		let n_voters = self.voters().len();
+		let number = self.round_number();
+
+		let (prevote_weight, n_prevotes) = self.votes.prevote_participation();
+		let (precommit_weight, n_precommits) = self.votes.precommit_participation();
+
+
+		trace!(target: "afg", "round {} completable.", number);
+
+		trace!(target: "afg", "round {}: prevotes: {}/{}/{} weight, {}/{} actual",
+			number, prevote_weight, threshold, total_weight, n_prevotes, n_voters);
+
+		trace!(target: "afg", "round {}: precommits: {}/{}/{} weight, {}/{} actual",
+			number, precommit_weight, threshold, total_weight, n_precommits, n_voters);
+	}
+
 	fn process_incoming(&mut self) -> Result<(), E::Error> {
 		while let Async::Ready(Some(incoming)) = self.incoming.poll()? {
 			trace!(target: "afg", "Got incoming message");
-			let SignedMessage { message, signature, id } = incoming;
-			if !self.env.is_equal_or_descendent_of(self.votes.base().0, message.target().0.clone()) {
-				trace!(target: "afg", "Ignoring message targeting {:?} lower than round base {:?}",
-					   message.target(),
-					   self.votes.base(),
-				);
-				continue;
-			}
-
-			match message {
-				Message::Prevote(prevote) => {
-					let import_result = self.votes.import_prevote(&*self.env, prevote, id, signature)?;
-					if let ImportResult { equivocation: Some(e), .. } = import_result {
-						self.env.prevote_equivocation(self.votes.number(), e);
-					}
-				}
-				Message::Precommit(precommit) => {
-					let import_result = self.votes.import_precommit(&*self.env, precommit, id, signature)?;
-					if let ImportResult { equivocation: Some(e), .. } = import_result {
-						self.env.precommit_equivocation(self.votes.number(), e);
-					}
-				}
-				Message::PrimaryPropose(primary) => {
-					let primary_id = self.votes.primary_voter().0.clone();
-					if id == primary_id {
-						self.primary_block = Some((primary.target_hash, primary.target_number));
-					}
-				}
-			};
+			self.handle_vote(incoming)?;
 		}
 
 		Ok(())
