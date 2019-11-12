@@ -232,13 +232,18 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 			_ => false,
 		};
 
-		self.log_participation();
 
 		// the previous round estimate must be finalized
 		if !last_round_estimate_finalized {
 			trace!("round {} completable but estimate not finalized.", self.round_number());
+			self.log_participation(log::Level::Trace);
 			return Ok(Async::NotReady);
 		}
+
+		debug!(target: "afg", "Completed round {}, state = {:?}, step = {:?}",
+			self.votes.number(), self.votes.state(), self.state);
+
+		self.log_participation(log::Level::Debug);
 
 		// both exit conditions verified, we can complete this round
 		Ok(Async::Ready(()))
@@ -359,7 +364,7 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 		Ok(())
 	}
 
-	fn log_participation(&self) {
+	fn log_participation(&self, log_level: log::Level) {
 		let total_weight = self.voters().total_weight();
 		let threshold = self.voters().threshold();
 		let n_voters = self.voters().len();
@@ -368,12 +373,12 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 		let (prevote_weight, n_prevotes) = self.votes.prevote_participation();
 		let (precommit_weight, n_precommits) = self.votes.precommit_participation();
 
-		trace!(target: "afg", "round {} completable.", number);
+		log::log!(target: "afg", log_level, "round {} completable.", number);
 
-		trace!(target: "afg", "round {}: prevotes: {}/{}/{} weight, {}/{} actual",
+		log::log!(target: "afg", log_level, "round {}: prevotes: {}/{}/{} weight, {}/{} actual",
 			number, prevote_weight, threshold, total_weight, n_prevotes, n_voters);
 
-		trace!(target: "afg", "round {}: precommits: {}/{}/{} weight, {}/{} actual",
+		log::log!(target: "afg", log_level, "round {}: precommits: {}/{}/{} weight, {}/{} actual",
 			number, precommit_weight, threshold, total_weight, n_precommits, n_voters);
 	}
 
