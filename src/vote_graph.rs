@@ -76,18 +76,18 @@ pub struct VoteGraph<H: Ord + Eq, N, V> {
 }
 
 impl<H, N, V> VoteGraph<H, N, V> where
-	H: Ord + Eq + Clone + Ord + Debug,
-	V: AddAssign + Default + Clone + Debug,
+	H: Eq + Clone + Ord + Debug,
+	V: for<'a> AddAssign<&'a V> + Default + Clone + Debug,
 	N: Copy + Debug + BlockNumberOps,
 {
 	/// Create a new `VoteGraph` with base node as given.
-	pub fn new(base_hash: H, base_number: N) -> Self {
+	pub fn new(base_hash: H, base_number: N, base_node: V) -> Self {
 		let mut entries = BTreeMap::new();
 		entries.insert(base_hash.clone(), Entry {
 			number: base_number,
 			ancestors: Vec::new(),
 			descendents: Vec::new(),
-			cumulative_vote: V::default(),
+			cumulative_vote: base_node,
 		});
 
 		let mut heads = BTreeSet::new();
@@ -152,7 +152,10 @@ impl<H, N, V> VoteGraph<H, N, V> where
 	}
 
 	/// Insert a vote with given value into the graph at given hash and number.
-	pub fn insert<C: Chain<H, N>>(&mut self, hash: H, number: N, vote: V, chain: &C) -> Result<(), Error> {
+	pub fn insert<C: Chain<H, N>, W>(&mut self, hash: H, number: N, vote: W, chain: &C) -> Result<(), Error>
+	where
+		V: for<'a> AddAssign<&'a W>
+	{
 		if let Some(containing) = self.find_containing_nodes(hash.clone(), number) {
 			if containing.is_empty() {
 				self.append(hash.clone(), number, chain)?;
@@ -170,7 +173,7 @@ impl<H, N, V> VoteGraph<H, N, V> where
 			let active_entry = self.entries.get_mut(&inspecting_hash)
 				.expect("vote-node and its ancestry always exist after initial phase; qed");
 
-			active_entry.cumulative_vote += vote.clone();
+			active_entry.cumulative_vote += &vote;
 
 			match active_entry.ancestor_node() {
 				Some(parent) => { inspecting_hash = parent },
@@ -275,7 +278,8 @@ impl<H, N, V> VoteGraph<H, N, V> where
 	///
 	/// Returns `None` when the given `current_best` does not fulfill the condition.
 	pub fn find_ghost<'a, F>(&'a self, current_best: Option<(H, N)>, condition: F) -> Option<(H, N)>
-		where F: Fn(&V) -> bool
+	where
+		F: Fn(&V) -> bool,
 	{
 		let entries = &self.entries;
 		let get_node = |hash: &_| -> &'a _ {
@@ -350,7 +354,8 @@ impl<H, N, V> VoteGraph<H, N, V> where
 		force_constrain: Option<(H, N)>,
 		condition: F,
 	) -> Subchain<H, N>
-		where F: Fn(&V) -> bool
+	where
+		F: Fn(&V) -> bool,
 	{
 		let mut descendent_nodes: Vec<_> = active_node.descendents.iter()
 			.map(|h| self.entries.get(h).expect("descendents always present in node storage; qed"))
@@ -376,7 +381,7 @@ impl<H, N, V> VoteGraph<H, N, V> where
 				if let Some(d_block) = d_node.ancestor_block(base_number + offset) {
 					match descendent_blocks.binary_search_by_key(&d_block, |&(ref x, _)| x) {
 						Ok(idx) => {
-							descendent_blocks[idx].1 += d_node.cumulative_vote.clone();
+							descendent_blocks[idx].1 += &d_node.cumulative_vote;
 							if condition(&descendent_blocks[idx].1) {
 								new_best = Some(d_block.clone());
 								break
@@ -497,7 +502,7 @@ impl<H, N, V> VoteGraph<H, N, V> where
 				});
 
 				new_entry.descendents.push(descendent);
-				new_entry.cumulative_vote += entry.cumulative_vote.clone();
+				new_entry.cumulative_vote += &entry.cumulative_vote;
 			}
 
 			maybe_entry
@@ -562,13 +567,13 @@ mod tests {
 	#[test]
 	fn graph_fork_not_at_node() {
 		let mut chain = DummyChain::new();
-		let mut tracker = VoteGraph::new(GENESIS_HASH, 1);
+		let mut tracker = VoteGraph::new(GENESIS_HASH, 1, 0u32);
 
 		chain.push_blocks(GENESIS_HASH, &["A", "B", "C"]);
 		chain.push_blocks("C", &["D1", "E1", "F1"]);
 		chain.push_blocks("C", &["D2", "E2", "F2"]);
 
-		tracker.insert("A", 2, 100u32, &chain).unwrap();
+		tracker.insert("A", 2, 100, &chain).unwrap();
 		tracker.insert("E1", 6, 100, &chain).unwrap();
 		tracker.insert("F2", 7, 100, &chain).unwrap();
 
@@ -592,18 +597,18 @@ mod tests {
 	#[test]
 	fn graph_fork_at_node() {
 		let mut chain = DummyChain::new();
-		let mut tracker1 = VoteGraph::new(GENESIS_HASH, 1);
-		let mut tracker2 = VoteGraph::new(GENESIS_HASH, 1);
+		let mut tracker1 = VoteGraph::new(GENESIS_HASH, 1, 0u32);
+		let mut tracker2 = VoteGraph::new(GENESIS_HASH, 1, 0u32);
 
 		chain.push_blocks(GENESIS_HASH, &["A", "B", "C"]);
 		chain.push_blocks("C", &["D1", "E1", "F1"]);
 		chain.push_blocks("C", &["D2", "E2", "F2"]);
 
-		tracker1.insert("C", 4, 100u32, &chain).unwrap();
+		tracker1.insert("C", 4, 100, &chain).unwrap();
 		tracker1.insert("E1", 6, 100, &chain).unwrap();
 		tracker1.insert("F2", 7, 100, &chain).unwrap();
 
-		tracker2.insert("E1", 6, 100u32, &chain).unwrap();
+		tracker2.insert("E1", 6, 100, &chain).unwrap();
 		tracker2.insert("F2", 7, 100, &chain).unwrap();
 		tracker2.insert("C", 4, 100, &chain).unwrap();
 
@@ -631,13 +636,13 @@ mod tests {
 	#[test]
 	fn ghost_merge_at_node() {
 		let mut chain = DummyChain::new();
-		let mut tracker = VoteGraph::new(GENESIS_HASH, 1);
+		let mut tracker = VoteGraph::new(GENESIS_HASH, 1, 0u32);
 
 		chain.push_blocks(GENESIS_HASH, &["A", "B", "C"]);
 		chain.push_blocks("C", &["D1", "E1", "F1"]);
 		chain.push_blocks("C", &["D2", "E2", "F2"]);
 
-		tracker.insert("B", 3, 0u32, &chain).unwrap();
+		tracker.insert("B", 3, 0, &chain).unwrap();
 		tracker.insert("C", 4, 100, &chain).unwrap();
 		tracker.insert("E1", 6, 100, &chain).unwrap();
 		tracker.insert("F2", 7, 100, &chain).unwrap();
@@ -650,13 +655,13 @@ mod tests {
 	#[test]
 	fn ghost_merge_not_at_node_one_side_weighted() {
 		let mut chain = DummyChain::new();
-		let mut tracker = VoteGraph::new(GENESIS_HASH, 1);
+		let mut tracker = VoteGraph::new(GENESIS_HASH, 1, 0u32);
 
 		chain.push_blocks(GENESIS_HASH, &["A", "B", "C", "D", "E", "F"]);
 		chain.push_blocks("F", &["G1", "H1", "I1"]);
 		chain.push_blocks("F", &["G2", "H2", "I2"]);
 
-		tracker.insert("B", 3, 0u32, &chain).unwrap();
+		tracker.insert("B", 3, 0, &chain).unwrap();
 		tracker.insert("G1", 8, 100, &chain).unwrap();
 		tracker.insert("H2", 9, 150, &chain).unwrap();
 
@@ -669,13 +674,13 @@ mod tests {
 	#[test]
 	fn ghost_introduce_branch() {
 		let mut chain = DummyChain::new();
-		let mut tracker = VoteGraph::new(GENESIS_HASH, 1);
+		let mut tracker = VoteGraph::new(GENESIS_HASH, 1, 0u32);
 
 		chain.push_blocks(GENESIS_HASH, &["A", "B", "C", "D", "E", "F"]);
 		chain.push_blocks("E", &["EA", "EB", "EC", "ED"]);
 		chain.push_blocks("F", &["FA", "FB", "FC"]);
 
-		tracker.insert("FC", 10, 5u32, &chain).unwrap();
+		tracker.insert("FC", 10, 5, &chain).unwrap();
 		tracker.insert("ED", 10, 7, &chain).unwrap();
 
 		assert_eq!(tracker.find_ghost(None, |&x| x >= 10), Some(("E", 6)));
@@ -699,13 +704,13 @@ mod tests {
 	#[test]
 	fn walk_back_from_block_in_edge_fork_below() {
 		let mut chain = DummyChain::new();
-		let mut tracker = VoteGraph::new(GENESIS_HASH, 1);
+		let mut tracker = VoteGraph::new(GENESIS_HASH, 1, 0u32);
 
 		chain.push_blocks(GENESIS_HASH, &["A", "B", "C"]);
 		chain.push_blocks("C", &["D1", "E1", "F1", "G1", "H1", "I1"]);
 		chain.push_blocks("C", &["D2", "E2", "F2", "G2", "H2", "I2"]);
 
-		tracker.insert("B", 3, 10u32, &chain).unwrap();
+		tracker.insert("B", 3, 10, &chain).unwrap();
 		tracker.insert("F1", 7, 5, &chain).unwrap();
 		tracker.insert("G2", 8, 5, &chain).unwrap();
 
@@ -728,13 +733,13 @@ mod tests {
 	#[test]
 	fn walk_back_from_fork_block_node_below() {
 		let mut chain = DummyChain::new();
-		let mut tracker = VoteGraph::new(GENESIS_HASH, 1);
+		let mut tracker = VoteGraph::new(GENESIS_HASH, 1, 0u32);
 
 		chain.push_blocks(GENESIS_HASH, &["A", "B", "C", "D"]);
 		chain.push_blocks("D", &["E1", "F1", "G1", "H1", "I1"]);
 		chain.push_blocks("D", &["E2", "F2", "G2", "H2", "I2"]);
 
-		tracker.insert("B", 3, 10u32, &chain).unwrap();
+		tracker.insert("B", 3, 10, &chain).unwrap();
 		tracker.insert("F1", 7, 5, &chain).unwrap();
 		tracker.insert("G2", 8, 5, &chain).unwrap();
 
@@ -756,13 +761,13 @@ mod tests {
 	#[test]
 	fn walk_back_at_node() {
 		let mut chain = DummyChain::new();
-		let mut tracker = VoteGraph::new(GENESIS_HASH, 1);
+		let mut tracker = VoteGraph::new(GENESIS_HASH, 1, 0u32);
 
 		chain.push_blocks(GENESIS_HASH, &["A", "B", "C"]);
 		chain.push_blocks("C", &["D1", "E1", "F1", "G1", "H1", "I1"]);
 		chain.push_blocks("C", &["D2", "E2", "F2"]);
 
-		tracker.insert("C", 4, 10u32, &chain).unwrap();
+		tracker.insert("C", 4, 10, &chain).unwrap();
 		tracker.insert("F1", 7, 5, &chain).unwrap();
 		tracker.insert("F2", 7, 5, &chain).unwrap();
 		tracker.insert("I1", 10, 1, &chain).unwrap();
@@ -787,13 +792,13 @@ mod tests {
 	#[test]
 	fn adjust_base() {
 		let mut chain = DummyChain::new();
-		let mut tracker = VoteGraph::new("E", 6);
+		let mut tracker = VoteGraph::new("E", 6, 0u32);
 
 		chain.push_blocks(GENESIS_HASH, &["A", "B", "C", "D", "E", "F"]);
 		chain.push_blocks("E", &["EA", "EB", "EC", "ED"]);
 		chain.push_blocks("F", &["FA", "FB", "FC"]);
 
-		tracker.insert("FC", 10, 5u32, &chain).unwrap();
+		tracker.insert("FC", 10, 5, &chain).unwrap();
 		tracker.insert("ED", 10, 7, &chain).unwrap();
 
 		assert_eq!(tracker.base(), ("E", 6));
