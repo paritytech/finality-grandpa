@@ -16,6 +16,7 @@ num = { package = "num-traits", version = "0.2", default-features = false }
 hashbrown = { version = "0.6" }
 
 [dev-dependencies]
+env_logger = "0.7.1"
 exit-future = "0.1.2"
 rand = "0.6.0"
 tokio = "0.1.8"

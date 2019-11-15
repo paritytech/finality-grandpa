@@ -1168,4 +1168,76 @@ mod tests {
 			}).map(move |_| signal.fire())
 		})).unwrap();
 	}
+
+	#[test]
+	fn stall() {
+		// We create a set of 100 voters, 1 of them is an actual voter task
+		// running in the background, we will control the votes of the remaining
+		// 99 voters.
+		//
+		// We create a chain with 6 blocks, the tip of the chain being `E (#6)`.
+		//
+		// - The voter prevotes for the best block `E (#6)`;
+		// - We manually prevote with 66 voters for best block `E (#6)`;
+		// - We then precommit with 66 voters for block `D (#5)`;
+		//   - This is justifiable if the 66 voters had seen any prevotes from
+		//     the remaining 33 for block `D (#5)` which allowed it to reach
+		//     prevote threshold earlier and find a lower GHOST.
+		// - Round 1 estimate is set to `E (#6)` but we only finalize `D (#5)`,
+		//   the round is completable but kept in the background.
+		// - On round 2 we issue the same votes, and we stall.
+		env_logger::init();
+
+		let (network, routing_task) = testing::environment::make_network();
+
+		let voters = (0..100)
+			.map(|i| (Id(i), 1))
+			.collect::<VoterSet<_>>();
+
+		current_thread::block_on_all(::futures::future::lazy(move || {
+			::tokio::spawn(routing_task.map(|_| ()));
+
+			let env = Arc::new(Environment::new(network.clone(), Id(0)));
+			let last_finalized = env.with_chain(|chain| {
+				chain.push_blocks(GENESIS_HASH, &["A", "B", "C", "D", "E"]);
+				chain.last_finalized()
+			});
+
+			let last_round_state = RoundState::genesis((GENESIS_HASH, 1));
+
+			let voter = Voter::new(
+				env.clone(),
+				voters.clone(),
+				network.make_global_comms(),
+				0,
+				last_round_state,
+				last_finalized,
+			);
+
+			// spawn the background voter
+			::tokio::spawn(voter.map_err(|_| panic!("Error voting")).map(|_| ()));
+
+			let send_votes = |round| {
+				for id in 1..67 {
+					let (_, round_sink) = network.make_round_comms(round, Id(id));
+
+					let prevote = Message::Prevote(Prevote { target_hash: "E", target_number: 6 });
+					let precommit = Message::Precommit(Precommit { target_hash: "D", target_number: 5 });
+
+					::tokio::spawn(round_sink.send(prevote)
+						.and_then(|stream| {
+							stream.send(precommit)
+						})
+						.map_err(|_| ())
+						.map(|_| ())
+					);
+				}
+			};
+
+			send_votes(1);
+			send_votes(2);
+
+			Ok::<_, ()>(())
+		})).unwrap();
+	}
 }
