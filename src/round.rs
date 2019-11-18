@@ -798,7 +798,26 @@ mod tests {
 		).unwrap();
 
 		assert_eq!(round.prevote_ghost, Some(("E", 6)));
+		assert_eq!(round.estimate(), None);
+		assert!(!round.completable());
+
+		round.import_precommit(
+			&chain,
+			Precommit::new("E", 6),
+			"Alice",
+			Signature("Alice"),
+		).unwrap();
+
+		round.import_precommit(
+			&chain,
+			Precommit::new("E", 6),
+			"Bob",
+			Signature("Bob"),
+		).unwrap();
+
+		assert_eq!(round.prevote_ghost, Some(("E", 6)));
 		assert_eq!(round.estimate(), Some(&("E", 6)));
+		assert!(round.completable());
 	}
 
 	#[test]
