@@ -640,7 +640,6 @@ impl<Id, H, N, Signature> Round<Id, H, N, Signature> where
 				possible_to_precommit,
 			);
 		} else {
-			self.estimate = Some((g_hash, g_num));
 			return;
 		}
 
