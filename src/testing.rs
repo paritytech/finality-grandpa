@@ -243,6 +243,16 @@ pub mod environment {
 			Ok(())
 		}
 
+		fn concluded(
+			&self,
+			_round: u64,
+			_state: RoundState<&'static str, u32>,
+			_base: (&'static str, u32),
+			_votes: &HistoricalVotes<&'static str, u32, Self::Signature, Self::Id>,
+		) -> Result<(), Error> {
+			Ok(())
+		}
+
 		fn finalize_block(&self, hash: &'static str, number: u32, _round: u64, commit: Commit<&'static str, u32, Signature, Id>) -> Result<(), Error> {
 			let mut chain = self.chain.lock();
 

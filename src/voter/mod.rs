@@ -103,9 +103,24 @@ pub trait Environment<H: Eq, N: BlockNumberOps>: Chain<H, N> {
 	/// Note that we have precommitted in the given round.
 	fn precommitted(&self, round: u64, precommit: Precommit<H, N>) -> Result<(), Self::Error>;
 
-	/// Note that a round was completed. This is called when a round has been
-	/// voted in. Should return an error when something fatal occurs.
+	/// Note that a round is completed. This is called when a round has been
+	/// voted in and the next round can start. The round may continue to be run
+	/// in the background until _concluded_.
+	/// Should return an error when something fatal occurs.
 	fn completed(
+		&self,
+		round: u64,
+		state: RoundState<H, N>,
+		base: (H, N),
+		votes: &HistoricalVotes<H, N, Self::Signature, Self::Id>,
+	) -> Result<(), Self::Error>;
+
+	/// Note that a round has concluded. This is called when a round has been
+	/// `completed` and additionally, the round's estimate has been finalized.
+	///
+	/// There may be more votes than when `completed`, and it is the responsibility
+	/// of the `Environment` implementation to deduplicate.
+	fn concluded(
 		&self,
 		round: u64,
 		state: RoundState<H, N>,

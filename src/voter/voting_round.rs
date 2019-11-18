@@ -254,6 +254,11 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 		self.state.as_ref()
 	}
 
+	/// Get access to the underlying environment.
+	pub(super) fn env(&self) -> &E {
+		&*self.env
+	}
+
 	/// Get the round number.
 	pub(super) fn round_number(&self) -> u64 {
 		self.votes.number()
