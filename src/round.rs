@@ -640,6 +640,9 @@ impl<Id, H, N, Signature> Round<Id, H, N, Signature> where
 				possible_to_precommit,
 			);
 		} else {
+			// although technically the estimate would be equal to the
+			// prevote-ghost here, having an estimate is not a useful notion
+			// until we have threshold precommit-weight.
 			return;
 		}
 
@@ -784,7 +787,7 @@ mod tests {
 		).unwrap();
 
 		assert_eq!(round.prevote_ghost, Some(("E", 6)));
-		assert_eq!(round.estimate(), Some(&("E", 6)));
+		assert_eq!(round.estimate(), None);
 		assert!(!round.completable());
 
 		round.import_prevote(
