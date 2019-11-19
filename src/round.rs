@@ -245,7 +245,7 @@ pub struct Round<Id: Hash + Eq, H: Hash + Eq, N, Signature> {
 }
 
 /// Result of importing a Prevote or Precommit.
-pub(crate) struct ImportResult<Id, P, Signature> {
+pub struct ImportResult<Id, P, Signature> {
 	/// Indicates if the voter is part of the voter set.
 	pub(crate) valid_voter: bool,
 	/// Indicates if the vote is duplicated.
@@ -299,12 +299,11 @@ impl<Id, H, N, Signature> Round<Id, H, N, Signature> where
 		self.round_number
 	}
 
-	#[allow(unused)]
 	/// Import a prevote. Returns an equivocation proof, if the vote is an equivocation,
 	/// and a bool indicating if the vote is duplicated (see `ImportResult`).
 	///
 	/// Ignores duplicate prevotes (not equivocations).
-	pub(crate) fn import_prevote<C: Chain<H, N>>(
+	pub fn import_prevote<C: Chain<H, N>>(
 		&mut self,
 		chain: &C,
 		vote: Prevote<H, N>,
@@ -393,7 +392,7 @@ impl<Id, H, N, Signature> Round<Id, H, N, Signature> where
 	/// equivocation, and a bool indicating if the vote is duplicated (see `ImportResult`).
 	///
 	/// Ignores duplicate precommits (not equivocations).
-	pub(crate) fn import_precommit<C: Chain<H, N>>(
+	pub fn import_precommit<C: Chain<H, N>>(
 		&mut self,
 		chain: &C,
 		vote: Precommit<H, N>,

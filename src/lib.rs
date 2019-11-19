@@ -74,7 +74,7 @@ pub mod voter;
 #[cfg(feature = "std")]
 mod bridge_state;
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-helpers"))]
 mod testing;
 
 #[cfg(feature = "derive-codec")]
