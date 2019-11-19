@@ -560,7 +560,7 @@ impl<Id, H, N, Signature> Round<Id, H, N, Signature> where
 		let threshold = self.threshold();
 		if self.prevote.current_weight < threshold { return }
 
-		let remaining_commit_votes = self.total_weight - self.precommit.current_weight;
+		let remaining_precommits = self.total_weight - self.precommit.current_weight;
 		let equivocators = &self.bitfield_context.equivocators();
 
 		let voters = &self.voters;
@@ -586,9 +586,8 @@ impl<Id, H, N, Signature> Round<Id, H, N, Signature> where
 		// not straightforward because we have to account for all possible future
 		// equivocations and thus cannot discount weight from validators who
 		// have already voted.
+		let tolerated_equivocations = self.total_weight - threshold;
 		let possible_to_precommit = {
-			let tolerated_equivocations = self.total_weight - threshold;
-
 			// find how many more equivocations we could still get.
 			//
 			// it is only important to consider the voters whose votes
@@ -616,24 +615,23 @@ impl<Id, H, N, Signature> Round<Id, H, N, Signature> where
 				// assuming all remaining actors commit to this block,
 				// and that we get further equivocations
 				let full_possible_weight = precommitted_for
-					.saturating_add(remaining_commit_votes)
+					.saturating_add(remaining_precommits)
 					.saturating_add(possible_equivocations);
 
 				full_possible_weight >= threshold
 			}
 		};
 
-		// until we have threshold precommits, any new block could get supermajority
-		// precommits because there are at least f + 1 precommits remaining and then
-		// f equivocations.
+		// until the amount of remaining voters + f is less than the threshold,
+		// any new block could get supermajority precommits.
 		//
-		// once it's at least that level, we only need to consider blocks
+		// when it is less than that level, we only need to consider blocks
 		// already referenced in the graph, because no new leaf nodes
 		// could ever have enough precommits.
 		//
 		// the round-estimate is the highest block in the chain with head
 		// `prevote_ghost` that could have supermajority-commits.
-		if self.precommit.current_weight >= threshold {
+		if remaining_precommits + tolerated_equivocations < threshold {
 			self.estimate = self.graph.find_ancestor(
 				g_hash.clone(),
 				g_num,
@@ -642,7 +640,7 @@ impl<Id, H, N, Signature> Round<Id, H, N, Signature> where
 		} else {
 			// although technically the estimate would be equal to the
 			// prevote-ghost here, having an estimate is not a useful notion
-			// until we have threshold precommit-weight.
+			// until the round could possibly be completable.
 			return;
 		}
 
@@ -817,6 +815,51 @@ mod tests {
 
 		assert_eq!(round.prevote_ghost, Some(("E", 6)));
 		assert_eq!(round.estimate(), Some(&("E", 6)));
+		assert!(round.completable());
+	}
+
+	#[test]
+	fn round_can_be_completable_without_supermajority() {
+		// n = 5, f = 1. We have 3 votes on block "C". There are 2 votes remaining
+		// with only 1 possible equivocation. It's impossible for any descendent
+		// of "C" to get supermajority = 4 votes. Because of this, the round is completable.
+		let voter_names = ["Alice", "Bob", "Charlie", "Dave", "Eve"];
+		let voters: VoterSet<&'static str> = voter_names.iter().map(|name| (*name, 1)).collect();
+
+		let mut chain = DummyChain::new();
+		chain.push_blocks(GENESIS_HASH, &["A", "B", "C", "D", "E", "F"]);
+
+		let mut round = Round::new(RoundParams {
+			round_number: 1,
+			voters,
+			base: ("A", 2),
+		});
+
+		// cast prevotes.
+		for voter in voter_names.iter().cloned().take(4) {
+			round.import_prevote(
+				&chain,
+				Prevote::new("C", 4),
+				voter,
+				Signature(voter),
+			).unwrap();
+		}
+
+		assert_eq!(round.prevote_ghost, Some(("C", 4)));
+		assert!(!round.completable());
+
+		// cast 3 precommits on "C"
+		for voter in voter_names.iter().cloned().take(3) {
+			round.import_precommit(
+				&chain,
+				Precommit::new("C", 4),
+				voter,
+				Signature(voter),
+			).unwrap();
+		}
+
+		assert_eq!(round.prevote_ghost, Some(("C", 4)));
+		assert_eq!(round.estimate, Some(("C", 4)));
 		assert!(round.completable());
 	}
 
