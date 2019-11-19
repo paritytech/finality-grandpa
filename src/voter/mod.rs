@@ -119,7 +119,8 @@ pub trait Environment<H: Eq, N: BlockNumberOps>: Chain<H, N> {
 	/// `completed` and additionally, the round's estimate has been finalized.
 	///
 	/// There may be more votes than when `completed`, and it is the responsibility
-	/// of the `Environment` implementation to deduplicate.
+	/// of the `Environment` implementation to deduplicate. However, the caller guarantees
+	/// that the votes passed to `completed` for this round are a prefix of the votes passed here.
 	fn concluded(
 		&self,
 		round: u64,

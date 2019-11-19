@@ -550,13 +550,14 @@ impl<H, N, S, Id> HistoricalVotes<H, N, S, Id> {
 		}
 	}
 
-	/// Push a vote into the list.
+	/// Push a vote into the list. The value of `self` before this call
+	/// is considered to be a prefix of the value post-call.
 	pub fn push_vote(&mut self, msg: SignedMessage<H, N, S, Id>) {
 		self.seen.push(msg)
 	}
 
 	/// Return the messages seen so far.
-	pub fn seen(&self) -> &Vec<SignedMessage<H, N, S, Id>> {
+	pub fn seen(&self) -> &[SignedMessage<H, N, S, Id>] {
 		&self.seen
 	}
 
