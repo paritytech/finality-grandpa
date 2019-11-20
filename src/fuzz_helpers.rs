@@ -206,7 +206,7 @@ pub fn execute_fuzzed_vote(data: &[u8]) {
 		= voters().iter().map(|_| Round::new(RoundParams {
 			round_number: 0,
 			voters: voters().iter().cloned().map(|v| (v, 1)).collect(),
-			base: (0, 1),
+			base: (0, 0),
 		})).collect();
 
 	let prevotes = voters().iter().filter_map(|_| {
