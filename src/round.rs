@@ -19,16 +19,12 @@ use parity_scale_codec::{Encode, Decode};
 
 use crate::bitfield::{Context as BitfieldContext, Bitfield};
 use crate::std::{
-	self, collections::hash_map::{HashMap, Entry}, hash::Hash, fmt, ops::AddAssign, vec::Vec,
+	self, collections::btree_map::{BTreeMap, Entry}, fmt, ops::AddAssign, vec::Vec,
 };
 use crate::vote_graph::VoteGraph;
 use crate::voter_set::VoterSet;
 
 use super::{Equivocation, Prevote, Precommit, Chain, BlockNumberOps, HistoricalVotes, Message, SignedMessage};
-
-#[derive(Eq, PartialEq)]
-#[cfg_attr(feature = "std", derive(Hash))]
-struct Address;
 
 #[derive(PartialEq, Eq)]
 #[cfg_attr(feature = "std", derive(Debug))]
@@ -54,7 +50,7 @@ impl Default for VoteWeight {
 impl VoteWeight {
 	// compute the total weight of all votes on this node.
 	// equivocators are counted as voting for everything, and must be provided.
-	fn total_weight<Id: Hash + Eq>(
+	fn total_weight<Id: Ord + Eq>(
 		&self,
 		equivocators: &Bitfield,
 		voter_set: &VoterSet<Id>,
@@ -102,8 +98,8 @@ impl<Vote: Eq, Signature: Eq> VoteMultiplicity<Vote, Signature> {
 	}
 }
 
-struct VoteTracker<Id: Hash + Eq, Vote, Signature> {
-	votes: HashMap<Id, VoteMultiplicity<Vote, Signature>>,
+struct VoteTracker<Id: Ord + Eq, Vote, Signature> {
+	votes: BTreeMap<Id, VoteMultiplicity<Vote, Signature>>,
 	current_weight: u64,
 }
 
@@ -113,10 +109,10 @@ pub(crate) struct AddVoteResult<'a, Vote, Signature> {
 	duplicated: bool,
 }
 
-impl<Id: Hash + Eq + Clone, Vote: Clone + Eq, Signature: Clone + Eq> VoteTracker<Id, Vote, Signature> {
+impl<Id: Ord + Eq + Clone, Vote: Clone + Eq, Signature: Clone + Eq> VoteTracker<Id, Vote, Signature> {
 	fn new() -> Self {
 		VoteTracker {
-			votes: HashMap::new(),
+			votes: BTreeMap::new(),
 			current_weight: 0,
 		}
 	}
@@ -223,7 +219,7 @@ impl<H: Clone, N: Clone> State<H, N> {
 }
 
 /// Parameters for starting a round.
-pub struct RoundParams<Id: Hash + Eq, H, N> {
+pub struct RoundParams<Id: Ord + Eq, H, N> {
 	/// The round number for votes.
 	pub round_number: u64,
 	/// Actors and weights in the round.
@@ -233,7 +229,7 @@ pub struct RoundParams<Id: Hash + Eq, H, N> {
 }
 
 /// Stores data for a round.
-pub struct Round<Id: Hash + Eq, H: Hash + Eq, N, Signature> {
+pub struct Round<Id: Ord + Eq, H: Ord + Eq, N, Signature> {
 	graph: VoteGraph<H, N, VoteWeight>, // DAG of blocks which have been voted on.
 	prevote: VoteTracker<Id, Prevote<H, N>, Signature>, // tracks prevotes that have been counted
 	precommit: VoteTracker<Id, Precommit<H, N>, Signature>, // tracks precommits
@@ -270,8 +266,8 @@ impl<Id, P, Signature> Default for ImportResult<Id, P, Signature> {
 }
 
 impl<Id, H, N, Signature> Round<Id, H, N, Signature> where
-	Id: Hash + Clone + Eq + fmt::Debug,
-	H: Hash + Clone + Eq + Ord + fmt::Debug,
+	Id: Ord + Clone + Eq + fmt::Debug,
+	H: Ord + Clone + Eq + Ord + fmt::Debug,
 	N: Copy + fmt::Debug + BlockNumberOps,
 	Signature: Eq + Clone,
 {
@@ -309,6 +305,7 @@ impl<Id, H, N, Signature> Round<Id, H, N, Signature> where
 	/// and a bool indicating if the vote is duplicated (see `ImportResult`).
 	///
 	/// Ignores duplicate prevotes (not equivocations).
+	#[cfg_attr(not(feature = "std"), allow(unused))]
 	pub(crate) fn import_prevote<C: Chain<H, N>>(
 		&mut self,
 		chain: &C,
@@ -769,7 +766,7 @@ mod tests {
 		].iter().cloned().collect()
 	}
 
-	#[derive(PartialEq, Eq, Hash, Clone, Debug)]
+	#[derive(PartialEq, Eq, Clone, Debug)]
 	struct Signature(&'static str);
 
 	#[test]
