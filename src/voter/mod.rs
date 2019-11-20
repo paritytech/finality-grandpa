@@ -368,11 +368,11 @@ type FinalizedNotification<H, N, E> = (
 	Commit<H, N, <E as Environment<H, N>>::Signature, <E as Environment<H, N>>::Id>,
 );
 
-// instantiates the last round, to be backgrounded until its estimate is finalized.
+// Instantiates the given last round, to be backgrounded until its estimate is finalized.
 //
-// this round must be comletable based on the passed votes (and if not, `None` will be returned)
+// This round must be completable based on the passed votes (and if not, `None` will be returned),
 // but it may be the case that there are some more votes to propagate in order to push
-// the estimate backwards.
+// the estimate backwards and conclude the round (i.e. finalize its estimate).
 fn instantiate_last_round<H, N, E: Environment<H, N>>(
 	voters: VoterSet<E::Id>,
 	last_round_votes: Vec<SignedMessage<H, N, E::Signature, E::Id>>,
