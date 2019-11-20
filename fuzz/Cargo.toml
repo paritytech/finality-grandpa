@@ -32,6 +32,15 @@ name = "round"
 path = "libfuzz_targets/round.rs"
 
 [[bin]]
+name = "graph"
+path = "libfuzz_targets/graph.rs"
+
+[[bin]]
 name = "round_afl"
 path = "afl_targets/round.rs"
-features = ["afl"]
+required-features = ["afl"]
+
+[[bin]]
+name = "graph_afl"
+path = "afl_targets/graph.rs"
+required-features = ["afl"]

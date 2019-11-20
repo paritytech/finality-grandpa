@@ -49,6 +49,34 @@ impl FuzzChain {
 			_ => panic!("invalid block hash"),
 		}
 	}
+
+	fn children(hash: Hash) -> &'static [Hash] {
+		match hash {
+			0 => &[1, 2, 3],
+			1 => &[4, 5, 6],
+			2 => &[7, 8, 9],
+			4 => &[10, 11, 12],
+			7 => &[13, 14, 15],
+			_ => &[],
+		}
+	}
+
+	fn all_descendents(hash: Hash) -> impl Iterator<Item=Hash> {
+		let children = Self::children(hash);
+
+		struct Descendents(Vec<Hash>);
+		impl Iterator for Descendents {
+			type Item = Hash;
+
+			fn next(&mut self) -> Option<Hash> {
+				let next = self.0.pop()?;
+				self.0.extend(FuzzChain::children(next).iter().cloned());
+				Some(next)
+			}
+		}
+
+		Descendents(children.to_vec())
+	}
 }
 
 impl Chain<Hash, BlockNumber> for FuzzChain {
@@ -331,6 +359,128 @@ pub fn execute_fuzzed_vote(data: &[u8]) {
 				last_estimate = new_state.estimate;
 			}
 		}
+	}
+}
+
+pub fn execute_fuzzed_graph(data: &[u8]) {
+	// 100 voters, all voting on random blocks.
+	const N: u8 = 100;
+	const T: u8 = 67;
+
+	#[derive(Default, Clone, Debug)]
+	struct Vote(u8, u8);
+	impl std::ops::AddAssign for Vote {
+		fn add_assign(&mut self, other: Vote) {
+			self.0 += other.0;
+			self.1 += other.1;
+		}
+	}
+
+	let mut stream = RandomnessStream {
+		inner: data,
+		pos: 0,
+		half_nibble: false,
+	};
+
+	let mut graph = crate::vote_graph::VoteGraph::new(0, 0);
+
+	let mut prevote_ghost = None;
+	for _ in 0..N {
+		let target_hash = match stream.read_nibble() {
+			None => return,
+			Some(h) => h,
+		};
+		let target_number = FuzzChain::number(target_hash);
+
+		graph.insert(target_hash, target_number, Vote(1, 0), &FuzzChain).unwrap();
+
+		let new_prevote_ghost = graph.find_ghost(prevote_ghost.clone(), |v| v.0 >= T);
+		if let Some((o_h, o_n)) = prevote_ghost {
+			let (n_h, n_n) = new_prevote_ghost.expect("ghost does not disappear with more votes.");
+
+			// assert it always moves forwards.
+			assert!(
+				o_h == n_h
+				|| (n_n > o_n && FuzzChain.ancestry(o_h, n_h).is_ok())
+			);
+		}
+
+		if let Some((p_h, _p_n)) = new_prevote_ghost {
+			// ensure that no children have enough votes.
+			for descendent in FuzzChain::all_descendents(p_h) {
+				let n = FuzzChain::number(descendent);
+				assert!(graph.cumulative_vote(descendent, n).0 < T);
+			}
+		}
+
+		prevote_ghost = new_prevote_ghost;
+	}
+
+	let prevote_ghost = prevote_ghost.expect("prevote ghost always some by this point.");
+
+	let mut estimate: Option<(Hash, BlockNumber)> = None;
+	let mut completable = false;
+	for i in 0..N {
+		let target_hash = match stream.read_nibble() {
+			None => return,
+			Some(h) => h,
+		};
+
+		let target_hash = match FuzzChain.ancestry(prevote_ghost.0, target_hash) {
+			Ok(_) => target_hash,
+			Err(_) => prevote_ghost.0,
+		};
+
+		let target_number = FuzzChain::number(target_hash);
+		graph.insert(target_hash, target_number, Vote(0, 1), &FuzzChain).unwrap();
+
+		let new_prevote_ghost = graph.find_ghost(Some(prevote_ghost.clone()), |v| v.0 >= T).unwrap();
+		assert_eq!(new_prevote_ghost, prevote_ghost, "should not change");
+
+		if i < T { return }
+
+		let remaining = N - i - 1;
+		let possible_equivocations = 33;
+		let possible_to_precommit = |v: &Vote| v.1 + remaining + possible_equivocations >= T;
+
+		let new_estimate = graph.find_ancestor(
+			prevote_ghost.0,
+			prevote_ghost.1,
+			possible_to_precommit,
+		);
+
+		let newly_completable = if let Some((e_h, e_n)) = new_estimate {
+			let ancestor_of = e_h != prevote_ghost.0 && {
+				// is ancestor of prevote ghost.
+				assert!(FuzzChain.ancestry(e_h, prevote_ghost.0).is_ok());
+
+				true
+			};
+
+			ancestor_of || {
+				graph.find_ghost(
+					Some((e_h, e_n)),
+					possible_to_precommit,
+				).map_or(true, |x| x == prevote_ghost)
+			}
+		} else {
+			false
+		};
+
+		if completable {
+			assert!(newly_completable);
+			let new_estimate = new_estimate.expect("was completable before; estimate exists");
+			let estimate = estimate.expect("was completable before");
+
+			// estimate may only move monotonically backwards from this point.
+			assert!(
+				estimate == new_estimate
+				|| FuzzChain.ancestry(new_estimate.0, estimate.0).is_ok()
+			)
+		}
+
+		estimate = new_estimate.clone();
+		completable = newly_completable;
 	}
 }
 
