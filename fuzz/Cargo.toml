@@ -16,10 +16,22 @@ features = ["fuzz-helpers"]
 [dependencies.libfuzzer-sys]
 git = "https://github.com/rust-fuzz/libfuzzer-sys.git"
 
+[dependencies.afl]
+version = "0.5"
+optional = true
+
 # Prevent this from interfering with workspaces
 [workspace]
 members = ["."]
 
+[features]
+default = []
+
 [[bin]]
 name = "round"
-path = "fuzz_targets/round.rs"
+path = "libfuzz_targets/round.rs"
+
+[[bin]]
+name = "round_afl"
+path = "afl_targets/round.rs"
+features = ["afl"]
