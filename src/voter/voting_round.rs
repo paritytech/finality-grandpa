@@ -370,7 +370,7 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 
 		trace!(target: "afg", "round {} completable.", number);
 
-		trace!(target: "afg", "round {}: prevotes: {}/{}/{} weight, {}/{} actual",
+		trace!(target: "afg", "Round {}: prevotes: {}/{}/{} weight, {}/{} actual",
 			number, prevote_weight, threshold, total_weight, n_prevotes, n_voters);
 
 		trace!(target: "afg", "round {}: precommits: {}/{}/{} weight, {}/{} actual",
