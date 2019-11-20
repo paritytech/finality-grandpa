@@ -316,6 +316,7 @@ impl<Id, H, N, Signature> Round<Id, H, N, Signature> where
 			Some(info) => info,
 			None => return Ok(import_result),
 		};
+
 		import_result.valid_voter = true;
 		let weight = info.weight();
 

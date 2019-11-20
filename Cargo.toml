@@ -19,7 +19,6 @@ hashbrown = { version = "0.6" }
 exit-future = "0.1.2"
 rand = "0.6.0"
 tokio = "0.1.8"
-afl = "0.5"
 
 [features]
 default = ["std"]
