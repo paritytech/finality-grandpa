@@ -11,16 +11,14 @@ cargo-fuzz = true
 
 [dependencies.finality-grandpa]
 path = ".."
+features = ["fuzz-helpers"]
+
 [dependencies.libfuzzer-sys]
 git = "https://github.com/rust-fuzz/libfuzzer-sys.git"
 
 # Prevent this from interfering with workspaces
 [workspace]
 members = ["."]
-
-[[bin]]
-name = "fuzz_target_1"
-path = "fuzz_targets/fuzz_target_1.rs"
 
 [[bin]]
 name = "round"

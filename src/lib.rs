@@ -77,6 +77,9 @@ mod bridge_state;
 #[cfg(any(test, feature = "test-helpers"))]
 mod testing;
 
+#[cfg(any(test, feature = "fuzz-helpers"))]
+pub mod fuzz_helpers;
+
 #[cfg(feature = "derive-codec")]
 use parity_scale_codec::{Encode, Decode};
 
