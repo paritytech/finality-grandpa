@@ -236,7 +236,7 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 
 		// the previous round estimate must be finalized
 		if !last_round_estimate_finalized {
-			trace!(target: "afg", "round {} completable but estimate not finalized.", self.round_number());
+			trace!(target: "afg", "Round {} completable but estimate not finalized.", self.round_number());
 			return Ok(Async::NotReady);
 		}
 
