@@ -189,7 +189,7 @@ impl<Id: Hash + Eq + Clone, Vote: Clone + Eq, Signature: Clone + Eq> VoteTracker
 		votes
 	}
 
-	// weight and number of participants.
+	// Current vote weight and number of participants.
 	fn participation(&self) -> (u64, usize) {
 		(self.current_weight, self.votes.len())
 	}
