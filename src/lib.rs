@@ -44,7 +44,8 @@ mod std {
 	}
 
 	pub mod collections {
-		pub use hashbrown::{hash_map, HashMap, HashSet};
+		pub use alloc::collections::btree_map::{self, BTreeMap};
+		pub use alloc::collections::btree_set::{self, BTreeSet};
 	}
 
 	pub mod fmt {
@@ -437,9 +438,9 @@ pub fn validate_commit<H, N, S, I, C: Chain<H, N>>(
 	chain: &C,
 ) -> Result<CommitValidationResult<H, N>, crate::Error>
 	where
-	H: std::hash::Hash + Clone + Eq + Ord + std::fmt::Debug,
+	H: Clone + Eq + Ord + std::fmt::Debug,
 	N: Copy + BlockNumberOps + std::fmt::Debug,
-	I: Clone + std::hash::Hash + Eq + std::fmt::Debug,
+	I: Clone + Ord + Eq + std::fmt::Debug,
 	S: Clone + Eq,
 {
 	let mut validation_result = CommitValidationResult::default();
@@ -459,7 +460,7 @@ pub fn validate_commit<H, N, S, I, C: Chain<H, N>>(
 		return Ok(validation_result);
 	}
 
-	let mut equivocated = std::collections::HashSet::new();
+	let mut equivocated = std::collections::BTreeSet::new();
 
 	// Add all precommits to the round with correct counting logic
 	// using the commit target as a base.

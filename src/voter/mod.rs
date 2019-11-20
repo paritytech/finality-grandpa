@@ -31,7 +31,6 @@ use futures::sync::mpsc::{self, UnboundedReceiver};
 use log::trace;
 
 use std::collections::VecDeque;
-use std::hash::Hash;
 use std::sync::Arc;
 
 use crate::round::State as RoundState;
@@ -52,7 +51,7 @@ mod voting_round;
 /// This encapsulates the database and networking layers of the chain.
 pub trait Environment<H: Eq, N: BlockNumberOps>: Chain<H, N> {
 	type Timer: Future<Item=(),Error=Self::Error>;
-	type Id: Hash + Clone + Eq + ::std::fmt::Debug;
+	type Id: Ord + Clone + Eq + ::std::fmt::Debug;
 	type Signature: Eq + Clone;
 	type In: Stream<Item=SignedMessage<H, N, Self::Signature, Self::Id>, Error=Self::Error>;
 	type Out: Sink<SinkItem=Message<H, N>, SinkError=Self::Error>;
@@ -380,7 +379,7 @@ type FinalizedNotification<H, N, E> = (
 /// currently running, we validate the commit and dispatch a finalization
 /// notification (if any) to the environment.
 pub struct Voter<H, N, E: Environment<H, N>, GlobalIn, GlobalOut> where
-	H: Hash + Clone + Eq + Ord + ::std::fmt::Debug,
+	H: Clone + Eq + Ord + ::std::fmt::Debug,
 	N: Copy + BlockNumberOps + ::std::fmt::Debug,
 	GlobalIn: Stream<Item=CommunicationIn<H, N, E::Signature, E::Id>, Error=E::Error>,
 	GlobalOut: Sink<SinkItem=CommunicationOut<H, N, E::Signature, E::Id>, SinkError=E::Error>,
@@ -400,7 +399,7 @@ pub struct Voter<H, N, E: Environment<H, N>, GlobalIn, GlobalOut> where
 }
 
 impl<H, N, E: Environment<H, N>, GlobalIn, GlobalOut> Voter<H, N, E, GlobalIn, GlobalOut> where
-	H: Hash + Clone + Eq + Ord + ::std::fmt::Debug,
+	H: Clone + Eq + Ord + ::std::fmt::Debug,
 	N: Copy + BlockNumberOps + ::std::fmt::Debug,
 	GlobalIn: Stream<Item=CommunicationIn<H, N, E::Signature, E::Id>, Error=E::Error>,
 	GlobalOut: Sink<SinkItem=CommunicationOut<H, N, E::Signature, E::Id>, SinkError=E::Error>,
@@ -660,7 +659,7 @@ impl<H, N, E: Environment<H, N>, GlobalIn, GlobalOut> Voter<H, N, E, GlobalIn, G
 }
 
 impl<H, N, E: Environment<H, N>, GlobalIn, GlobalOut> Future for Voter<H, N, E, GlobalIn, GlobalOut> where
-	H: Hash + Clone + Eq + Ord + ::std::fmt::Debug,
+	H: Clone + Eq + Ord + ::std::fmt::Debug,
 	N: Copy + BlockNumberOps + ::std::fmt::Debug,
 	GlobalIn: Stream<Item=CommunicationIn<H, N, E::Signature, E::Id>, Error=E::Error>,
 	GlobalOut: Sink<SinkItem=CommunicationOut<H, N, E::Signature, E::Id>, SinkError=E::Error>,
@@ -686,10 +685,10 @@ fn validate_catch_up<H, N, S, I, E>(
 	voters: &VoterSet<I>,
 	best_round_number: u64,
 ) -> Option<crate::round::Round<I, H, N, S>> where
-	H: Clone + Eq + Ord + std::fmt::Debug + std::hash::Hash,
+	H: Clone + Eq + Ord + std::fmt::Debug,
 	N: BlockNumberOps + std::fmt::Debug,
 	S: Clone + Eq,
-	I: Clone + Eq + std::fmt::Debug + std::hash::Hash,
+	I: Clone + Eq + std::fmt::Debug + Ord,
 	E: Environment<H, N>,
 {
 	if catch_up.round_number <= best_round_number {
@@ -701,7 +700,7 @@ fn validate_catch_up<H, N, S, I, E>(
 
 	// check threshold support in prevotes and precommits.
 	{
-		let mut map = std::collections::HashMap::new();
+		let mut map = std::collections::BTreeMap::new();
 
 		for prevote in &catch_up.prevotes {
 			if !voters.contains_key(&prevote.id) {

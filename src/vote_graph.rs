@@ -17,7 +17,7 @@
 //! See docs on `VoteGraph` for more information.
 
 use crate::std::{
-	self, collections::{HashMap, HashSet}, fmt::Debug, hash::Hash, ops::AddAssign, vec::Vec,
+	self, collections::{BTreeMap, BTreeSet}, fmt::Debug, ops::AddAssign, vec::Vec,
 };
 
 use super::{Chain, Error, BlockNumberOps};
@@ -32,7 +32,7 @@ struct Entry<H, N, V> {
 	cumulative_vote: V,
 }
 
-impl<H: Hash + PartialEq + Clone, N: BlockNumberOps, V> Entry<H, N, V> {
+impl<H: Ord + PartialEq + Clone, N: BlockNumberOps, V> Entry<H, N, V> {
 	// whether the given hash, number pair is a direct ancestor of this node.
 	// `None` signifies that the graph must be traversed further back.
 	fn in_direct_ancestry(&self, hash: &H, number: N) -> Option<bool> {
@@ -78,21 +78,21 @@ impl<H: Clone, N: Copy + BlockNumberOps> Subchain<H, N> {
 
 /// Maintains a DAG of blocks in the chain which have votes attached to them,
 /// and vote data which is accumulated along edges.
-pub struct VoteGraph<H: Hash + Eq, N, V> {
-	entries: HashMap<H, Entry<H, N, V>>,
-	heads: HashSet<H>,
+pub struct VoteGraph<H: Ord + Eq, N, V> {
+	entries: BTreeMap<H, Entry<H, N, V>>,
+	heads: BTreeSet<H>,
 	base: H,
 	base_number: N,
 }
 
 impl<H, N, V> VoteGraph<H, N, V> where
-	H: Hash + Eq + Clone + Ord + Debug,
+	H: Ord + Eq + Clone + Ord + Debug,
 	V: AddAssign + Default + Clone + Debug,
 	N: Copy + Debug + BlockNumberOps,
 {
 	/// Create a new `VoteGraph` with base node as given.
 	pub fn new(base_hash: H, base_number: N) -> Self {
-		let mut entries = HashMap::new();
+		let mut entries = BTreeMap::new();
 		entries.insert(base_hash.clone(), Entry {
 			number: base_number,
 			ancestors: Vec::new(),
@@ -100,7 +100,7 @@ impl<H, N, V> VoteGraph<H, N, V> where
 			cumulative_vote: V::default(),
 		});
 
-		let mut heads = HashSet::new();
+		let mut heads = BTreeSet::new();
 		heads.insert(base_hash.clone());
 
 		VoteGraph {
@@ -411,7 +411,7 @@ impl<H, N, V> VoteGraph<H, N, V> where
 		}
 
 		let mut containing_keys = Vec::new();
-		let mut visited = HashSet::new();
+		let mut visited = BTreeSet::new();
 
 		// iterate vote-heads and their ancestry backwards until we find the one with
 		// this target hash in that chain.
