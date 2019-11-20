@@ -708,7 +708,7 @@ impl<Id, H, N, Signature> Round<Id, H, N, Signature> where
 		self.prevote.participation()
 	}
 
-	/// Get the (weight, number) of voters who have participated in precommitting.
+	/// Get the current weight and number of voters who have participated in precommitting.
 	pub fn precommit_participation(&self) -> (u64, usize) {
 		self.precommit.participation()
 	}
