@@ -115,27 +115,27 @@ struct RandomnessStream<'a> {
 }
 
 impl<'a> RandomnessStream<'a> {
-	fn read_nibble(&mut self) -> u8 {
-		let active = self.inner[self.pos];
+	fn read_nibble(&mut self) -> Option<u8> {
+		let active = *self.inner.get(self.pos)?;
 		if self.half_nibble {
 			self.half_nibble = false;
 			self.pos += 1;
 
-			active & 0x0F
+			Some(active & 0x0F)
 		} else {
 			self.half_nibble = true;
 
-			(active >> 4) & 0x0F
+			Some((active >> 4) & 0x0F)
 		}
 	}
 
-	fn read_byte(&mut self) -> u8 {
+	fn read_byte(&mut self) -> Option<u8> {
 		if self.half_nibble {
 			// just skip 4 bytes.
 			self.half_nibble = false;
 		}
 		self.pos += 1;
-		self.inner[self.pos]
+		self.inner.get(self.pos).map(|&b| b)
 	}
 }
 
@@ -201,8 +201,6 @@ fn kth_combination(k: u8, n: u8, r: u8) -> Vec<u8> {
 }
 
 fn execute_fuzzed_vote(data: &[u8]) {
-	if data.len() < 50 { return } // arbitrary.
-
 	let mut stream = RandomnessStream {
 		inner: data,
 		pos: 0,
@@ -217,14 +215,19 @@ fn execute_fuzzed_vote(data: &[u8]) {
 			base: (0, 1),
 		})).collect();
 
-	let prevotes = voters().iter().map(|_| {
-		let prevote_block = stream.read_nibble();
+	let prevotes = voters().iter().filter_map(|_| {
+		let prevote_block = stream.read_nibble()?;
 
-		finality_grandpa::Prevote {
+		Some(finality_grandpa::Prevote {
 			target_hash: prevote_block,
 			target_number: FuzzChain::number(prevote_block),
-		}
+		})
 	}).collect::<Vec<_>>();
+
+	if prevotes.len() != voters().len() {
+		// fuzzer needs to get us more data.
+		return
+	}
 
 	let mut precommits = Vec::with_capacity(voters().len());
 
@@ -232,7 +235,10 @@ fn execute_fuzzed_vote(data: &[u8]) {
 	for (i, &voter) in voters().iter().enumerate() {
 		// select 6 other voters to import prevotes from.
 		// cast precommit.
-		let k = stream.read_byte() % n_combinations;
+		let k = match stream.read_byte() {
+			Some(b) => b % n_combinations,
+			None => return,
+		};
 		let combination = kth_combination(k, 9, 6);
 
 		let round = &mut rounds[i];
@@ -277,7 +283,11 @@ fn execute_fuzzed_vote(data: &[u8]) {
 	}
 
 	for (i, &voter) in voters().iter().enumerate() {
-		let k = stream.read_byte() % n_combinations;
+		let k = match stream.read_byte() {
+			Some(b) => b % n_combinations,
+			None => return,
+		};
+
 		let mut omit = kth_combination(k, 9, 3);
 		{
 			for x in &mut omit {
