@@ -337,7 +337,7 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 				message.target(),
 				self.votes.base(),
 			);
-			return Ok(())
+			return Ok(());
 		}
 
 		match message {

@@ -60,7 +60,7 @@ pub trait Environment<H: Eq, N: BlockNumberOps>: Chain<H, N> {
 
 	/// Produce data necessary to start a round of voting. This may also be called
 	/// with the round number of the most recently completed round, in which case
-	/// it should yield an input
+	/// it should yield a valid input stream.
 	///
 	/// The input stream should provide messages which correspond to known blocks
 	/// only.
@@ -84,7 +84,7 @@ pub trait Environment<H: Eq, N: BlockNumberOps>: Chain<H, N> {
 		Self::Out,
 	>;
 
-	/// Return the final round state of the given round number's parent, if stored.
+	/// Return the latest round state of the given completed round, if stored.
 	fn round_parent_state(&self, _round: u64) -> Option<RoundState<H, N>> {
 		None
 	}
