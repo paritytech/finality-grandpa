@@ -372,7 +372,7 @@ type FinalizedNotification<H, N, E> = (
 //
 // This round must be completable based on the passed votes (and if not, `None` will be returned),
 // but it may be the case that there are some more votes to propagate in order to push
-// the estimate backwards.
+// the estimate backwards and conclude the round (i.e. finalize its estimate).
 fn instantiate_last_round<H, N, E: Environment<H, N>>(
 	voters: VoterSet<E::Id>,
 	last_round_votes: Vec<SignedMessage<H, N, E::Signature, E::Id>>,
