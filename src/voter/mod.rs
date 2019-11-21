@@ -60,7 +60,7 @@ pub trait Environment<H: Eq, N: BlockNumberOps>: Chain<H, N> {
 
 	/// Produce data necessary to start a round of voting. This may also be called
 	/// with the round number of the most recently completed round, in which case
-	/// it should yield an input
+	/// it should yield a valid input stream.
 	///
 	/// The input stream should provide messages which correspond to known blocks
 	/// only.
@@ -83,11 +83,6 @@ pub trait Environment<H: Eq, N: BlockNumberOps>: Chain<H, N> {
 		Self::In,
 		Self::Out,
 	>;
-
-	/// Return the final round state of the given round number's parent, if stored.
-	fn round_parent_state(&self, _round: u64) -> Option<RoundState<H, N>> {
-		None
-	}
 
 	/// Return a timer that will be used to delay the broadcast of a commit
 	/// message. This delay should not be static to minimize the amount of
@@ -384,11 +379,13 @@ type FinalizedNotification<H, N, E> = (
 	Commit<H, N, <E as Environment<H, N>>::Signature, <E as Environment<H, N>>::Id>,
 );
 
-// instantiates the last round, to be backgrounded until its estimate is finalized.
+// Instantiates the given last round, to be backgrounded until its estimate is finalized.
 //
-// this round must be comletable based on the passed votes (and if not, `None` will be returned)
+// This round must be completable based on the passed votes (and if not, `None` will be returned),
 // but it may be the case that there are some more votes to propagate in order to push
-// the estimate backwards.
+// the estimate backwards and conclude the round (i.e. finalize its estimate).
+//
+// may only be called with non-zero last round.
 fn instantiate_last_round<H, N, E: Environment<H, N>>(
 	voters: VoterSet<E::Id>,
 	last_round_votes: Vec<SignedMessage<H, N, E::Signature, E::Id>>,
@@ -406,14 +403,11 @@ fn instantiate_last_round<H, N, E: Environment<H, N>>(
 		round_number: last_round_number,
 	});
 
-	let last_round_parent_state = env.round_parent_state(last_round_number)
-		.map(|s| crate::bridge_state::bridge_state(s).1);
-
 	// start as completed so we don't cast votes.
 	let mut last_round = VotingRound::completed(
 		last_round_tracker,
 		finalized_sender,
-		last_round_parent_state,
+		None,
 		env,
 	);
 
@@ -935,10 +929,10 @@ mod tests {
 				last_finalized,
 				last_finalized,
 			);
-			::tokio::spawn(exit.clone()
+			tokio::spawn(exit.clone()
 				.until(voter.map_err(|_| panic!("Error voting"))).map(|_| ()));
 
-			::tokio::spawn(exit.until(routing_task).map(|_| ()));
+			tokio::spawn(exit.until(routing_task).map(|_| ()));
 
 			// wait for the best block to finalize.
 			finalized
@@ -957,7 +951,7 @@ mod tests {
 		let (signal, exit) = ::exit_future::signal();
 
 		current_thread::block_on_all(::futures::future::lazy(move || {
-			::tokio::spawn(exit.clone().until(routing_task).map(|_| ()));
+			tokio::spawn(exit.clone().until(routing_task).map(|_| ()));
 
 			// 3 voters offline.
 			let finalized_streams = (0..7).map(move |i| {
@@ -980,7 +974,7 @@ mod tests {
 					last_finalized,
 					last_finalized,
 				);
-				::tokio::spawn(exit.clone()
+				tokio::spawn(exit.clone()
 					.until(voter.map_err(|_| panic!("Error voting"))).map(|_| ()));
 
 				// wait for the best block to be finalized by all honest voters
@@ -1023,10 +1017,10 @@ mod tests {
 				last_finalized,
 				last_finalized,
 			);
-			::tokio::spawn(exit.clone()
+			tokio::spawn(exit.clone()
 				.until(voter.map_err(|_| panic!("Error voting"))).map(|_| ()));
 
-			::tokio::spawn(exit.until(routing_task).map(|_| ()));
+			tokio::spawn(exit.until(routing_task).map(|_| ()));
 
 			// wait for the node to broadcast a commit message
 			commits.take(1).for_each(|_| Ok(())).map(|_| signal.fire())
@@ -1087,12 +1081,12 @@ mod tests {
 				last_finalized,
 				last_finalized,
 			);
-			::tokio::spawn(exit.clone()
+			tokio::spawn(exit.clone()
 				.until(voter.map_err(|e| panic!("Error voting: {:?}", e))).map(|_| ()));
 
-			::tokio::spawn(exit.clone().until(routing_task).map(|_| ()));
+			tokio::spawn(exit.clone().until(routing_task).map(|_| ()));
 
-			::tokio::spawn(exit.until(::futures::future::lazy(|| {
+			tokio::spawn(exit.until(::futures::future::lazy(|| {
 				round_stream.into_future().map_err(|(e, _)| e)
 					.and_then(|(value, stream)| { // wait for a prevote
 						assert!(match value {
@@ -1173,12 +1167,12 @@ mod tests {
 				last_finalized,
 				last_finalized,
 			);
-			::tokio::spawn(exit.clone()
+			tokio::spawn(exit.clone()
 				.until(voter.map_err(|_| panic!("Error voting"))).map(|_| ()));
 
-			::tokio::spawn(exit.until(routing_task).map(|_| ()));
+			tokio::spawn(exit.until(routing_task).map(|_| ()));
 
-			::tokio::spawn(commits_sink.send(CommunicationOut::Commit(commit.0, commit.1))
+			tokio::spawn(commits_sink.send(CommunicationOut::Commit(commit.0, commit.1))
 				.map_err(|_| ()).map(|_| ()));
 
 			// wait for the commit message to be processed which finalized block 6
@@ -1198,7 +1192,7 @@ mod tests {
 		let (signal, exit) = ::exit_future::signal();
 
 		current_thread::block_on_all(::futures::future::lazy(move || {
-			::tokio::spawn(exit.clone().until(routing_task).map(|_| ()));
+			tokio::spawn(exit.clone().until(routing_task).map(|_| ()));
 
 			// initialize unsynced voter at round 0
 			let mut unsynced_voter = {
@@ -1286,10 +1280,10 @@ mod tests {
 				last_finalized,
 				last_finalized,
 			);
-			::tokio::spawn(exit.clone()
+			tokio::spawn(exit.clone()
 				.until(voter.map_err(|_| panic!("Error voting"))).map(|_| ()));
 
-			::tokio::spawn(exit.until(routing_task).map(|_| ()));
+			tokio::spawn(exit.until(routing_task).map(|_| ()));
 
 			// wait for the best block to finalize.
 			finalized
@@ -1301,14 +1295,14 @@ mod tests {
 
 	#[test]
 	fn pick_up_from_prior_with_grandparent_state() {
-		let local_id = Id(5);
-		let voters = std::iter::once((local_id, 100)).collect();
+		let local_id = Id(99);
+		let voters = (0..100).map(|id| (Id(id), 1)).collect::<VoterSet<_>>();
 
 		let (network, routing_task) = testing::environment::make_network();
 		let (signal, exit) = ::exit_future::signal();
 
 		let global_comms = network.make_global_comms();
-		let env = Arc::new(Environment::new(network, local_id));
+		let env = Arc::new(Environment::new(network.clone(), local_id));
 		current_thread::block_on_all(::futures::future::lazy(move || {
 			// initialize chain
 			let last_finalized = env.with_chain(|chain| {
@@ -1316,46 +1310,81 @@ mod tests {
 				chain.last_finalized()
 			});
 
-			env.note_completed_round(9, RoundState::genesis(("C", 4)));
+			let mut last_round_votes = Vec::new();
+
+			// round 1 state on disk: 67 prevotes for "E". 66 precommits for "D". 1 precommit "E".
+			// the round is completable, but the estimate ("E") is not finalized.
+			{
+				for id in 0..67 {
+					let prevote = Message::Prevote(Prevote { target_hash: "E", target_number: 6 });
+					let precommit = if id < 66 {
+						Message::Precommit(Precommit { target_hash: "D", target_number: 5 })
+					} else {
+						Message::Precommit(Precommit { target_hash: "E", target_number: 6 })
+					};
+
+					last_round_votes.push(SignedMessage {
+						message: prevote.clone(),
+						signature: Signature(id),
+						id: Id(id),
+					});
+
+					last_round_votes.push(SignedMessage {
+						message: precommit.clone(),
+						signature: Signature(id),
+						id: Id(id),
+					});
+
+					// round 2 has the same votes.
+					//
+					// this means we wouldn't be able to start round 3 until
+					// the estimate of round-1 moves backwards.
+					let (_, round_sink) = network.make_round_comms(2, Id(id));
+					tokio::spawn(
+						round_sink.send(prevote).and_then(move |sink| sink.send(precommit))
+							.map_err(|_| ())
+							.map(|_| ())
+					);
+				}
+			}
+
+			// round 1 fresh communication. we send one more precommit for "D" so the estimate
+			// moves backwards.
+			{
+				let sender = Id(67);
+				let (_, round_sink) = network.make_round_comms(1, sender);
+				let last_precommit = Message::Precommit(Precommit { target_hash: "D", target_number: 3 });
+				tokio::spawn(round_sink.send(last_precommit).map(|_| ()).map_err(|_| ()));
+			}
 
 			// run voter in background. scheduling it to shut down at the end.
-			let finalized = env.finalized_stream();
 			let voter = Voter::new(
 				env.clone(),
 				voters,
 				global_comms,
-				10,
-				vec![
-					SignedMessage {
-						message: crate::Message::Prevote(crate::Prevote {
-							target_hash: "D",
-							target_number: 5,
-						}),
-						signature: Signature(5),
-						id: local_id,
-					},
-					SignedMessage {
-						message: crate::Message::Precommit(crate::Precommit {
-							target_hash: "D",
-							target_number: 5,
-						}),
-						signature: Signature(5),
-						id: local_id,
-					},
-				],
+				1,
+				last_round_votes,
 				last_finalized,
 				last_finalized,
 			);
-			::tokio::spawn(exit.clone()
+			tokio::spawn(exit.clone()
 				.until(voter.map_err(|_| panic!("Error voting"))).map(|_| ()));
 
-			::tokio::spawn(exit.until(routing_task).map(|_| ()));
+			tokio::spawn(exit.until(routing_task).map(|_| ()));
 
-			// wait for the best block to finalize.
-			finalized
-				.take_while(|&(_, n, _)| Ok(n < 6))
-				.for_each(|_| Ok(()))
-				.map(|_| signal.fire())
+			// wait until we see a prevote on round 3 from our local ID,
+			// indicating that the round 3 has started.
+
+			let (round_stream, _) = network.make_round_comms(3, Id(1000));
+			round_stream
+				.skip_while(move |v| if let Message::Prevote(_) = v.message {
+					Ok(v.id != local_id)
+				} else {
+					Ok(true)
+				})
+				.into_future()
+				.map(move |(x, _stream)| { signal.fire(); x })
+				.map_err(|(err, _stream)| err)
 		})).unwrap();
 	}
 }
