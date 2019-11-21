@@ -16,7 +16,7 @@
 
 pub mod chain {
 	use crate::{Chain, Error};
-	use crate::std::{collections::HashMap, vec::Vec};
+	use crate::std::{collections::BTreeMap, vec::Vec};
 
 	pub const GENESIS_HASH: &str = "genesis";
 	const NULL_HASH: &str = "NULL";
@@ -27,14 +27,14 @@ pub mod chain {
 	}
 
 	pub struct DummyChain {
-		inner: HashMap<&'static str, BlockRecord>,
+		inner: BTreeMap<&'static str, BlockRecord>,
 		leaves: Vec<&'static str>,
 		finalized: (&'static str, u32),
 	}
 
 	impl DummyChain {
 		pub fn new() -> Self {
-			let mut inner = HashMap::new();
+			let mut inner = BTreeMap::new();
 			inner.insert(GENESIS_HASH, BlockRecord { number: 1, parent: NULL_HASH });
 
 			DummyChain {

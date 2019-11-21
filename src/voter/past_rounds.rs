@@ -32,7 +32,6 @@ use log::{trace, debug};
 
 use std::cmp;
 use std::collections::HashMap;
-use std::hash::Hash;
 
 use crate::{Commit, BlockNumberOps};
 use super::Environment;
@@ -43,7 +42,7 @@ use super::voting_round::VotingRound;
 //
 // that point is when the round-estimate is finalized.
 struct BackgroundRound<H, N, E: Environment<H, N>> where
-	H: Hash + Clone + Eq + Ord + ::std::fmt::Debug,
+	H: Clone + Eq + Ord + ::std::fmt::Debug,
 	N: Copy + BlockNumberOps + ::std::fmt::Debug,
 {
 	inner: VotingRound<H, N, E>,
@@ -53,7 +52,7 @@ struct BackgroundRound<H, N, E: Environment<H, N>> where
 }
 
 impl<H, N, E: Environment<H, N>> BackgroundRound<H, N, E> where
-	H: Hash + Clone + Eq + Ord + ::std::fmt::Debug,
+	H: Clone + Eq + Ord + ::std::fmt::Debug,
 	N: Copy + BlockNumberOps + ::std::fmt::Debug,
 {
 	fn round_number(&self) -> u64 {
@@ -84,7 +83,7 @@ impl<H, N, E: Environment<H, N>> BackgroundRound<H, N, E> where
 }
 
 enum BackgroundRoundChange<H, N, E: Environment<H, N>> where
-	H: Hash + Clone + Eq + Ord + ::std::fmt::Debug,
+	H: Clone + Eq + Ord + ::std::fmt::Debug,
 	N: Copy + BlockNumberOps + ::std::fmt::Debug,
 {
 	/// Background round has fully concluded and can be discarded.
@@ -95,7 +94,7 @@ enum BackgroundRoundChange<H, N, E: Environment<H, N>> where
 }
 
 impl<H, N, E: Environment<H, N>> Future for BackgroundRound<H, N, E> where
-	H: Hash + Clone + Eq + Ord + ::std::fmt::Debug,
+	H: Clone + Eq + Ord + ::std::fmt::Debug,
 	N: Copy + BlockNumberOps + ::std::fmt::Debug,
 {
 	type Item = BackgroundRoundChange<H, N, E>;
@@ -128,7 +127,7 @@ impl<H, N, E: Environment<H, N>> Future for BackgroundRound<H, N, E> where
 }
 
 struct RoundCommitter<H, N, E: Environment<H, N>> where
-	H: Hash + Clone + Eq + Ord + ::std::fmt::Debug,
+	H: Clone + Eq + Ord + ::std::fmt::Debug,
 	N: Copy + BlockNumberOps + ::std::fmt::Debug,
 {
 	commit_timer: E::Timer,
@@ -137,7 +136,7 @@ struct RoundCommitter<H, N, E: Environment<H, N>> where
 }
 
 impl<H, N, E: Environment<H, N>> RoundCommitter<H, N, E> where
-	H: Hash + Clone + Eq + Ord + ::std::fmt::Debug,
+	H: Clone + Eq + Ord + ::std::fmt::Debug,
 	N: Copy + BlockNumberOps + ::std::fmt::Debug,
 {
 	fn new(
@@ -234,7 +233,7 @@ impl<F: Future> Future for SelfReturningFuture<F> {
 /// A stream for past rounds, which produces any commit messages from those
 /// rounds and drives them to completion.
 pub(super) struct PastRounds<H, N, E: Environment<H, N>> where
-	H: Hash + Clone + Eq + Ord + ::std::fmt::Debug,
+	H: Clone + Eq + Ord + ::std::fmt::Debug,
 	N: Copy + BlockNumberOps + ::std::fmt::Debug,
 {
 	past_rounds: FuturesUnordered<SelfReturningFuture<BackgroundRound<H, N, E>>>,
@@ -242,7 +241,7 @@ pub(super) struct PastRounds<H, N, E: Environment<H, N>> where
 }
 
 impl<H, N, E: Environment<H, N>> PastRounds<H, N, E> where
-	H: Hash + Clone + Eq + Ord + ::std::fmt::Debug,
+	H: Clone + Eq + Ord + ::std::fmt::Debug,
 	N: Copy + BlockNumberOps + ::std::fmt::Debug,
 {
 	/// Create a new past rounds stream.
@@ -295,7 +294,7 @@ impl<H, N, E: Environment<H, N>> PastRounds<H, N, E> where
 }
 
 impl<H, N, E: Environment<H, N>> Stream for PastRounds<H, N, E> where
-	H: Hash + Clone + Eq + Ord + ::std::fmt::Debug,
+	H: Clone + Eq + Ord + ::std::fmt::Debug,
 	N: Copy + BlockNumberOps + ::std::fmt::Debug,
 {
 	type Item = (u64, Commit<H, N, E::Signature, E::Id>);

@@ -21,7 +21,6 @@ use futures::sync::mpsc::UnboundedSender;
 #[cfg(feature = "std")]
 use log::{trace, warn, debug};
 
-use std::hash::Hash;
 use std::sync::Arc;
 
 use crate::round::{Round, State as RoundState};
@@ -54,7 +53,7 @@ impl<T> std::fmt::Debug for State<T> {
 
 /// Logic for a voter on a specific round.
 pub(super) struct VotingRound<H, N, E: Environment<H, N>> where
-	H: Hash + Clone + Eq + Ord + ::std::fmt::Debug,
+	H: Clone + Eq + Ord + ::std::fmt::Debug,
 	N: Copy + BlockNumberOps + ::std::fmt::Debug,
 {
 	env: Arc<E>,
@@ -100,7 +99,7 @@ impl Voting {
 }
 
 impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
-	H: Hash + Clone + Eq + Ord + ::std::fmt::Debug,
+	H: Clone + Eq + Ord + ::std::fmt::Debug,
 	N: Copy + BlockNumberOps + ::std::fmt::Debug,
 {
 	/// Create a new voting round.

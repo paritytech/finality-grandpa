@@ -39,7 +39,8 @@ use crate::voter_set::VoterInfo;
 
 /// Errors that can occur when using the equivocation weighting tools.
 #[derive(Clone, PartialEq, Eq)]
-#[cfg_attr(feature = "std", derive(Debug))]
+#[cfg_attr(any(feature = "std", test), derive(
+Debug))]
 pub enum Error {
 	/// Attempted to index bitfield past its length.
 	IndexOutOfBounds(usize, usize),
@@ -64,7 +65,8 @@ impl std::error::Error for Error {}
 
 /// Bitfield for tracking voters who have equivocated.
 #[derive(Eq, PartialEq, Clone)]
-#[cfg_attr(feature = "std", derive(Debug))]
+#[cfg_attr(any(feature = "std", test), derive(
+Debug))]
 pub enum Bitfield {
 	/// Blank bitfield,
 	Blank,
@@ -139,7 +141,8 @@ impl Bitfield {
 
 /// Live bitfield instance.
 #[derive(Clone, PartialEq, Eq)]
-#[cfg_attr(feature = "std", derive(Debug))]
+#[cfg_attr(any(feature = "std", test), derive(
+Debug))]
 pub struct LiveBitfield {
 	bits: Vec<u64>,
 }

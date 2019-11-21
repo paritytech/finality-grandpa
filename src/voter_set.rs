@@ -16,20 +16,20 @@
 //!
 //! See docs on `VoterSet` for more information.
 
-use crate::std::{self, collections::HashMap, hash::Hash, vec::Vec};
+use crate::std::{self, collections::BTreeMap, vec::Vec};
 
 use super::threshold;
 
 /// A voter set, with accompanying indices.
 #[derive(Clone, PartialEq, Eq)]
-#[cfg_attr(feature = "std", derive(Debug))]
-pub struct VoterSet<Id: Hash + Eq> {
-	weights: HashMap<Id, VoterInfo>,
+#[cfg_attr(any(feature = "std", test), derive(Debug))]
+pub struct VoterSet<Id: Ord + Eq> {
+	weights: BTreeMap<Id, VoterInfo>,
 	voters: Vec<(Id, u64)>,
 	threshold: u64,
 }
 
-impl<Id: Hash + Eq> VoterSet<Id> {
+impl<Id: Ord + Eq> VoterSet<Id> {
 	/// Get the voter info for a voter.
 	pub fn info<'a>(&'a self, id: &Id) -> Option<&'a VoterInfo> {
 		self.weights.get(id)
@@ -67,13 +67,13 @@ impl<Id: Hash + Eq> VoterSet<Id> {
 	}
 }
 
-impl<Id: Hash + Eq + Clone + Ord> std::iter::FromIterator<(Id, u64)> for VoterSet<Id> {
+impl<Id: Eq + Clone + Ord> std::iter::FromIterator<(Id, u64)> for VoterSet<Id> {
 	fn from_iter<I: IntoIterator<Item = (Id, u64)>>(iterable: I) -> Self {
 		let iter = iterable.into_iter();
 		let (lower, _) = iter.size_hint();
 
 		let mut voters = Vec::with_capacity(lower);
-		let mut weights = HashMap::with_capacity(lower);
+		let mut weights = BTreeMap::new();
 
 		let mut total_weight = 0;
 		for (id, weight) in iter {
@@ -93,7 +93,8 @@ impl<Id: Hash + Eq + Clone + Ord> std::iter::FromIterator<(Id, u64)> for VoterSe
 }
 
 #[derive(Clone, PartialEq, Eq)]
-#[cfg_attr(feature = "std", derive(Debug))]
+#[cfg_attr(any(feature = "std", test), derive(
+Debug))]
 pub struct VoterInfo {
 	canon_idx: usize,
 	weight: u64,
