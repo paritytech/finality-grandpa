@@ -217,7 +217,7 @@ pub mod environment {
 			}
 		}
 
-		fn round_parent_state(&self, round: u64) -> Option<RoundState<&'static str, u32>> {
+		fn completed_round_state(&self, round: u64) -> Option<RoundState<&'static str, u32>> {
 			self.completed_round_states.lock().get(&round).map(|s| s.clone())
 		}
 
