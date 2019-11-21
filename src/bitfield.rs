@@ -132,7 +132,8 @@ impl Bitfield {
 
 	/// Get an iterator over all bits that are set (i.e. 1) when merging
 	/// this bitfield with another bitfield, without modifying either
-	/// bitfield.
+	/// bitfield, starting at bit position `start` and moving in steps
+	/// of size `2^step` per word.
 	fn iter1s_merged<'a>(&'a self, other: &'a Self, start: usize, step: usize) -> impl Iterator<Item = Bit1> + 'a {
 		match self.bits.len().cmp(&other.bits.len()) {
 			Ordering::Equal =>
