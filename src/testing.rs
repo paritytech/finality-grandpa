@@ -135,7 +135,7 @@ pub mod environment {
 	use futures::prelude::*;
 	use futures::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 	use parking_lot::Mutex;
-	use std::collections::{HashMap, HashSet};
+	use std::collections::HashMap;
 	use std::sync::Arc;
 	use std::time::{Instant, Duration};
 	use tokio::timer::Delay;
