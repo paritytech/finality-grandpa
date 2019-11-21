@@ -22,7 +22,8 @@ use crate::std::{
 
 use super::{Chain, Error, BlockNumberOps};
 
-#[cfg_attr(feature = "std", derive(Debug))]
+#[cfg_attr(any(feature = "std", test), derive(
+Debug))]
 struct Entry<H, N, V> {
 	number: N,
 	// ancestor hashes in reverse order, e.g. ancestors[0] is the parent

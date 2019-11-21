@@ -393,7 +393,7 @@ fn instantiate_last_round<H, N, E: Environment<H, N>>(
 	finalized_sender: mpsc::UnboundedSender<FinalizedNotification<H, N, E>>,
 	env: Arc<E>,
 ) -> Option<VotingRound<H, N, E>> where
-	H: Hash + Clone + Eq + Ord + ::std::fmt::Debug,
+	H: Clone + Eq + Ord + ::std::fmt::Debug,
 	N: Copy + BlockNumberOps + ::std::fmt::Debug,
 {
 	let last_round_tracker = crate::round::Round::new(crate::round::RoundParams {
