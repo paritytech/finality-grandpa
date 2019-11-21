@@ -98,9 +98,25 @@ pub trait Environment<H: Eq, N: BlockNumberOps>: Chain<H, N> {
 	/// Note that we have precommitted in the given round.
 	fn precommitted(&self, round: u64, precommit: Precommit<H, N>) -> Result<(), Self::Error>;
 
-	/// Note that a round was completed. This is called when a round has been
-	/// voted in. Should return an error when something fatal occurs.
+	/// Note that a round is completed. This is called when a round has been
+	/// voted in and the next round can start. The round may continue to be run
+	/// in the background until _concluded_.
+	/// Should return an error when something fatal occurs.
 	fn completed(
+		&self,
+		round: u64,
+		state: RoundState<H, N>,
+		base: (H, N),
+		votes: &HistoricalVotes<H, N, Self::Signature, Self::Id>,
+	) -> Result<(), Self::Error>;
+
+	/// Note that a round has concluded. This is called when a round has been
+	/// `completed` and additionally, the round's estimate has been finalized.
+	///
+	/// There may be more votes than when `completed`, and it is the responsibility
+	/// of the `Environment` implementation to deduplicate. However, the caller guarantees
+	/// that the votes passed to `completed` for this round are a prefix of the votes passed here.
+	fn concluded(
 		&self,
 		round: u64,
 		state: RoundState<H, N>,
@@ -1287,6 +1303,7 @@ mod tests {
 
 		let global_comms = network.make_global_comms();
 		let env = Arc::new(Environment::new(network.clone(), local_id));
+		let outer_env = env.clone();
 		current_thread::block_on_all(::futures::future::lazy(move || {
 			// initialize chain
 			let last_finalized = env.with_chain(|chain| {
@@ -1370,5 +1387,7 @@ mod tests {
 				.map(move |(x, _stream)| { signal.fire(); x })
 				.map_err(|(err, _stream)| err)
 		})).unwrap();
+
+		assert_eq!(outer_env.last_completed_and_concluded(), (2, 1));
 	}
 }
