@@ -151,7 +151,6 @@ pub mod environment {
 		local_id: Id,
 		network: Network,
 		listeners: Mutex<Vec<UnboundedSender<(&'static str, u32, Commit<&'static str, u32, Signature, Id>)>>>,
-		completed_round_states: Mutex<HashMap<u64, RoundState<&'static str, u32>>>,
 	}
 
 	impl Environment {
@@ -161,7 +160,6 @@ pub mod environment {
 				local_id,
 				network,
 				listeners: Mutex::new(Vec::new()),
-				completed_round_states: Mutex::new(HashMap::new()),
 			}
 		}
 
@@ -175,11 +173,6 @@ pub mod environment {
 			let (tx, rx) = mpsc::unbounded();
 			self.listeners.lock().push(tx);
 			rx
-		}
-
-		/// Note a completed round state for the purpose of restarting a voter.
-		pub fn note_completed_round(&self, round: u64, state: RoundState<&'static str, u32>) {
-			self.completed_round_states.lock().insert(round, state);
 		}
 	}
 
@@ -215,10 +208,6 @@ pub mod environment {
 				incoming: Box::new(incoming),
 				outgoing: Box::new(outgoing),
 			}
-		}
-
-		fn completed_round_state(&self, round: u64) -> Option<RoundState<&'static str, u32>> {
-			self.completed_round_states.lock().get(&round).map(|s| s.clone())
 		}
 
 		fn round_commit_timer(&self) -> Self::Timer {

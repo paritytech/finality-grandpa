@@ -84,11 +84,6 @@ pub trait Environment<H: Eq, N: BlockNumberOps>: Chain<H, N> {
 		Self::Out,
 	>;
 
-	/// Return the latest round state of the given completed round, if stored.
-	fn completed_round_state(&self, _round: u64) -> Option<RoundState<H, N>> {
-		None
-	}
-
 	/// Return a timer that will be used to delay the broadcast of a commit
 	/// message. This delay should not be static to minimize the amount of
 	/// commit messages that are sent (e.g. random value in [0, 1] seconds).
@@ -392,14 +387,11 @@ fn instantiate_last_round<H, N, E: Environment<H, N>>(
 		round_number: last_round_number,
 	});
 
-	let last_round_parent_state = env.completed_round_state(last_round_number - 1)
-		.map(|s| crate::bridge_state::bridge_state(s).1);
-
 	// start as completed so we don't cast votes.
 	let mut last_round = VotingRound::completed(
 		last_round_tracker,
 		finalized_sender,
-		last_round_parent_state,
+		None,
 		env,
 	);
 
@@ -1301,8 +1293,6 @@ mod tests {
 				chain.push_blocks(GENESIS_HASH, &["A", "B", "C", "D", "E"]);
 				chain.last_finalized()
 			});
-
-			env.note_completed_round(0, RoundState::genesis((GENESIS_HASH, 1)));
 
 			let mut last_round_votes = Vec::new();
 
