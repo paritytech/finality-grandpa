@@ -135,7 +135,7 @@ pub mod environment {
 	use futures::prelude::*;
 	use futures::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 	use parking_lot::Mutex;
-	use std::collections::BTreeMap;
+	use std::collections::HashMap;
 	use std::sync::Arc;
 	use std::time::{Instant, Duration};
 	use tokio::timer::Delay;
@@ -357,7 +357,7 @@ pub mod environment {
 	/// to run.
 	pub fn make_network() -> (Network, NetworkRouting) {
 		let global_messages = Arc::new(Mutex::new(GlobalMessageNetwork::new()));
-		let rounds = Arc::new(Mutex::new(BTreeMap::new()));
+		let rounds = Arc::new(Mutex::new(HashMap::new()));
 		(
 			Network { global_messages: global_messages.clone(), rounds: rounds.clone() },
 			NetworkRouting { global_messages, rounds }
@@ -370,7 +370,7 @@ pub mod environment {
 	/// A test network. Instantiate this with `make_network`,
 	#[derive(Clone)]
 	pub struct Network {
-		rounds: Arc<Mutex<BTreeMap<u64, RoundNetwork>>>,
+		rounds: Arc<Mutex<HashMap<u64, RoundNetwork>>>,
 		global_messages: Arc<Mutex<GlobalMessageNetwork>>,
 	}
 
@@ -407,7 +407,7 @@ pub mod environment {
 
 	/// the network routing task.
 	pub struct NetworkRouting {
-		rounds: Arc<Mutex<BTreeMap<u64, RoundNetwork>>>,
+		rounds: Arc<Mutex<HashMap<u64, RoundNetwork>>>,
 		global_messages: Arc<Mutex<GlobalMessageNetwork>>,
 	}
 
