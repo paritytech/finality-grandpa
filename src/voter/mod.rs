@@ -1303,6 +1303,7 @@ mod tests {
 
 		let global_comms = network.make_global_comms();
 		let env = Arc::new(Environment::new(network.clone(), local_id));
+		let outer_env = env.clone();
 		current_thread::block_on_all(::futures::future::lazy(move || {
 			// initialize chain
 			let last_finalized = env.with_chain(|chain| {
@@ -1386,5 +1387,7 @@ mod tests {
 				.map(move |(x, _stream)| { signal.fire(); x })
 				.map_err(|(err, _stream)| err)
 		})).unwrap();
+
+		assert_eq!(outer_env.last_completed_and_concluded(), (2, 1));
 	}
 }
