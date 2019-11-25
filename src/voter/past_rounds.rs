@@ -86,8 +86,8 @@ enum BackgroundRoundChange<H, N, E: Environment<H, N>> where
 	H: Clone + Eq + Ord + ::std::fmt::Debug,
 	N: Copy + BlockNumberOps + ::std::fmt::Debug,
 {
-	/// Background round has become irrelevant and can be discarded.
-	Irrelevant(u64),
+	/// Background round has fully concluded and can be discarded.
+	Concluded(u64),
 	/// Background round has a commit message to issue but should continue
 	/// being driven afterwards.
 	Committed(Commit<H, N, E::Signature, E::Id>),
@@ -117,9 +117,9 @@ impl<H, N, E: Environment<H, N>> Future for BackgroundRound<H, N, E> where
 		};
 
 		if self.is_done() {
-			// if this is fully done (has committed _and_ estimate finalized)
+			// if this is fully concluded (has committed _and_ estimate finalized)
 			// we bail for real.
-			Ok(Async::Ready(BackgroundRoundChange::Irrelevant(self.round_number())))
+			Ok(Async::Ready(BackgroundRoundChange::Concluded(self.round_number())))
 		} else {
 			Ok(Async::NotReady)
 		}
@@ -303,7 +303,15 @@ impl<H, N, E: Environment<H, N>> Stream for PastRounds<H, N, E> where
 	fn poll(&mut self) -> Poll<Option<Self::Item>, E::Error> {
 		loop {
 			match self.past_rounds.poll()? {
-				Async::Ready(Some((BackgroundRoundChange::Irrelevant(number), _))) => {
+				Async::Ready(Some((BackgroundRoundChange::Concluded(number), round))) => {
+					let round = &round.inner;
+					round.env().concluded(
+						round.round_number(),
+						round.round_state(),
+						round.dag_base(),
+						round.historical_votes(),
+					)?;
+
 					self.commit_senders.remove(&number);
 				}
 				Async::Ready(Some((BackgroundRoundChange::Committed(commit), round))) => {

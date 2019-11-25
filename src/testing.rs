@@ -16,7 +16,7 @@
 
 pub mod chain {
 	use crate::{Chain, Error};
-	use crate::std::{collections::HashMap, vec::Vec};
+	use crate::std::{collections::BTreeMap, vec::Vec};
 
 	pub const GENESIS_HASH: &str = "genesis";
 	const NULL_HASH: &str = "NULL";
@@ -27,14 +27,14 @@ pub mod chain {
 	}
 
 	pub struct DummyChain {
-		inner: HashMap<&'static str, BlockRecord>,
+		inner: BTreeMap<&'static str, BlockRecord>,
 		leaves: Vec<&'static str>,
 		finalized: (&'static str, u32),
 	}
 
 	impl DummyChain {
 		pub fn new() -> Self {
-			let mut inner = HashMap::new();
+			let mut inner = BTreeMap::new();
 			inner.insert(GENESIS_HASH, BlockRecord { number: 1, parent: NULL_HASH });
 
 			DummyChain {
@@ -151,6 +151,7 @@ pub mod environment {
 		local_id: Id,
 		network: Network,
 		listeners: Mutex<Vec<UnboundedSender<(&'static str, u32, Commit<&'static str, u32, Signature, Id>)>>>,
+		last_completed_and_concluded: Mutex<(u64, u64)>,
 	}
 
 	impl Environment {
@@ -160,6 +161,7 @@ pub mod environment {
 				local_id,
 				network,
 				listeners: Mutex::new(Vec::new()),
+				last_completed_and_concluded: Mutex::new((0, 0)),
 			}
 		}
 
@@ -173,6 +175,11 @@ pub mod environment {
 			let (tx, rx) = mpsc::unbounded();
 			self.listeners.lock().push(tx);
 			rx
+		}
+
+		/// Get the last completed and concluded rounds.
+		pub fn last_completed_and_concluded(&self) -> (u64, u64) {
+			self.last_completed_and_concluded.lock().clone()
 		}
 	}
 
@@ -224,11 +231,23 @@ pub mod environment {
 
 		fn completed(
 			&self,
-			_round: u64,
+			round: u64,
 			_state: RoundState<&'static str, u32>,
 			_base: (&'static str, u32),
 			_votes: &HistoricalVotes<&'static str, u32, Self::Signature, Self::Id>,
 		) -> Result<(), Error> {
+			self.last_completed_and_concluded.lock().0 = round;
+			Ok(())
+		}
+
+		fn concluded(
+			&self,
+			round: u64,
+			_state: RoundState<&'static str, u32>,
+			_base: (&'static str, u32),
+			_votes: &HistoricalVotes<&'static str, u32, Self::Signature, Self::Id>,
+		) -> Result<(), Error> {
+			self.last_completed_and_concluded.lock().1 = round;
 			Ok(())
 		}
 

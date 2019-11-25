@@ -22,7 +22,7 @@ use super::threshold;
 
 /// A voter set, with accompanying indices.
 #[derive(Clone, PartialEq, Eq)]
-#[cfg_attr(feature = "std", derive(Debug))]
+#[cfg_attr(any(feature = "std", test), derive(Debug))]
 pub struct VoterSet<Id: Ord + Eq> {
 	weights: BTreeMap<Id, VoterInfo>,
 	voters: Vec<(Id, u64)>,
@@ -93,7 +93,8 @@ impl<Id: Eq + Clone + Ord> std::iter::FromIterator<(Id, u64)> for VoterSet<Id> {
 }
 
 #[derive(Clone, PartialEq, Eq)]
-#[cfg_attr(feature = "std", derive(Debug))]
+#[cfg_attr(any(feature = "std", test), derive(
+Debug))]
 pub struct VoterInfo {
 	canon_idx: usize,
 	weight: u64,

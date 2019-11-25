@@ -27,14 +27,16 @@ use crate::voter_set::VoterSet;
 use super::{Equivocation, Prevote, Precommit, Chain, BlockNumberOps, HistoricalVotes, Message, SignedMessage};
 
 #[derive(PartialEq, Eq)]
-#[cfg_attr(feature = "std", derive(Debug))]
+#[cfg_attr(any(feature = "std", test), derive(
+Debug))]
 struct TotalWeight {
 	prevote: u64,
 	precommit: u64,
 }
 
 #[derive(Clone)]
-#[cfg_attr(feature = "std", derive(Debug))]
+#[cfg_attr(any(feature = "std", test), derive(
+Debug))]
 struct VoteWeight {
 	bitfield: Bitfield,
 }
@@ -184,11 +186,17 @@ impl<Id: Ord + Eq + Clone, Vote: Clone + Eq, Signature: Clone + Eq> VoteTracker<
 
 		votes
 	}
+
+	// Current vote weight and number of participants.
+	fn participation(&self) -> (u64, usize) {
+		(self.current_weight, self.votes.len())
+	}
 }
 
 /// State of the round.
 #[derive(PartialEq, Clone)]
-#[cfg_attr(feature = "std", derive(Debug))]
+#[cfg_attr(any(feature = "std", test), derive(
+Debug))]
 #[cfg_attr(feature = "derive-codec", derive(Encode, Decode))]
 pub struct State<H, N> {
 	/// The prevote-GHOST block.
@@ -693,6 +701,16 @@ impl<Id, H, N, Signature> Round<Id, H, N, Signature> where
 	/// Return the primary voter of the round.
 	pub fn primary_voter(&self) -> &(Id, u64) {
 		self.voters.voter_by_index(self.round_number as usize % self.voters.len())
+	}
+
+	/// Get the current weight and number of voters who have participated in prevoting.
+	pub fn prevote_participation(&self) -> (u64, usize) {
+		self.prevote.participation()
+	}
+
+	/// Get the current weight and number of voters who have participated in precommitting.
+	pub fn precommit_participation(&self) -> (u64, usize) {
+		self.precommit.participation()
 	}
 
 	/// Return all imported prevotes.
