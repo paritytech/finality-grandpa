@@ -452,9 +452,16 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 						self.env.prevoted(self.round_number(), prevote.clone())?;
 						self.votes.set_prevoted_index();
 						self.outgoing.push(Message::Prevote(prevote));
+						self.state = Some(State::Prevoted(precommit_timer));
+					} else {
+						// when we can't construct a prevote, we shouldn't
+						// precommit.
+						self.state = None;
+						self.voting = Voting::No;
 					}
+				} else {
+					self.state = Some(State::Prevote(precommit_timer));
 				}
-				self.state = Some(State::Prevoted(precommit_timer));
 			} else if proposed {
 				self.state = Some(State::Proposed(prevote_timer, precommit_timer));
 			} else {
