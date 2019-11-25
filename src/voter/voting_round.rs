@@ -460,7 +460,7 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 						self.voting = Voting::No;
 					}
 				} else {
-					self.state = Some(State::Prevote(precommit_timer));
+					self.state = Some(State::Prevoted(precommit_timer));
 				}
 			} else if proposed {
 				self.state = Some(State::Proposed(prevote_timer, precommit_timer));
