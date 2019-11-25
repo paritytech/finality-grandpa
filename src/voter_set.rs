@@ -48,13 +48,9 @@ impl<Id: Eq> VoterSet<Id> {
 	/// understood to be partial weights and are accumulated. As a result, the
 	/// order in which the iterator produces the weights is irrelevant.
 	///
-	/// Returns `None` if the iterator produced no non-zero weights, i.e.
-	/// the voter set would be empty.
-	///
-	/// # Panics
-	///
-	/// If the total voter weight exceeds `u64::MAX`.
-	///
+	/// Returns `None` if the iterator does not yield a valid voter set, which is
+	/// the case if it either produced no non-zero weights or, i.e. the voter set
+	/// would be empty, or if the total voter weight exceeds `u64::MAX`.
 	pub fn new<I>(weights: I) -> Option<Self>
 	where
 		Id: Ord + Clone,
@@ -70,7 +66,7 @@ impl<Id: Eq> VoterSet<Id> {
 				// Prevent construction of inconsistent voter sets by checking
 				// for weight overflow (not just in debug mode). The protocol
 				// should never run with such voter sets.
-				total_weight = total_weight.checked_add(weight).expect("Voter weight overflow");
+				total_weight = total_weight.checked_add(weight)?;
 				match voters.entry(id) {
 					Entry::Vacant(e) => {
 						e.insert(VoterInfo {
