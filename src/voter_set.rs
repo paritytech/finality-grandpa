@@ -128,7 +128,8 @@ impl<Id: Eq> VoterSet<Id> {
 	/// Get the nth voter in the set, modulo the size of the set,
 	/// as per the associated total order.
 	pub fn nth_mod(&self, n: usize) -> (&Id, &VoterInfo) {
-		self.nth(n % self.order.len()).unwrap()
+		self.nth(n % self.order.len())
+			.expect("set is nonempty and n % len < len; qed")
 	}
 
 	/// Get the nth voter in the set, if any.
