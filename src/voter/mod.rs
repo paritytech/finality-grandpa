@@ -751,7 +751,7 @@ impl<H, N, E: Environment<H, N>, GlobalIn, GlobalOut> Future for Voter<H, N, E, 
 	fn poll(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Result<(), E::Error>> {
 		self.process_incoming(cx)?;
 		self.prune_background_rounds(cx)?;
-		self.global_out.poll(cx)?;
+		let _ = self.global_out.poll(cx)?;
 
 		self.process_best_round(cx)
 	}
@@ -897,7 +897,9 @@ mod tests {
 		chain::GENESIS_HASH,
 		environment::{Environment, Id, Signature},
 	};
+	use futures::task::SpawnExt;
 	use futures_timer::TryFutureExt as _;
+	use std::iter;
 	use std::time::Duration;
 
 	#[test]
@@ -1128,10 +1130,8 @@ mod tests {
 		let (network, routing_task) = testing::environment::make_network();
 		let (_, commits_sink) = network.make_global_comms();
 
-		let threads_pool = futures::executor::ThreadPool::new().unwrap();
-
 		// this is a commit for a previous round
-		let commit = (0, Commit {
+		let commit = Commit {
 			target_hash: "E",
 			target_number: 6,
 			precommits: vec![SignedPrecommit {
@@ -1139,39 +1139,45 @@ mod tests {
 				signature: Signature(test_id.0),
 				id: test_id
 			}],
-		});
+		};
 
 		let global_comms = network.make_global_comms();
 		let env = Arc::new(Environment::new(network, local_id));
-		futures::executor::block_on(::futures::future::lazy(move |_| {
-			// initialize chain
-			let last_finalized = env.with_chain(|chain| {
-				chain.push_blocks(GENESIS_HASH, &["A", "B", "C", "D", "E"]);
-				chain.last_finalized()
-			});
 
-			// run voter in background. scheduling it to shut down at the end.
-			let voter = Voter::new(
-				env.clone(),
-				voters.clone(),
-				global_comms,
-				1,
-				Vec::new(),
-				last_finalized,
-				last_finalized,
-			);
-			threads_pool.spawn_ok(voter.map(|v| v.expect("Error voting")));
+		// initialize chain
+		let last_finalized = env.with_chain(|chain| {
+			chain.push_blocks(GENESIS_HASH, &["A", "B", "C", "D", "E"]);
+			chain.last_finalized()
+		});
 
-			threads_pool.spawn_ok(routing_task.map(|_| ()));
+		let last_round_state = RoundState::genesis((GENESIS_HASH, 1));
 
-			threads_pool.spawn_ok(stream::iter(std::iter::once(Ok(CommunicationOut::Commit(commit.0, commit.1)))).forward(commits_sink)
-				.map_err(|_| ()).map(|_| ()));
+		// run voter in background.
+		let voter = Voter::new(
+			env.clone(),
+			voters.clone(),
+			global_comms,
+			1,
+			last_round_state,
+			last_finalized,
+		);
 
-			// wait for the commit message to be processed which finalized block 6
-			env.finalized_stream()
-				.take_while(|&(_, n, _)| future::ready(n < 6))
-				.for_each(|_| future::ready(()))
-		}).flatten());
+		let mut pool = futures::executor::LocalPool::new();
+		pool.spawner().spawn(voter.map(|v| v.expect("Error voting"))).unwrap();
+		pool.spawner().spawn(routing_task.map(|_| ())).unwrap();
+
+		// Send the commit message.
+		pool.spawner().spawn(
+			stream::iter(iter::once(Ok(CommunicationOut::Commit(0, commit.clone()))))
+				.forward(commits_sink)
+				.map(|_| ())).unwrap();
+
+		// Wait for the commit message to be processed which finalized block 6
+		let finalized = pool.run_until(env.finalized_stream()
+			.into_future()
+			.map(move |(msg, _)| msg.unwrap().2));
+
+		assert_eq!(finalized, commit);
 	}
 
 	#[test]

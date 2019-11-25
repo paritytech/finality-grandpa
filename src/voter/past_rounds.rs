@@ -104,7 +104,7 @@ impl<H, N, E: Environment<H, N>> Future for BackgroundRound<H, N, E> where
 	fn poll(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
 		self.waker = Some(cx.waker().clone());
 
-		self.inner.poll(cx)?;
+		let _ = self.inner.poll(cx)?;
 
 		self.round_committer = match self.round_committer.take() {
 			None => None,

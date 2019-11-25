@@ -73,7 +73,6 @@ pub(crate) fn bridge_state<H, N>(initial: RoundState<H, N>) -> (PriorView<H, N>,
 
 #[cfg(test)]
 mod tests {
-	use futures::prelude::*;
 	use std::{sync::Barrier, task::Poll};
 	use super::*;
 
