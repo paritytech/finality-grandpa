@@ -59,8 +59,8 @@ impl Bitfield {
 	/// bits of the other bitfield.
 	pub fn merge(&mut self, other: &Self) -> &mut Self {
 		if self.bits.len() < other.bits.len() {
-		    let new_len = other.bits.len();
-		    self.bits.resize(new_len, 0);
+			let new_len = other.bits.len();
+			self.bits.resize(new_len, 0);
 		}
 
 		for (i, word) in other.bits.iter().enumerate() {
@@ -79,8 +79,8 @@ impl Bitfield {
 		let bit_off = position % 64;
 
 		if word_off >= self.bits.len() {
-		    let new_len = word_off + 1;
-		    self.bits.resize(new_len, 0);
+			let new_len = word_off + 1;
+			self.bits.resize(new_len, 0);
 		}
 
 		self.bits[word_off] |= 1 << (63 - bit_off);
@@ -184,10 +184,10 @@ fn test_bit(word: u64, position: usize) -> bool {
 }
 
 impl BitOr<&Bitfield> for Bitfield {
-    type Output = Bitfield;
+	type Output = Bitfield;
 
     fn bitor(mut self, rhs: &Bitfield) -> Self::Output {
-        self.merge(&rhs);
+		self.merge(&rhs);
 		self
     }
 }
@@ -227,7 +227,7 @@ mod tests {
 	fn bitor() {
 		fn prop(a: Bitfield, b: Bitfield) -> bool {
 			let c = a.clone() | &b;
-			let mut c_bits = c.iter1s(0, 1);
+			let mut c_bits = c.iter1s(0, 0);
 			c_bits.all(|bit| a.test_bit(bit.position) || b.test_bit(bit.position))
 		}
 
@@ -254,7 +254,7 @@ mod tests {
 
 	#[test]
 	fn iter1s() {
-		fn prop(a: Bitfield) {
+		fn all(a: Bitfield) {
 			let mut b = Bitfield::new();
 			for Bit1 { position } in a.iter1s(0, 0) {
 				b.set_bit(position);
@@ -262,12 +262,28 @@ mod tests {
 			assert_eq!(a, b);
 		}
 
-		quickcheck(prop as fn(_))
+		fn even_odd(a: Bitfield) {
+			let mut b = Bitfield::new();
+			for Bit1 { position } in a.iter1s_even() {
+				assert!(!b.test_bit(position));
+				assert!(position % 2 == 0);
+				b.set_bit(position);
+			}
+			for Bit1 { position } in a.iter1s_odd() {
+				assert!(!b.test_bit(position));
+				assert!(position % 2 == 1);
+				b.set_bit(position);
+			}
+			assert_eq!(a, b);
+		}
+
+		quickcheck(all as fn(_));
+		quickcheck(even_odd as fn(_));
 	}
 
 	#[test]
 	fn iter1s_merged() {
-		fn prop(mut a: Bitfield, b: Bitfield) {
+		fn all(mut a: Bitfield, b: Bitfield) {
 			let mut c = Bitfield::new();
 			for bit1 in a.iter1s_merged(&b, 0, 0) {
 				c.set_bit(bit1.position);
@@ -275,6 +291,22 @@ mod tests {
 			assert_eq!(&c, a.merge(&b))
 		}
 
-		quickcheck(prop as fn(_,_))
+		fn even_odd(mut a: Bitfield, b: Bitfield) {
+			let mut c = Bitfield::new();
+			for Bit1 { position } in a.iter1s_merged_even(&b) {
+				assert!(!c.test_bit(position));
+				assert!(position % 2 == 0);
+				c.set_bit(position);
+			}
+			for Bit1 { position } in a.iter1s_merged_odd(&b) {
+				assert!(!c.test_bit(position));
+				assert!(position % 2 == 1);
+				c.set_bit(position);
+			}
+			assert_eq!(&c, a.merge(&b));
+		}
+
+		quickcheck(all as fn(_,_));
+		quickcheck(even_odd as fn(_,_));
 	}
 }
