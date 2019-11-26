@@ -209,10 +209,8 @@ pub mod environment {
 			let (incoming, outgoing) = self.network.make_round_comms(round, self.local_id);
 			RoundData {
 				voter_id: Some(self.local_id),
-				prevote_timer: Box::pin(Delay::new(GOSSIP_DURATION)
-										.map_err(|_| panic!("Timer failed"))),
-				precommit_timer: Box::pin(Delay::new(GOSSIP_DURATION + GOSSIP_DURATION)
-										  .map_err(|_| panic!("Timer failed"))),
+				prevote_timer: Box::pin(Delay::new(GOSSIP_DURATION).map(Ok)),
+				precommit_timer: Box::pin(Delay::new(GOSSIP_DURATION + GOSSIP_DURATION).map(Ok)),
 				incoming: Box::pin(incoming),
 				outgoing: Box::pin(outgoing),
 			}
@@ -226,7 +224,7 @@ pub mod environment {
 			let delay = Duration::from_millis(
 				rand::thread_rng().gen_range(0, COMMIT_DELAY_MILLIS));
 
-			Box::pin(Delay::new(delay).map_err(|_| panic!("Timer failed")))
+			Box::pin(Delay::new(delay).map(Ok))
 		}
 
 		fn completed(

@@ -899,7 +899,7 @@ mod tests {
 	};
 	use futures::executor::LocalPool;
 	use futures::task::SpawnExt;
-	use futures_timer::TryFutureExt as _;
+	use futures_timer::Delay;
 	use std::iter;
 	use std::time::Duration;
 
@@ -1103,15 +1103,23 @@ mod tests {
 				.map(|_| ())
 		).unwrap();
 
-		// wait for the first commit (ours)
-		let res = pool.run_until(commits_stream.into_future()
-			.then(|(_, stream)| {
-				stream.take(1).for_each(|_| future::ready(())) // the second commit should never arrive
-					.map(|()| Ok::<(), std::io::Error>(()))
-					.timeout(Duration::from_millis(500)).map_err(|_| ())
-			}));
+		let res = pool.run_until(
+			// wait for the first commit (ours)
+			commits_stream.into_future()
+				.then(|(_, stream)| {
+					// the second commit should never arrive
+					let await_second = stream.take(1)
+						.for_each(|_| future::ready(()));
+					let delay = Delay::new(Duration::from_millis(500));
+					future::select(await_second, delay)
+				}));
 
-		assert!(res.is_err()) // so the previous future times out
+		match res {
+			future::Either::Right(((), _work)) => {
+				// the future timed out as expected
+			}
+			_ => panic!("Unexpected result")
+		}
 	}
 
 	#[test]
