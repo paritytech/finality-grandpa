@@ -1,0 +1,46 @@
+
+[package]
+name = "finality-grandpa-fuzz"
+version = "0.0.0"
+authors = ["Automatically generated"]
+publish = false
+edition = "2018"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies.finality-grandpa]
+path = ".."
+features = ["fuzz-helpers"]
+
+[dependencies.libfuzzer-sys]
+git = "https://github.com/rust-fuzz/libfuzzer-sys.git"
+
+[dependencies.afl]
+version = "0.5"
+optional = true
+
+# Prevent this from interfering with workspaces
+[workspace]
+members = ["."]
+
+[features]
+default = []
+
+[[bin]]
+name = "round"
+path = "libfuzz_targets/round.rs"
+
+[[bin]]
+name = "graph"
+path = "libfuzz_targets/graph.rs"
+
+[[bin]]
+name = "round_afl"
+path = "afl_targets/round.rs"
+required-features = ["afl"]
+
+[[bin]]
+name = "graph_afl"
+path = "afl_targets/graph.rs"
+required-features = ["afl"]

@@ -253,6 +253,27 @@ impl<H, N, V> VoteGraph<H, N, V> where
 		})
 	}
 
+	/// Find the total vote on a given block.
+	pub fn cumulative_vote<'a>(&'a self, hash: H, number: N) -> V {
+		let entries = &self.entries;
+		let get_node = |hash: &_| -> &'a _ {
+			entries.get(hash)
+				.expect("node either base or referenced by other in graph; qed")
+		};
+
+		match self.find_containing_nodes(hash.clone(), number.clone()) {
+			None => get_node(&hash).cumulative_vote.clone(),
+			Some(nodes) => {
+				let mut v = Default::default();
+				for node in nodes {
+					v += get_node(&node).cumulative_vote.clone();
+				}
+
+				v
+			}
+		}
+	}
+
 	/// Find the best GHOST descendent of the given block.
 	/// Pass a closure used to evaluate the cumulative vote value.
 	///

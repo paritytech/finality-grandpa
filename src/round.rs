@@ -303,7 +303,6 @@ impl<Id, H, N, Signature> Round<Id, H, N, Signature> where
 		self.round_number
 	}
 
-	#[allow(unused)]
 	/// Import a prevote. Returns an equivocation proof, if the vote is an equivocation,
 	/// and a bool indicating if the vote is duplicated (see `ImportResult`).
 	///
@@ -322,6 +321,7 @@ impl<Id, H, N, Signature> Round<Id, H, N, Signature> where
 			Some(info) => info,
 			None => return Ok(import_result),
 		};
+
 		import_result.valid_voter = true;
 		let weight = info.weight();
 
