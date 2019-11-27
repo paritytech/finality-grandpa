@@ -82,9 +82,7 @@ mod testing;
 use parity_scale_codec::{Encode, Decode};
 
 /// A prevote for a block and its ancestors.
-#[derive(Clone, PartialEq, Eq)]
-#[cfg_attr(any(feature = "std", test), derive(
-Debug))]
+#[derive(Clone, Debug, PartialEq, Eq)]
 #[cfg_attr(feature = "derive-codec", derive(Encode, Decode))]
 pub struct Prevote<H, N> {
 	/// The target block's hash.
@@ -100,9 +98,7 @@ impl<H, N> Prevote<H, N> {
 }
 
 /// A precommit for a block and its ancestors.
-#[derive(Clone, PartialEq, Eq)]
-#[cfg_attr(any(feature = "std", test), derive(
-Debug))]
+#[derive(Clone, Debug, PartialEq, Eq)]
 #[cfg_attr(feature = "derive-codec", derive(Encode, Decode))]
 pub struct Precommit<H, N> {
 	/// The target block's hash.
@@ -210,9 +206,7 @@ pub trait Chain<H: Eq, N: Copy + BlockNumberOps> {
 }
 
 /// An equivocation (double-vote) in a given round.
-#[derive(Clone, PartialEq)]
-#[cfg_attr(any(feature = "std", test), derive(
-Debug))]
+#[derive(Clone, Debug, PartialEq)]
 #[cfg_attr(feature = "derive-codec", derive(Encode, Decode))]
 pub struct Equivocation<Id, V, S> {
 	/// The round number equivocated in.
