@@ -217,7 +217,7 @@ pub struct Equivocation<Id, V, S> {
 	/// The identity of the equivocator.
 	pub identity: Id,
 	/// The first vote in the equivocation.
-	pub	first: (V, S),
+	pub first: (V, S),
 	/// The second vote in the equivocation.
 	pub second: (V, S),
 }
