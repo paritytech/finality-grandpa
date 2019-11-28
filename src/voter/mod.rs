@@ -1357,8 +1357,8 @@ mod tests {
 			last_finalized,
 			last_finalized,
 		);
-		pool.spawner().spawn(voter.map_err(|_| panic!("Error voting")).map(|_| ())).unwrap();
 
+		pool.spawner().spawn(voter.map_err(|_| panic!("Error voting")).map(|_| ())).unwrap();
 		pool.spawner().spawn(routing_task.map(|_| ())).unwrap();
 
 		// wait until we see a prevote on round 3 from our local ID,
@@ -1375,7 +1375,7 @@ mod tests {
 				}
 			})
 			.into_future()
-			.map(move |(x, _stream)| x));
+			.map(|_| ()));
 
 		assert_eq!(outer_env.last_completed_and_concluded(), (2, 1));
 	}
