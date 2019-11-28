@@ -703,7 +703,7 @@ impl<H, N, E: Environment<H, N>, GlobalIn, GlobalOut> Voter<H, N, E, GlobalIn, G
 		self.completed_best_round()?;
 
 		// round has been updated. so we need to re-poll.
-		Future::poll(Pin::new(self), cx)
+		self.poll_unpin(cx)
 	}
 
 	fn completed_best_round(&mut self) -> Result<(), E::Error> {
@@ -1239,7 +1239,7 @@ mod tests {
 		// poll until it's caught up.
 		// should skip to round 6
 		pool.run_until(future::poll_fn(move |cx| -> Poll<()> {
-			let poll = Future::poll(Pin::new(&mut unsynced_voter), cx);
+			let poll = unsynced_voter.poll_unpin(cx);
 			if unsynced_voter.best_round.round_number() == 6 {
 				Poll::Ready(())
 			} else {

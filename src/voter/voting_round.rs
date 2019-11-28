@@ -441,7 +441,7 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 		let state = self.state.take();
 
 		let mut handle_prevote = |mut prevote_timer: E::Timer, precommit_timer: E::Timer, proposed| {
-			let should_prevote = match Future::poll(Pin::new(&mut prevote_timer), cx) {
+			let should_prevote = match prevote_timer.poll_unpin(cx) {
 				Poll::Ready(Err(e)) => return Err(e),
 				Poll::Ready(Ok(())) => true,
 				Poll::Pending => self.votes.completable(),
@@ -499,7 +499,7 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 						p_g == &last_round_estimate ||
 							self.env.is_equal_or_descendent_of(last_round_estimate.0, p_g.0.clone())
 					})
-				} && match Future::poll(Pin::new(&mut precommit_timer), cx) {
+				} && match precommit_timer.poll_unpin(cx) {
 					Poll::Ready(Err(e)) => return Err(e),
 					Poll::Ready(Ok(())) => true,
 					Poll::Pending => self.votes.completable(),

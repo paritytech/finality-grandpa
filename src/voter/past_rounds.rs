@@ -185,7 +185,7 @@ impl<H, N, E: Environment<H, N>> RoundCommitter<H, N, E> where
 			}
 		}
 
-		ready!(Future::poll(Pin::new(&mut self.commit_timer), cx))?;
+		ready!(self.commit_timer.poll_unpin(cx))?;
 
 		match (self.last_commit.take(), voting_round.finalized()) {
 			(None, Some(_)) => {
@@ -225,7 +225,7 @@ impl<F: Future + Unpin> Future for SelfReturningFuture<F> {
 	fn poll(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
 		match self.inner.take() {
 			None => panic!("poll after return is not done in this module; qed"),
-			Some(mut f) => match Future::poll(Pin::new(&mut f), cx) {
+			Some(mut f) => match f.poll_unpin(cx) {
 				Poll::Ready(item) => Poll::Ready((item, f)),
 				Poll::Pending => {
 					self.inner = Some(f);
@@ -234,9 +234,6 @@ impl<F: Future + Unpin> Future for SelfReturningFuture<F> {
 			}
 		}
 	}
-}
-
-impl<F> Unpin for SelfReturningFuture<F> {
 }
 
 /// A stream for past rounds, which produces any commit messages from those
@@ -344,10 +341,4 @@ impl<H, N, E: Environment<H, N>> Stream for PastRounds<H, N, E> where
 			}
 		}
 	}
-}
-
-impl<H, N, E: Environment<H, N>> Unpin for PastRounds<H, N, E> where
-	H: Clone + Eq + Ord + ::std::fmt::Debug,
-	N: Copy + BlockNumberOps + ::std::fmt::Debug,
-{
 }

@@ -134,6 +134,8 @@ pub mod environment {
 	use crate::{Chain, Commit, Error, Equivocation, Message, Prevote, Precommit, PrimaryPropose, SignedMessage, HistoricalVotes};
 	use futures::prelude::*;
 	use futures::channel::mpsc::{self, UnboundedReceiver, UnboundedSender};
+	use futures::stream::BoxStream;
+	use futures::future::BoxFuture;
 	use futures_timer::Delay;
 	use parking_lot::Mutex;
 	use std::collections::HashMap;
@@ -196,10 +198,10 @@ pub mod environment {
 	}
 
 	impl crate::voter::Environment<&'static str, u32> for Environment {
-		type Timer = Pin<Box<dyn Future<Output=Result<(),Error>> + Send + 'static>>;
+		type Timer = BoxFuture<'static, Result<(),Error>>;
 		type Id = Id;
 		type Signature = Signature;
-		type In = Pin<Box<dyn Stream<Item=Result<SignedMessage<&'static str, u32, Signature, Id>,Error>> + Send + 'static>>;
+		type In = BoxStream<'static, Result<SignedMessage<&'static str, u32, Signature, Id>,Error>>;
 		type Out = Pin<Box<dyn Sink<Message<&'static str, u32>,Error=Error> + Send + 'static>>;
 		type Error = Error;
 
@@ -423,8 +425,5 @@ pub mod environment {
 
 			Poll::Pending
 		}
-	}
-
-	impl Unpin for NetworkRouting {
 	}
 }
