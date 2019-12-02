@@ -22,8 +22,7 @@ use crate::std::{
 
 use super::{Chain, Error, BlockNumberOps};
 
-#[cfg_attr(any(feature = "std", test), derive(
-Debug))]
+#[cfg_attr(any(feature = "std", test), derive(Debug))]
 struct Entry<H, N, V> {
 	number: N,
 	// ancestor hashes in reverse order, e.g. ancestors[0] is the parent
@@ -62,16 +61,6 @@ struct Subchain<H, N> {
 }
 
 impl<H: Clone, N: Copy + BlockNumberOps> Subchain<H, N> {
-	fn blocks_reverse<'a>(&'a self) -> impl Iterator<Item = (H, N)> + 'a {
-		let best = self.best_number;
-		let mut count = N::zero();
-		self.hashes.iter().rev().cloned().map(move |x| {
-			let res = (x, best - count);
-			count = count + N::one();
-			res
-		})
-	}
-
 	fn best(&self) -> Option<(H, N)> {
 		self.hashes.last().map(|x| (x.clone(), self.best_number))
 	}
@@ -192,65 +181,65 @@ impl<H, N, V> VoteGraph<H, N, V> where
 		Ok(())
 	}
 
-	/// Find the highest block which is either an ancestor of or equal to the given, which fulfills a
-	/// condition.
-	pub fn find_ancestor<'a, F>(&'a self, hash: H, number: N, condition: F) -> Option<(H, N)>
+	/// Find the block with the highest block number in the chain with the given head
+	/// which fulfills the given condition.
+	///
+	/// Returns `None` if the given head is not in the graph or no node fulfills the
+	/// given condition.
+	pub fn find_ancestor<'a, F>(&'a self, mut hash: H, mut number: N, condition: F) -> Option<(H, N)>
 		where F: Fn(&V) -> bool
 	{
-		let entries = &self.entries;
-		let get_node = |hash: &_| -> &'a _ {
-			entries.get(hash)
-				.expect("node either base or referenced by other in graph; qed")
-		};
-
-		// we store two nodes with an edge between them that is the canonical
-		// chain.
-		// the `node_key` always points to the ancestor node, and the `canonical_node`
-		// points to the higher node.
-		let (mut node_key, mut canonical_node) = match self.find_containing_nodes(hash.clone(), number) {
-			None =>	{
-				let node = get_node(&hash);
-				if condition(&node.cumulative_vote) {
-					return Some((hash, number))
+		loop {
+			match self.find_containing_nodes(hash.clone(), number) {
+				None =>	{
+					// The block has a vote-node in the graph.
+					let node = self.entries.get(&hash)
+						.expect("by defn of find_containing_nodes; qed");
+					// If the weight is sufficient, we are done.
+					if condition(&node.cumulative_vote) {
+						return Some((hash, number))
+					}
+					// Not enough weight, check the parent block.
+					match node.ancestors.iter().next() {
+						None => return None,
+						Some(a) => {
+							hash = a.clone();
+							number = node.number - N::one();
+						}
+					}
 				}
+				Some(children) => {
+					// If there are no vote-nodes below the block in the graph,
+					// the block is not in the graph at all.
+					if children.is_empty() {
+						return None
+					}
+					// The block is "contained" in the graph (i.e. in the ancestry-chain
+					// of at least one vote-node) but does not itself have a vote-node.
+					// Check if the accumulated weight on all child vote-nodes is sufficient.
+					let mut v = V::default();
+					for c in &children {
+						let e = self.entries.get(&c).expect("all children in graph; qed");
+						v += e.cumulative_vote.clone();
+					}
+					if condition(&v) {
+						return Some((hash, number))
+					}
 
-				(node.ancestor_node()?, node)
+					// Not enough weight, check the parent block.
+					let child = children.last().expect("children not empty; qed");
+					let entry = self.entries.get(child).expect("all children in graph; qed");
+					let offset = (entry.number - number).as_();
+					match entry.ancestors.get(offset) {
+						None => return None, // Reached base without sufficient weight.
+						Some(parent) => {
+							hash = parent.clone();
+							number = number - N::one();
+						}
+					}
+				}
 			}
-			Some(ref x) if !x.is_empty() => {
-				let node = get_node(&x[0]);
-				let key = node.ancestor_node()
-					.expect("node containing block in ancestry has ancestor node; qed");
-
-				(key, node)
-			}
-			Some(_) => return None,
-		};
-
-		// search backwards until we find the first vote-node that
-		// meets the condition.
-		let mut active_node = get_node(&node_key);
-		while !condition(&active_node.cumulative_vote) {
-			node_key = match active_node.ancestor_node() {
-				Some(n) => n,
-				None => return None,
-			};
-
-			canonical_node = active_node;
-			active_node = get_node(&node_key);
 		}
-
-		// find the GHOST merge-point after the active_node.
-		// constrain it to be within the canonical chain.
-		let good_subchain = self.ghost_find_merge_point(node_key, active_node, None, condition);
-
-		// FIXME: binding is required for some reason.
-		let mut blocks_reverse = good_subchain.blocks_reverse();
-
-		blocks_reverse.find(|&(ref good_hash, good_number)| {
-			canonical_node
-				.in_direct_ancestry(good_hash, good_number)
-				.unwrap_or(false)
-		})
 	}
 
 	/// Find the total vote on a given block.
@@ -591,7 +580,6 @@ mod tests {
 		assert_eq!(a_entry.descendents, vec!["E1", "F2"]);
 		assert_eq!(a_entry.cumulative_vote, 300);
 
-
 		let e_entry = tracker.entries.get("E1").unwrap();
 		assert_eq!(e_entry.ancestor_node().unwrap(), "A");
 		assert_eq!(e_entry.cumulative_vote, 100);
@@ -619,7 +607,7 @@ mod tests {
 		tracker2.insert("F2", 7, 100, &chain).unwrap();
 		tracker2.insert("C", 4, 100, &chain).unwrap();
 
-		for tracker in &[&tracker2] {
+		for tracker in &[&tracker1, &tracker2] {
 			assert!(tracker.heads.contains("E1"));
 			assert!(tracker.heads.contains("F2"));
 			assert!(!tracker.heads.contains("C"));
@@ -824,5 +812,28 @@ mod tests {
 		tracker.insert("5", 5, 3, &chain).unwrap();
 
 		assert_eq!(tracker.entries.get(GENESIS_HASH).unwrap().cumulative_vote, 15);
+	}
+
+	#[test]
+	fn find_ancestor_is_largest() {
+		let mut chain = DummyChain::new();
+		let mut tracker = VoteGraph::<_,_,u32>::new(GENESIS_HASH, 0);
+
+		chain.push_blocks(GENESIS_HASH, &["A"]);
+		chain.push_blocks(GENESIS_HASH, &["B"]);
+		chain.push_blocks("A", &["A1"]);
+		chain.push_blocks("A", &["A2"]);
+		chain.push_blocks("B", &["B1"]);
+		chain.push_blocks("B", &["B2"]);
+
+		// Inserting the Bs first used to exhibit incorrect behaviour.
+		tracker.insert("B1", 2, 1, &chain).unwrap();
+		tracker.insert("B2", 2, 1, &chain).unwrap();
+		tracker.insert("A1", 2, 1, &chain).unwrap();
+		tracker.insert("A2", 2, 1, &chain).unwrap();
+
+		let actual = tracker.find_ancestor("A", 1, |x| x >= &2).unwrap();
+		// `actual` used to (incorrectly) be (genesis, 0)
+		assert_eq!(actual, ("A", 1));
 	}
 }

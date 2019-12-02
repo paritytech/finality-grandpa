@@ -382,7 +382,6 @@ impl<Id, H, N, Signature> Round<Id, H, N, Signature> where
 		let threshold = self.threshold();
 		if self.prevote.current_weight >= threshold {
 			let equivocators = self.bitfield_context.equivocators();
-
 			self.prevote_ghost = self.graph.find_ghost(
 				self.prevote_ghost.take(),
 				|v| v.total_weight(&equivocators, &self.voters).prevote >= threshold,
@@ -422,6 +421,7 @@ impl<Id, H, N, Signature> Round<Id, H, N, Signature> where
 					return Ok(import_result)
 				},
 			};
+
 			let round_number = self.round_number;
 
 			match multiplicity {
