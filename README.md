@@ -92,7 +92,7 @@ details.
 [codecov]: https://codecov.io/gh/paritytech/finality-grandpa
 [crates-badge]: https://img.shields.io/crates/v/finality-grandpa.svg
 [crates]: https://crates.io/crates/finality-grandpa
-[environment-docs]: https://docs.rs/finality-grandpa/0.10.2/finality_grandpa/voter/trait.Environment.html·
+[environment-docs]: https://docs.rs/finality-grandpa/0.10.2/finality_grandpa/voter/trait.Environment.html
 [paper]: https://github.com/w3f/consensus/blob/master/pdf/grandpa.pdf
 [parity-scale-codec]: https://github.com/paritytech/parity-scale-codec
 [polkadot-wiki]: https://wiki.polkadot.network/en/latest/polkadot/learn/consensus/
