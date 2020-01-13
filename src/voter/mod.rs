@@ -306,6 +306,8 @@ pub enum CommunicationIn<H, N, S, Id> {
 	CatchUp(CatchUp<H, N, S, Id>, Callback<CatchUpProcessingOutcome>),
 }
 
+impl<H, N, S, Id> Unpin for CommunicationIn<H, N, S, Id> {}
+
 /// Data necessary to participate in a round.
 pub struct RoundData<Id, Timer, Input, Output> {
 	/// Local voter id (if any.)
