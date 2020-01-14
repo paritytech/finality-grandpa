@@ -16,6 +16,9 @@ use crate::round::{RoundParams, Round};
 
 use crate::{Chain, Error};
 
+#[cfg(not(feature = "std"))]
+use alloc::vec::Vec;
+
 type Voter = u8;
 type Hash = u8;
 type BlockNumber = u8;
@@ -369,7 +372,7 @@ pub fn execute_fuzzed_graph(data: &[u8]) {
 
 	#[derive(Default, Clone, Debug)]
 	struct Vote(u8, u8);
-	impl std::ops::AddAssign for Vote {
+	impl core::ops::AddAssign for Vote {
 		fn add_assign(&mut self, other: Vote) {
 			self.0 += other.0;
 			self.1 += other.1;
