@@ -28,7 +28,7 @@ Add this to your Cargo.toml:
 
 ```toml
 [dependencies]
-finality-grandpa = "0.8"
+finality-grandpa = "0.10"
 ```
 
 **Features:**
@@ -87,18 +87,18 @@ Usage is provided under the Apache License (Version 2.0). See [LICENSE](LICENSE)
 details.
 
 [blogpost]: https://medium.com/polkadot-network/grandpa-block-finality-in-polkadot-an-introduction-part-1-d08a24a021b5
-[chain-docs]: https://docs.rs/finality-grandpa/0.8.1/finality_grandpa/trait.Chain.html
+[chain-docs]: https://docs.rs/finality-grandpa/0.10.2/finality_grandpa/trait.Chain.html
 [codecov-badge]: https://codecov.io/gh/paritytech/finality-grandpa/branch/master/graph/badge.svg
 [codecov]: https://codecov.io/gh/paritytech/finality-grandpa
 [crates-badge]: https://img.shields.io/crates/v/finality-grandpa.svg
 [crates]: https://crates.io/crates/finality-grandpa
-[environment-docs]: https://docs.rs/finality-grandpa/0.8.1/finality_grandpa/voter/trait.Environment.html
+[environment-docs]: https://docs.rs/finality-grandpa/0.10.2/finality_grandpa/voter/trait.Environment.html
 [paper]: https://github.com/w3f/consensus/blob/master/pdf/grandpa.pdf
 [parity-scale-codec]: https://github.com/paritytech/parity-scale-codec
 [polkadot-wiki]: https://wiki.polkadot.network/en/latest/polkadot/learn/consensus/
 [sub0]: https://www.youtube.com/watch?v=QE8svRKVYOU
 [substrate]: https://github.com/paritytech/substrate
-[substrate-finality-grandpa]: https://github.com/paritytech/substrate/blob/master/core/finality-grandpa
+[substrate-finality-grandpa]: https://github.com/paritytech/substrate/tree/master/client/finality-grandpa
 [testnet]: https://telemetry.polkadot.io/#/Alexander
 [travis-badge]: https://travis-ci.org/paritytech/finality-grandpa.svg?branch=master
 [travis]: https://travis-ci.org/paritytech/finality-grandpa
