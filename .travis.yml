@@ -35,7 +35,7 @@ jobs:
     env:
     - RUSTFLAGS='-C link-dead-code'
     script:
-    - cargo test --verbose --features rand
+    - cargo test --verbose
     - |
       set -e
       wget https://github.com/SimonKagstrom/kcov/archive/master.tar.gz
