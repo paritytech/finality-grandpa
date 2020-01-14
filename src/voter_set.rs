@@ -93,8 +93,7 @@ impl<Id: Eq + Clone + Ord> std::iter::FromIterator<(Id, u64)> for VoterSet<Id> {
 }
 
 #[derive(Clone, PartialEq, Eq)]
-#[cfg_attr(any(feature = "std", test), derive(
-Debug))]
+#[cfg_attr(any(feature = "std", test), derive(Debug))]
 pub struct VoterInfo {
 	canon_idx: usize,
 	weight: u64,

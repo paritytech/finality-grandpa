@@ -606,17 +606,23 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 
 	// notify when new blocks are finalized or when the round-estimate is updated
 	fn notify(&mut self, last_state: RoundState<H, N>, new_state: RoundState<H, N>) {
-		if last_state == new_state { return }
-
-		if let Some(ref b) = self.bridged_round_state {
-			b.update(new_state.clone());
+		if last_state != new_state {
+			if let Some(ref b) = self.bridged_round_state {
+				b.update(new_state.clone());
+			}
 		}
 
-		if last_state.finalized != new_state.finalized && new_state.completable {
-			// send notification only when the round is completable and we've cast votes.
-			// this is a workaround that ensures when we re-instantiate the voter after
-			// a shutdown, we never re-create the same round with a base that was finalized
-			// in this round or after.
+		// send notification only when the round is completable and we've cast votes.
+		// this is a workaround that ensures when we re-instantiate the voter after
+		// a shutdown, we never re-create the same round with a base that was finalized
+		// in this round or after.
+		// we try to notify if either the round state changed or if we haven't
+		// sent any notification yet (this is to guard against seeing enough
+		// votes to finalize before having precommited)
+		let state_changed = last_state.finalized != new_state.finalized;
+		let sent_finality_notifications = self.best_finalized.is_some();
+
+		if new_state.completable && (state_changed || !sent_finality_notifications) {
 			if let (&Some(State::Precommitted), Some((ref f_hash, ref f_number))) = (&self.state, new_state.finalized) {
 				let commit = Commit {
 					target_hash: f_hash.clone(),

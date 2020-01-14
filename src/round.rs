@@ -27,16 +27,14 @@ use crate::voter_set::VoterSet;
 use super::{Equivocation, Prevote, Precommit, Chain, BlockNumberOps, HistoricalVotes, Message, SignedMessage};
 
 #[derive(PartialEq, Eq)]
-#[cfg_attr(any(feature = "std", test), derive(
-Debug))]
+#[cfg_attr(any(feature = "std", test), derive(Debug))]
 struct TotalWeight {
 	prevote: u64,
 	precommit: u64,
 }
 
 #[derive(Clone)]
-#[cfg_attr(any(feature = "std", test), derive(
-Debug))]
+#[cfg_attr(any(feature = "std", test), derive(Debug))]
 struct VoteWeight {
 	bitfield: Bitfield,
 }
@@ -195,8 +193,7 @@ impl<Id: Ord + Eq + Clone, Vote: Clone + Eq, Signature: Clone + Eq> VoteTracker<
 
 /// State of the round.
 #[derive(PartialEq, Clone)]
-#[cfg_attr(any(feature = "std", test), derive(
-Debug))]
+#[cfg_attr(any(feature = "std", test), derive(Debug))]
 #[cfg_attr(feature = "derive-codec", derive(Encode, Decode))]
 pub struct State<H, N> {
 	/// The prevote-GHOST block.
