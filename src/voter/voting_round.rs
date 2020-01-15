@@ -15,13 +15,15 @@
 //! Logic for voting and handling messages within a single round.
 
 #[cfg(feature = "std")]
-use futures::try_ready;
+use futures::ready;
 use futures::prelude::*;
-use futures::sync::mpsc::UnboundedSender;
+use futures::channel::mpsc::UnboundedSender;
 #[cfg(feature = "std")]
 use log::{trace, warn, debug};
 
+use std::pin::Pin;
 use std::sync::Arc;
+use std::task::{Context, Poll};
 
 use crate::round::{Round, State as RoundState};
 use crate::{
@@ -60,7 +62,7 @@ pub(super) struct VotingRound<H, N, E: Environment<H, N>> where
 	voting: Voting,
 	votes: Round<E::Id, H, N, E::Signature>,
 	incoming: E::In,
-	outgoing: Buffered<E::Out>,
+	outgoing: Buffered<E::Out, Message<H, N>>,
 	state: Option<State<E::Timer>>, // state machine driving votes.
 	bridged_round_state: Option<crate::bridge_state::PriorView<H, N>>, // updates to later round
 	last_round_state: Option<crate::bridge_state::LatterView<H, N>>, // updates from prior round
@@ -174,26 +176,26 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 		}
 	}
 
-	/// Poll the round. When the round is completable and messages have been flushed, it will return `Async::Ready` but
+	/// Poll the round. When the round is completable and messages have been flushed, it will return `Poll::Ready` but
 	/// can continue to be polled.
-	pub(super) fn poll(&mut self) -> Poll<(), E::Error> {
+	pub(super) fn poll(&mut self, cx: &mut Context) -> Poll<Result<(), E::Error>> {
 		trace!(target: "afg", "Polling round {}, state = {:?}, step = {:?}", self.votes.number(), self.votes.state(), self.state);
 
 		let pre_state = self.votes.state();
-		self.process_incoming()?;
+		self.process_incoming(cx)?;
 
 		// we only cast votes when we have access to the previous round state.
 		// we might have started this round as a prospect "future" round to
 		// check whether the voter is lagging behind the current round.
-		let last_round_state = self.last_round_state.as_ref().map(|s| s.get().clone());
+		let last_round_state = self.last_round_state.as_ref().map(|s| s.get(cx).clone());
 		if let Some(ref last_round_state) = last_round_state {
 			self.primary_propose(last_round_state)?;
-			self.prevote(last_round_state)?;
-			self.precommit(last_round_state)?;
+			self.prevote(cx, last_round_state)?;
+			self.precommit(cx, last_round_state)?;
 		}
 
-		try_ready!(self.outgoing.poll());
-		self.process_incoming()?; // in case we got a new message signed locally.
+		ready!(self.outgoing.poll(cx))?;
+		self.process_incoming(cx)?; // in case we got a new message signed locally.
 
 		// broadcast finality notifications after attempting to cast votes
 		let post_state = self.votes.state();
@@ -201,7 +203,7 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 
 		// early exit if the current round is not completable
 		if !self.votes.completable() {
-			return Ok(Async::NotReady);
+			return Poll::Pending;
 		}
 
 		// make sure that the previous round estimate has been finalized
@@ -236,7 +238,7 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 		if !last_round_estimate_finalized {
 			trace!(target: "afg", "Round {} completable but estimate not finalized.", self.round_number());
 			self.log_participation(log::Level::Trace);
-			return Ok(Async::NotReady);
+			return Poll::Pending;
 		}
 
 		debug!(target: "afg", "Completed round {}, state = {:?}, step = {:?}",
@@ -245,7 +247,7 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 		self.log_participation(log::Level::Debug);
 
 		// both exit conditions verified, we can complete this round
-		Ok(Async::Ready(()))
+		Poll::Ready(Ok(()))
 	}
 
 	/// Inspect the state of this round.
@@ -384,10 +386,10 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 			number, precommit_weight, threshold, total_weight, n_precommits, n_voters);
 	}
 
-	fn process_incoming(&mut self) -> Result<(), E::Error> {
-		while let Async::Ready(Some(incoming)) = self.incoming.poll()? {
+	fn process_incoming(&mut self, cx: &mut Context) -> Result<(), E::Error> {
+		while let Poll::Ready(Some(incoming)) = Stream::poll_next(Pin::new(&mut self.incoming), cx) {
 			trace!(target: "afg", "Got incoming message");
-			self.handle_vote(incoming)?;
+			self.handle_vote(incoming?)?;
 		}
 
 		Ok(())
@@ -435,14 +437,14 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 		Ok(())
 	}
 
-	fn prevote(&mut self, last_round_state: &RoundState<H, N>) -> Result<(), E::Error> {
+	fn prevote(&mut self, cx: &mut Context, last_round_state: &RoundState<H, N>) -> Result<(), E::Error> {
 		let state = self.state.take();
 
 		let mut handle_prevote = |mut prevote_timer: E::Timer, precommit_timer: E::Timer, proposed| {
-			let should_prevote = match prevote_timer.poll() {
-				Err(e) => return Err(e),
-				Ok(Async::Ready(())) => true,
-				Ok(Async::NotReady) => self.votes.completable(),
+			let should_prevote = match prevote_timer.poll_unpin(cx) {
+				Poll::Ready(Err(e)) => return Err(e),
+				Poll::Ready(Ok(())) => true,
+				Poll::Pending => self.votes.completable(),
 			};
 
 			if should_prevote {
@@ -484,7 +486,7 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 		Ok(())
 	}
 
-	fn precommit(&mut self, last_round_state: &RoundState<H, N>) -> Result<(), E::Error> {
+	fn precommit(&mut self, cx: &mut Context, last_round_state: &RoundState<H, N>) -> Result<(), E::Error> {
 		match self.state.take() {
 			Some(State::Prevoted(mut precommit_timer)) => {
 				let last_round_estimate = last_round_state.estimate.clone()
@@ -497,10 +499,10 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 						p_g == &last_round_estimate ||
 							self.env.is_equal_or_descendent_of(last_round_estimate.0, p_g.0.clone())
 					})
-				} && match precommit_timer.poll() {
-					Err(e) => return Err(e),
-					Ok(Async::Ready(())) => true,
-					Ok(Async::NotReady) => self.votes.completable(),
+				} && match precommit_timer.poll_unpin(cx) {
+					Poll::Ready(Err(e)) => return Err(e),
+					Poll::Ready(Ok(())) => true,
+					Poll::Pending => self.votes.completable(),
 				};
 
 				if should_precommit {
