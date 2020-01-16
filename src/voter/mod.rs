@@ -280,7 +280,7 @@ pub enum Callback<O> {
 	Work(Box<dyn FnMut(O) + Send>),
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-helpers"))]
 impl<O> Clone for Callback<O> {
 	fn clone(&self) -> Self {
 		Callback::Blank
@@ -298,13 +298,15 @@ impl<O> Callback<O> {
 }
 
 /// Communication between nodes that is not round-localized.
-#[cfg_attr(test, derive(Clone))]
+#[cfg_attr(any(test, feature = "test-helpers"), derive(Clone))]
 pub enum CommunicationIn<H, N, S, Id> {
 	/// A commit message.
 	Commit(u64, CompactCommit<H, N, S, Id>, Callback<CommitProcessingOutcome>),
 	/// A catch up message.
 	CatchUp(CatchUp<H, N, S, Id>, Callback<CatchUpProcessingOutcome>),
 }
+
+impl<H, N, S, Id> Unpin for CommunicationIn<H, N, S, Id> {}
 
 /// Data necessary to participate in a round.
 pub struct RoundData<Id, Timer, Input, Output> {

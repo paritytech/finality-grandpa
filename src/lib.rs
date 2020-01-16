@@ -264,6 +264,8 @@ pub struct SignedMessage<H, N, S, Id> {
 	pub id: Id,
 }
 
+impl<H, N, S, Id> Unpin for SignedMessage<H, N, S, Id> {}
+
 impl<H, N: Copy, S, Id> SignedMessage<H, N, S, Id> {
 	/// Get the target block of the vote.
 	pub fn target(&self) -> (&H, N) {
