@@ -24,7 +24,6 @@ use parity_scale_codec::{Encode, Decode};
 use crate::std::{
 	self,
 	collections::btree_map::{BTreeMap, Entry},
-	hash::Hash,
 	fmt,
 	vec::Vec,
 };
@@ -154,7 +153,7 @@ impl<Id: Ord + Eq + Clone, Vote: Clone + Eq, Signature: Clone + Eq> VoteTracker<
 	}
 
 	// Current vote weight and number of participants.
-	fn participation(&self) -> (u64, usize) {
+	fn participation(&self) -> (VoteWeight, usize) {
 		(self.current_weight, self.votes.len())
 	}
 }
@@ -643,12 +642,12 @@ impl<Id, H, N, Signature> Round<Id, H, N, Signature> where
 	}
 
 	/// Get the current weight and number of voters who have participated in prevoting.
-	pub fn prevote_participation(&self) -> (u64, usize) {
+	pub fn prevote_participation(&self) -> (VoteWeight, usize) {
 		self.prevote.participation()
 	}
 
 	/// Get the current weight and number of voters who have participated in precommitting.
-	pub fn precommit_participation(&self) -> (u64, usize) {
+	pub fn precommit_participation(&self) -> (VoteWeight, usize) {
 		self.precommit.participation()
 	}
 

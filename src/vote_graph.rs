@@ -223,7 +223,7 @@ impl<H, N, V> VoteGraph<H, N, V> where
 					let mut v = V::default();
 					for c in &children {
 						let e = self.entries.get(&c).expect("all children in graph; qed");
-						v += e.cumulative_vote.clone();
+						v += &e.cumulative_vote;
 					}
 					if condition(&v) {
 						return Some((hash, number))
@@ -258,7 +258,7 @@ impl<H, N, V> VoteGraph<H, N, V> where
 			Some(nodes) => {
 				let mut v = Default::default();
 				for node in nodes {
-					v += get_node(&node).cumulative_vote.clone();
+					v += &get_node(&node).cumulative_vote;
 				}
 
 				v
@@ -822,7 +822,7 @@ mod tests {
 	#[test]
 	fn find_ancestor_is_largest() {
 		let mut chain = DummyChain::new();
-		let mut tracker = VoteGraph::<_,_,u32>::new(GENESIS_HASH, 0);
+		let mut tracker = VoteGraph::new(GENESIS_HASH, 0, 0);
 
 		chain.push_blocks(GENESIS_HASH, &["A"]);
 		chain.push_blocks(GENESIS_HASH, &["B"]);

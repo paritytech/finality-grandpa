@@ -17,7 +17,6 @@
 
 use crate::bitfield::{Bitfield, Bit1};
 use crate::voter_set::{VoterSet, VoterInfo};
-use crate::std::hash::Hash;
 use crate::std::ops::AddAssign;
 use crate::weights::VoteWeight;
 
@@ -26,12 +25,12 @@ use super::Phase;
 /// The context of a `Round` in which vote weights are calculated.
 #[cfg_attr(feature = "std", derive(Debug))]
 #[cfg_attr(test, derive(Clone))]
-pub struct Context<T: Eq + Hash> {
+pub struct Context<T: Ord + Eq> {
 	voters: VoterSet<T>,
 	equivocations: Bitfield,
 }
 
-impl<T: Eq + Hash> Context<T> {
+impl<T: Ord + Eq> Context<T> {
 	/// Create a new context for a round with the given set of voters.
 	pub fn new(voters: VoterSet<T>) -> Self {
 		Context {
@@ -101,7 +100,7 @@ impl Vote {
 	/// if it is contained in that set.
 	fn voter<'a, Id>(&'a self, vs: &'a VoterSet<Id>) -> Option<(&'a Id, &'a VoterInfo)>
 	where
-		Id: Eq + Hash
+		Id: Eq + Ord
 	{
 		vs.nth(self.bit.position / 2)
 	}
@@ -141,7 +140,7 @@ impl AddAssign<&Vote> for VoteNode {
 /// of vote-bits in the context of the given set of voters.
 fn weight<V, I>(bits: I, voters: &VoterSet<V>) -> VoteWeight
 where
-	V: Eq + Hash,
+	V: Eq + Ord,
 	I: Iterator<Item = Bit1>
 {
 	let mut total = VoteWeight(0);

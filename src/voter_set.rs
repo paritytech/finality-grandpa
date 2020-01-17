@@ -30,7 +30,7 @@ use crate::weights::VoterWeight;
 /// equipped with a total order, given by the ordering of the voter's IDs.
 #[derive(Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "std", derive(Debug))]
-pub struct VoterSet<Id: Eq> {
+pub struct VoterSet<Id: Eq + Ord> {
 	/// The voters in the set.
 	voters: BTreeMap<Id, VoterInfo>,
 	/// The total order associated with the keys in `voters`.
@@ -41,7 +41,7 @@ pub struct VoterSet<Id: Eq> {
 	total_weight: VoterWeight,
 }
 
-impl<Id: Eq> VoterSet<Id> {
+impl<Id: Eq + Ord> VoterSet<Id> {
 	/// Create a voter set from a weight distribution produced by the given iterator.
 	///
 	/// If the distribution contains multiple weights for the same voter ID, they are
@@ -59,7 +59,7 @@ impl<Id: Eq> VoterSet<Id> {
 		let weights = weights.into_iter();
 
 		// Populate the voter set, thereby calculating the total weight.
-		let mut voters = BTreeMap::with_capacity(weights.size_hint().0);
+		let mut voters = BTreeMap::new();
 		let mut total_weight = 0u64;
 		for (id, weight) in weights {
 			if let Some(w) = NonZeroU64::new(weight) {

@@ -17,10 +17,17 @@
 use crate::std::ops::{Add, Sub};
 use crate::std::cmp::Ordering;
 use crate::std::num::NonZeroU64;
+use crate::std::fmt;
 
 /// The accumulated weight of any number of voters (possibly none).
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Debug)]
 pub struct VoteWeight(pub u64);
+
+impl fmt::Display for VoteWeight {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+		write!(f, "{}", self.0)
+	}
+}
 
 impl Add for VoteWeight {
 	type Output = Self;
@@ -71,6 +78,12 @@ impl PartialOrd<VoterWeight> for VoteWeight {
 /// Having a non-zero weight is part of the definition of being a voter.
 #[derive(PartialEq, Eq, Copy, Clone, Debug)]
 pub struct VoterWeight(pub NonZeroU64);
+
+impl fmt::Display for VoterWeight {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+		write!(f, "{}", self.0)
+	}
+}
 
 impl VoterWeight {
 	pub fn new(weight: u64) -> Option<Self> {
