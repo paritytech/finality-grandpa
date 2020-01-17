@@ -126,7 +126,7 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 			Voting::Primary
 		} else if round_data.voter_id
 			.as_ref()
-			.map_or(false, |id| votes.voters().contains_key(id))
+			.map_or(false, |id| votes.voters().contains(id))
 		{
 			Voting::Yes
 		} else {
@@ -510,7 +510,7 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 						debug!(target: "afg", "Casting precommit for round {}", self.votes.number());
 						let precommit = self.construct_precommit();
 						self.env.precommitted(self.round_number(), precommit.clone())?;
-						self.votes.set_precommited_index();
+						self.votes.set_precommitted_index();
 						self.outgoing.push(Message::Precommit(precommit));
 					}
 					self.state = Some(State::Precommitted);

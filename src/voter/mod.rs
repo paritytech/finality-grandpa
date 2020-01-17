@@ -42,6 +42,7 @@ use crate::{
 	HistoricalVotes,
 };
 use crate::voter_set::VoterSet;
+use crate::weights::VoteWeight;
 use past_rounds::PastRounds;
 use voting_round::{VotingRound, State as VotingRoundState};
 
@@ -794,7 +795,7 @@ fn validate_catch_up<H, N, S, I, E>(
 		let mut map = std::collections::BTreeMap::new();
 
 		for prevote in &catch_up.prevotes {
-			if !voters.contains_key(&prevote.id) {
+			if !voters.contains(&prevote.id) {
 				trace!(target: "afg",
 					   "Ignoring invalid catch up, invalid voter: {:?}",
 					   prevote.id,
@@ -807,7 +808,7 @@ fn validate_catch_up<H, N, S, I, E>(
 		}
 
 		for precommit in &catch_up.precommits {
-			if !voters.contains_key(&precommit.id) {
+			if !voters.contains(&precommit.id) {
 				trace!(target: "afg",
 					   "Ignoring invalid catch up, invalid voter: {:?}",
 					   precommit.id,
@@ -820,16 +821,16 @@ fn validate_catch_up<H, N, S, I, E>(
 		}
 
 		let (pv, pc) = map.into_iter().fold(
-			(0, 0),
+			(VoteWeight(0), VoteWeight(0)),
 			|(mut pv, mut pc), (id, (prevoted, precommitted))| {
-				let weight = voters.info(&id).map_or(0, |i| i.weight());
+				if let Some(v) = voters.get(&id) {
+					if prevoted {
+						pv = pv + v.weight();
+					}
 
-				if prevoted {
-					pv += weight;
-				}
-
-				if precommitted {
-					pc += weight;
+					if precommitted {
+						pc = pc + v.weight();
+					}
 				}
 
 				(pv, pc)
@@ -908,7 +909,7 @@ mod tests {
 	#[test]
 	fn talking_to_myself() {
 		let local_id = Id(5);
-		let voters = std::iter::once((local_id, 100)).collect();
+		let voters = VoterSet::new(std::iter::once((local_id, 100))).unwrap();
 
 		let (network, routing_task) = testing::environment::make_network();
 
@@ -946,7 +947,7 @@ mod tests {
 	#[test]
 	fn finalizing_at_fault_threshold() {
 		// 10 voters
-		let voters: VoterSet<_> = (0..10).map(|i| (Id(i), 1)).collect();
+		let voters = VoterSet::new((0..10).map(|i| (Id(i), 1))).expect("nonempty");
 
 		let (network, routing_task) = testing::environment::make_network();
 		let mut pool = LocalPool::new();
@@ -989,7 +990,7 @@ mod tests {
 	#[test]
 	fn broadcast_commit() {
 		let local_id = Id(5);
-		let voters: VoterSet<_> = std::iter::once((local_id, 100)).collect();
+		let voters = VoterSet::new([(local_id, 100)].iter().cloned()).expect("nonempty");
 
 		let (network, routing_task) = testing::environment::make_network();
 		let (commits, _) = network.make_global_comms();
@@ -1026,10 +1027,10 @@ mod tests {
 	fn broadcast_commit_only_if_newer() {
 		let local_id = Id(5);
 		let test_id = Id(42);
-		let voters: VoterSet<_> = [
+		let voters = VoterSet::new([
 			(local_id, 100),
 			(test_id, 201),
-		].iter().cloned().collect();
+		].iter().cloned()).expect("nonempty");
 
 		let (network, routing_task) = testing::environment::make_network();
 		let (commits_stream, commits_sink) = network.make_global_comms();
@@ -1125,10 +1126,10 @@ mod tests {
 	fn import_commit_for_any_round() {
 		let local_id = Id(5);
 		let test_id = Id(42);
-		let voters: VoterSet<_> = [
+		let voters = VoterSet::new([
 			(local_id, 100),
 			(test_id, 201),
-		].iter().cloned().collect();
+		].iter().cloned()).expect("nonempty");
 
 		let (network, routing_task) = testing::environment::make_network();
 		let (_, commits_sink) = network.make_global_comms();
@@ -1186,7 +1187,7 @@ mod tests {
 	#[test]
 	fn skips_to_latest_round_after_catch_up() {
 		// 3 voters
-		let voters: VoterSet<_> = (0..3).map(|i| (Id(i), 1)).collect();
+		let voters = VoterSet::new((0..3).map(|i| (Id(i), 1u64))).expect("nonempty");
 
 		let (network, routing_task) = testing::environment::make_network();
 		let mut pool = LocalPool::new();
@@ -1254,7 +1255,7 @@ mod tests {
 	#[test]
 	fn pick_up_from_prior_without_grandparent_state() {
 		let local_id = Id(5);
-		let voters = std::iter::once((local_id, 100)).collect();
+		let voters = VoterSet::new(std::iter::once((local_id, 100))).expect("nonempty");
 
 		let (network, routing_task) = testing::environment::make_network();
 
@@ -1291,7 +1292,7 @@ mod tests {
 	#[test]
 	fn pick_up_from_prior_with_grandparent_state() {
 		let local_id = Id(99);
-		let voters = (0..100).map(|id| (Id(id), 1)).collect::<VoterSet<_>>();
+		let voters = VoterSet::new((0..100).map(|i| (Id(i), 1))).expect("nonempty");
 
 		let (network, routing_task) = testing::environment::make_network();
 

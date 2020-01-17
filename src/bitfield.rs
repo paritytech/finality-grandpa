@@ -12,387 +12,300 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Bitfields and tools for handling equivocations.
-//!
-//! This is primarily a bitfield for tracking equivocating voters.
-//! It is necessary because there is a need to track vote-weight of equivocation
-//! on the vote-graph but to avoid double-counting.
-//!
-//! We count equivocating voters as voting for everything. This makes any
-//! further equivocations redundant with the first.
-//!
-//! Bitfields are either blank or live, with two bits per equivocator.
-//! The first is for equivocations in prevote messages and the second
-//! for those in precommits.
-//!
-//! Bitfields on regular vote-nodes will tend to be live, but the equivocating
-//! bitfield will be mostly empty.
+//! Dynamically sized, write-once, lazily allocating bitfields,
+//! e.g. for compact accumulation of votes cast on a block while
+//! retaining information on the type of vote and identity of the
+//! voter within a voter set.
 
-#[cfg(feature = "std")]
-use parking_lot::RwLock;
+use crate::std::{iter, cmp::Ordering, vec::Vec, ops::BitOr};
+use either::Either;
 
-#[cfg(feature = "std")]
-use std::sync::Arc;
-
-use crate::std::{self, vec::Vec};
-use crate::voter_set::VoterInfo;
-
-/// Errors that can occur when using the equivocation weighting tools.
-#[derive(Clone, PartialEq, Eq)]
-#[cfg_attr(any(feature = "std", test), derive(
-Debug))]
-pub enum Error {
-	/// Attempted to index bitfield past its length.
-	IndexOutOfBounds(usize, usize),
-	/// Mismatch in bitfield length when merging bitfields.
-	LengthMismatch(usize, usize),
-}
-
-#[cfg(feature = "std")]
-impl std::fmt::Display for Error {
-	fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-		match *self {
-			Error::IndexOutOfBounds(ref idx, ref n)
-				=> write!(f, "Attempted to set voter {}. Maximum specified was {}", idx, n),
-			Error::LengthMismatch(ref idx1, ref idx2)
-				=> write!(f, "Attempted to merge bitfields with different lengths: {} vs {}", idx1, idx2),
-		}
-	}
-}
-
-#[cfg(feature = "std")]
-impl std::error::Error for Error {}
-
-/// Bitfield for tracking voters who have equivocated.
-#[derive(Eq, PartialEq, Clone)]
-#[cfg_attr(any(feature = "std", test), derive(
-Debug))]
-pub enum Bitfield {
-	/// Blank bitfield,
-	Blank,
-	/// Live bitfield,
-	Live(LiveBitfield),
-}
+/// A dynamically sized, write-once (per bit), lazily allocating bitfield.
+#[derive(Eq, PartialEq, Clone, Debug)]
+pub struct Bitfield { bits: Vec<u64> }
 
 impl Default for Bitfield {
 	fn default() -> Self {
-		Bitfield::Blank
+		Bitfield { bits: Vec::new() }
+	}
+}
+
+impl From<Vec<u64>> for Bitfield {
+	fn from(bits: Vec<u64>) -> Bitfield {
+		Bitfield { bits }
 	}
 }
 
 impl Bitfield {
-	/// Combine two bitfields. Fails if they have conflicting shared data
-	/// (i.e. they come from different contexts).
-	pub fn merge(&self, other: &Self) -> Result<Self, Error> {
-		match (self, other) {
-			(&Bitfield::Blank, &Bitfield::Blank) => Ok(Bitfield::Blank),
-			(&Bitfield::Live(ref live), &Bitfield::Blank) | (&Bitfield::Blank, &Bitfield::Live(ref live))
-				=> Ok(Bitfield::Live(live.clone())),
-			(&Bitfield::Live(ref a), &Bitfield::Live(ref b)) => {
-				if a.bits.len() == b.bits.len() {
-					let bits = a.bits.iter().zip(&b.bits).map(|(a, b)| a | b).collect();
-					Ok(Bitfield::Live(LiveBitfield { bits }))
-				} else {
-					// we can't merge two bitfields with different lengths.
-					Err(Error::LengthMismatch(a.bits.len(), b.bits.len()))
-				}
-			}
-		}
+	/// Create a new empty bitfield.
+	///
+	/// Does not allocate.
+	pub fn new() -> Bitfield {
+		Bitfield { bits: Vec::new() }
 	}
 
-	/// Find overlap weight (prevote, precommit) between this bitfield and another.
-	pub fn overlap(&self, other: &Self) -> Result<Self, Error> {
-		match (self, other) {
-			(&Bitfield::Live(ref a), &Bitfield::Live(ref b)) => {
-				if a.bits.len() == b.bits.len() {
-					Ok(Bitfield::Live(LiveBitfield {
-						bits: a.bits.iter().zip(&b.bits).map(|(a, b)| a & b).collect(),
-					}))
-				} else {
-					// we can't find overlap of two bitfields with different lengths.
-					Err(Error::LengthMismatch(a.bits.len(), b.bits.len()))
-				}
-			}
-			_ => Ok(Bitfield::Blank)
-		}
+	/// Whether the bitfield is blank / empty.
+	pub fn is_blank(&self) -> bool {
+		self.bits.is_empty()
 	}
 
-	/// Find total equivocating weight (prevote, precommit).
-	/// Provide a function for looking up voter weight.
-	pub fn total_weight<F: Fn(usize) -> u64>(&self, lookup: F) -> (u64, u64) {
-		match *self {
-			Bitfield::Blank => (0, 0),
-			Bitfield::Live(ref live) => total_weight(live.bits.iter().cloned(), lookup),
+	/// Merge another bitfield into this bitfield.
+	///
+	/// As a result, this bitfield has all bits set that are set in either bitfield.
+	///
+	/// This function only allocates if this bitfield is shorter than the other
+	/// bitfield, in which case it is resized accordingly to accomodate for all
+	/// bits of the other bitfield.
+	pub fn merge(&mut self, other: &Self) -> &mut Self {
+		if self.bits.len() < other.bits.len() {
+			let new_len = other.bits.len();
+			self.bits.resize(new_len, 0);
 		}
+
+		for (i, word) in other.bits.iter().enumerate() {
+			self.bits[i] |= word;
+		}
+
+		self
 	}
 
-	/// Set a bit in the bitfield.
-	fn set_bit(&mut self, bit: usize, n_voters: usize) -> Result<(), Error> {
-		let mut live = match std::mem::replace(self, Bitfield::Blank) {
-			Bitfield::Blank => LiveBitfield::with_voters(n_voters),
-			Bitfield::Live(live) => live,
-		};
+	/// Set a bit in the bitfield at the specified position.
+	///
+	/// If the bitfield is not large enough to accomodate for a bit set
+	/// at the specified position, it is resized accordingly.
+	pub fn set_bit(&mut self, position: usize) -> &mut Self {
+		let word_off = position / 64;
+		let bit_off = position % 64;
 
-		live.set_bit(bit, n_voters)?;
-		*self = Bitfield::Live(live);
-		Ok(())
+		if word_off >= self.bits.len() {
+			let new_len = word_off + 1;
+			self.bits.resize(new_len, 0);
+		}
+
+		self.bits[word_off] |= 1 << (63 - bit_off);
+		self
+	}
+
+	/// Test if the bit at the specified position is set.
+	#[cfg(test)]
+	pub fn test_bit(&self, position: usize) -> bool {
+		let word_off = position / 64;
+
+		if word_off >= self.bits.len() {
+			return false
+		}
+
+		test_bit(self.bits[word_off], position % 64)
+	}
+
+	/// Get an iterator over all bits that are set (i.e. 1) at even bit positions.
+	pub fn iter1s_even(&self) -> impl Iterator<Item = Bit1> + '_ {
+		self.iter1s(0, 1)
+	}
+
+	/// Get an iterator over all bits that are set (i.e. 1) at odd bit positions.
+	pub fn iter1s_odd(&self) -> impl Iterator<Item = Bit1> + '_ {
+		self.iter1s(1, 1)
+	}
+
+	/// Get an iterator over all bits that are set (i.e. 1) at even bit positions
+	/// when merging this bitfield with another bitfield, without modifying
+	/// either bitfield.
+	pub fn iter1s_merged_even<'a>(&'a self, other: &'a Self) -> impl Iterator<Item = Bit1> + 'a {
+		self.iter1s_merged(other, 0, 1)
+	}
+
+	/// Get an iterator over all bits that are set (i.e. 1) at odd bit positions
+	/// when merging this bitfield with another bitfield, without modifying
+	/// either bitfield.
+	pub fn iter1s_merged_odd<'a>(&'a self, other: &'a Self) -> impl Iterator<Item = Bit1> + 'a {
+		self.iter1s_merged(other, 1, 1)
+	}
+
+	/// Get an iterator over all bits that are set (i.e. 1) in the bitfield,
+	/// starting at bit position `start` and moving in steps of size `2^step`
+	/// per word.
+	fn iter1s(&self, start: usize, step: usize) -> impl Iterator<Item = Bit1> + '_ {
+		iter1s(self.bits.iter().cloned(), start, step)
+	}
+
+	/// Get an iterator over all bits that are set (i.e. 1) when merging
+	/// this bitfield with another bitfield, without modifying either
+	/// bitfield, starting at bit position `start` and moving in steps
+	/// of size `2^step` per word.
+	fn iter1s_merged<'a>(&'a self, other: &'a Self, start: usize, step: usize) -> impl Iterator<Item = Bit1> + 'a {
+		match self.bits.len().cmp(&other.bits.len()) {
+			Ordering::Equal =>
+				Either::Left(iter1s(
+					self.bits.iter()
+						.zip(&other.bits)
+						.map(|(a, b)| a | b), start, step)),
+			Ordering::Less =>
+				Either::Right(Either::Left(iter1s(
+					self.bits.iter()
+						.chain(iter::repeat(&0))
+						.zip(&other.bits)
+						.map(|(a, b)| a | b), start, step))),
+			Ordering::Greater =>
+				Either::Right(Either::Right(iter1s(
+					self.bits.iter()
+						.zip(other.bits.iter().chain(iter::repeat(&0)))
+						.map(|(a, b)| a | b), start, step)))
+		}
 	}
 }
 
-/// Live bitfield instance.
-#[derive(Clone, PartialEq, Eq)]
-#[cfg_attr(any(feature = "std", test), derive(
-Debug))]
-pub struct LiveBitfield {
-	bits: Vec<u64>,
-}
-
-impl LiveBitfield {
-	fn with_voters(n_voters: usize) -> Self {
-		let n_bits = n_voters * 2;
-		let n_words = (n_bits + 63) / 64;
-
-		LiveBitfield { bits: vec![0; n_words] }
-	}
-
-	fn set_bit(&mut self, bit_idx: usize, n_voters: usize) -> Result<(), Error> {
-		let word_off = bit_idx / 64;
-		let bit_off = bit_idx % 64;
-
-		// If this isn't `Some`, something has gone really wrong.
-		if let Some(word) = self.bits.get_mut(word_off) {
-			// set bit starting from left.
-			*word |= 1 << (63 - bit_off);
-			Ok(())
-		} else {
-			Err(Error::IndexOutOfBounds(bit_idx / 2, n_voters))
-		}
-	}
-}
-
-// find total weight of the given iterable of bits. assumes that there are enough
-// voters in the given context to correspond to all bits.
-fn total_weight<Iter, Lookup>(iterable: Iter, lookup: Lookup) -> (u64, u64) where
-	Iter: IntoIterator<Item=u64>,
-	Lookup: Fn(usize) -> u64,
+/// Turn an iterator over u64 words into an iterator over bits that
+/// are set (i.e. `1`) in these words, starting at bit position `start`
+/// and moving in steps of size `2^step` per word.
+fn iter1s<'a, I>(iter: I, start: usize, step: usize) -> impl Iterator<Item = Bit1> + 'a
+where
+	I: Iterator<Item = u64> + 'a
 {
-	struct State {
-		val_idx: usize,
-		prevote: u64,
-		precommit: u64,
-	};
-
-	let state = State {
-		val_idx: 0,
-		prevote: 0,
-		precommit: 0,
-	};
-
-	let state = iterable.into_iter().fold(state, |mut state, mut word| {
-		for i in 0..32 {
-			if word == 0 { break }
-
-			// prevote bit is set
-			if word & (1 << 63) == (1 << 63) {
-				state.prevote += lookup(state.val_idx + i);
+	debug_assert!(start < 64 && step < 7);
+	let steps = (64 >> step) - (start >> step);
+	iter.enumerate().flat_map(move |(i, word)| {
+		let n = if word == 0 { 0 } else { steps };
+		(0 .. n).filter_map(move |j| {
+			let bit_pos = start + (j << step);
+			if test_bit(word, bit_pos) {
+				Some(Bit1 { position: i * 64 + bit_pos })
+			} else {
+				None
 			}
-
-			// precommit bit is set
-			if word & (1 << 62) == (1 << 62) {
-				state.precommit += lookup(state.val_idx + i);
-			}
-
-			word <<= 2;
-		}
-
-		state.val_idx += 32;
-		state
-	});
-
-	(state.prevote, state.precommit)
+		})
+	})
 }
 
-/// Context data for bitfields, shared among all live bitfield instances.
-/// (only usable under std environment.)
-#[cfg(feature = "std")]
-#[derive(Debug)]
-pub struct Context {
-	n_voters: usize,
-	equivocators: Arc<RwLock<Bitfield>>,
+fn test_bit(word: u64, position: usize) -> bool {
+	let mask = 1 << (63 - position);
+	word & mask == mask
 }
 
-/// Context data for bitfields, shared among all live bitfield instances.
-/// (usable under no-std environment, where it is not expected that this data
-/// will be shared across different threads.)
-#[cfg(not(feature = "std"))]
-pub struct Context {
-	n_voters: usize,
-	equivocators: Bitfield,
+impl BitOr<&Bitfield> for Bitfield {
+	type Output = Bitfield;
+
+    fn bitor(mut self, rhs: &Bitfield) -> Self::Output {
+		self.merge(&rhs);
+		self
+    }
 }
 
-impl Clone for Context {
-	fn clone(&self) -> Self {
-		Context {
-			n_voters: self.n_voters,
-			equivocators: self.equivocators.clone(),
-		}
-	}
-}
-
-#[cfg(feature = "std")]
-impl Context {
-	pub fn new(n_voters: usize) -> Self {
-		Context {
-			n_voters,
-			equivocators: Arc::new(RwLock::new(Bitfield::Blank)),
-		}
-	}
-
-	/// Get a reference to the equivocators bitfield.
-	pub fn equivocators(&self) -> parking_lot::RwLockReadGuard<Bitfield> {
-		self.equivocators.read()
-	}
-
-	/// Get a mutable reference to the equivocators bitfield.
-	pub fn equivocators_mut(&mut self) -> parking_lot::RwLockWriteGuard<Bitfield> {
-		self.equivocators.write()
-	}
-}
-
-#[cfg(not(feature = "std"))]
-impl Context {
-	/// Create new shared equivocation detection data. Provide the number of voters.
-	pub fn new(n_voters: usize) -> Self {
-		Context {
-			n_voters,
-			equivocators: Bitfield::Blank,
-		}
-	}
-
-	/// Get a reference to the equivocators bitfield.
-	pub fn equivocators(&self) -> &Bitfield {
-		&self.equivocators
-	}
-
-	/// Get a mutable reference to the equivocators bitfield.
-	pub fn equivocators_mut(&mut self) -> &mut Bitfield {
-		&mut self.equivocators
-	}
-}
-
-impl Context {
-	/// Construct a new bitfield for a specific voter prevoting.
-	pub fn prevote_bitfield(&self, info: &VoterInfo) -> Result<Bitfield, Error> {
-		let mut bitfield = LiveBitfield::with_voters(self.n_voters);
-		bitfield.set_bit(info.canon_idx() * 2, self.n_voters)?;
-
-		Ok(Bitfield::Live(bitfield))
-	}
-
-	/// Construct a new bitfield for a specific voter prevoting.
-	pub fn precommit_bitfield(&self, info: &VoterInfo) -> Result<Bitfield, Error> {
-		let mut bitfield = LiveBitfield::with_voters(self.n_voters);
-		bitfield.set_bit(info.canon_idx() * 2 + 1, self.n_voters)?;
-
-		Ok(Bitfield::Live(bitfield))
-	}
-
-	/// Note a voter's equivocation in prevote.
-	pub fn equivocated_prevote(&mut self, info: &VoterInfo) -> Result<(), Error> {
-		let n_voters = self.n_voters;
-		self.equivocators_mut().set_bit(info.canon_idx() * 2, n_voters)?;
-
-		Ok(())
-	}
-
-	/// Note a voter's equivocation in precommit.
-	pub fn equivocated_precommit(&mut self, info: &VoterInfo) -> Result<(), Error> {
-		let n_voters = self.n_voters;
-		self.equivocators_mut().set_bit(info.canon_idx() * 2 + 1, n_voters)?;
-
-		Ok(())
-	}
+/// A bit that is set (i.e. 1) in a `Bitfield`.
+#[derive(PartialEq, Eq, Copy, Clone, Debug, Hash)]
+pub struct Bit1 {
+	/// The position of the bit in the bitfield.
+	pub position: usize
 }
 
 #[cfg(test)]
 mod tests {
 	use super::*;
-	use crate::VoterSet;
+	use quickcheck::*;
+	use rand::Rng;
+	use crate::std::iter;
 
-	fn to_prevote(id: usize) -> usize {
-		id * 2
-	}
-
-	fn to_precommit(id: usize) -> usize {
-		id * 2 + 1
-	}
-
-	#[test]
-	fn merge_live() {
-		let mut a = Bitfield::Live(LiveBitfield::with_voters(10));
-		let mut b = Bitfield::Live(LiveBitfield::with_voters(10));
-
-		let v: VoterSet<usize> = [
-			(1, 5),
-			(4, 1),
-			(3, 9),
-			(5, 7),
-			(9, 9),
-			(2, 7),
-		].iter().cloned().collect();
-
-		a.set_bit(to_prevote(v.info(&1).unwrap().canon_idx()), 10).unwrap(); // prevote 1
-		a.set_bit(to_precommit(v.info(&2).unwrap().canon_idx()), 10).unwrap(); // precommit 2
-
-		b.set_bit(to_prevote(v.info(&3).unwrap().canon_idx()), 10).unwrap(); // prevote 3
-		b.set_bit(to_precommit(v.info(&3).unwrap().canon_idx()), 10).unwrap(); // precommit 3
-
-		let c = a.merge(&b).unwrap();
-		assert_eq!(c.total_weight(|i| v.weight_by_index(i).unwrap()), (14, 16));
+	impl Arbitrary for Bitfield {
+		fn arbitrary<G: Gen>(g: &mut G) -> Bitfield {
+			let n = g.gen_range(0, g.size());
+			let b = iter::from_fn(|| Some(g.next_u64())).take(n).collect::<Vec<_>>();
+			Bitfield::from(b)
+		}
 	}
 
 	#[test]
-	fn set_first_and_last_bits() {
-		let v: VoterSet<usize> = (0..32).map(|i| (i, (i + 1) as u64)).collect();
+	fn set_bit() {
+		fn prop(mut a: Bitfield, idx: usize) -> bool {
+			a.set_bit(idx).test_bit(idx)
+		}
 
-		let mut live_bitfield = Bitfield::Live(LiveBitfield::with_voters(32));
-
-		live_bitfield.set_bit(0, 32).unwrap();
-		live_bitfield.set_bit(63, 32).unwrap();
-
-		assert_eq!(live_bitfield.total_weight(|i| v.weight_by_index(i).unwrap()), (1, 32));
+		quickcheck(prop as fn(_,_) -> _)
 	}
 
 	#[test]
-	fn weight_overlap() {
-		let mut a = Bitfield::Live(LiveBitfield::with_voters(10));
-		let mut b = Bitfield::Live(LiveBitfield::with_voters(10));
+	fn bitor() {
+		fn prop(a: Bitfield, b: Bitfield) -> bool {
+			let c = a.clone() | &b;
+			let mut c_bits = c.iter1s(0, 0);
+			c_bits.all(|bit| a.test_bit(bit.position) || b.test_bit(bit.position))
+		}
 
-		let v: VoterSet<usize> = [
-			(1, 5),
-			(4, 1),
-			(3, 9),
-			(5, 7),
-			(9, 9),
-			(2, 7),
-		].iter().cloned().collect();
+		quickcheck(prop as fn(_,_) -> _)
+	}
 
-		a.set_bit(to_prevote(v.info(&1).unwrap().canon_idx()), 10).unwrap(); // prevote 1
-		a.set_bit(to_precommit(v.info(&2).unwrap().canon_idx()), 10).unwrap(); // precommit 2
-		a.set_bit(to_prevote(v.info(&3).unwrap().canon_idx()), 10).unwrap(); // prevote 3
+	#[test]
+	fn bitor_commutative() {
+		fn prop(a: Bitfield, b: Bitfield) -> bool {
+			a.clone() | &b == b | &a
+		}
 
-		b.set_bit(to_prevote(v.info(&1).unwrap().canon_idx()), 10).unwrap(); // prevote 1
-		b.set_bit(to_precommit(v.info(&2).unwrap().canon_idx()), 10).unwrap(); // precommit 2
-		b.set_bit(to_precommit(v.info(&3).unwrap().canon_idx()), 10).unwrap(); // precommit 3
+		quickcheck(prop as fn(_,_) -> _)
+	}
 
-		assert_eq!(a.total_weight(|i| v.weight_by_index(i).unwrap()), (14, 7));
-		assert_eq!(b.total_weight(|i| v.weight_by_index(i).unwrap()), (5, 16));
+	#[test]
+	fn bitor_associative() {
+		fn prop(a: Bitfield, b: Bitfield, c: Bitfield) -> bool {
+			(a.clone() | &b) | &c == a | &(b | &c)
+		}
 
-		let mut c = Bitfield::Live(LiveBitfield::with_voters(10));
+		quickcheck(prop as fn(_,_,_) -> _)
+	}
 
-		c.set_bit(to_prevote(v.info(&1).unwrap().canon_idx()), 10).unwrap(); // prevote 1
-		c.set_bit(to_precommit(v.info(&2).unwrap().canon_idx()), 10).unwrap(); // precommit 2
+	#[test]
+	fn iter1s() {
+		fn all(a: Bitfield) {
+			let mut b = Bitfield::new();
+			for Bit1 { position } in a.iter1s(0, 0) {
+				b.set_bit(position);
+			}
+			assert_eq!(a, b);
+		}
 
-		assert_eq!(a.overlap(&b).unwrap(), c);
+		fn even_odd(a: Bitfield) {
+			let mut b = Bitfield::new();
+			for Bit1 { position } in a.iter1s_even() {
+				assert!(!b.test_bit(position));
+				assert!(position % 2 == 0);
+				b.set_bit(position);
+			}
+			for Bit1 { position } in a.iter1s_odd() {
+				assert!(!b.test_bit(position));
+				assert!(position % 2 == 1);
+				b.set_bit(position);
+			}
+			assert_eq!(a, b);
+		}
+
+		quickcheck(all as fn(_));
+		quickcheck(even_odd as fn(_));
+	}
+
+	#[test]
+	fn iter1s_merged() {
+		fn all(mut a: Bitfield, b: Bitfield) {
+			let mut c = Bitfield::new();
+			for bit1 in a.iter1s_merged(&b, 0, 0) {
+				c.set_bit(bit1.position);
+			}
+			assert_eq!(&c, a.merge(&b))
+		}
+
+		fn even_odd(mut a: Bitfield, b: Bitfield) {
+			let mut c = Bitfield::new();
+			for Bit1 { position } in a.iter1s_merged_even(&b) {
+				assert!(!c.test_bit(position));
+				assert!(position % 2 == 0);
+				c.set_bit(position);
+			}
+			for Bit1 { position } in a.iter1s_merged_odd(&b) {
+				assert!(!c.test_bit(position));
+				assert!(position % 2 == 1);
+				c.set_bit(position);
+			}
+			assert_eq!(&c, a.merge(&b));
+		}
+
+		quickcheck(all as fn(_,_));
+		quickcheck(even_odd as fn(_,_));
 	}
 }
