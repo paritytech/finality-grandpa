@@ -66,11 +66,14 @@ mod std {
 	}
 
 	pub mod fmt {
+		pub use core::fmt::{Display, Result, Formatter};
+
 		pub trait Debug {}
 		impl<T> Debug for T {}
 	}
 }
 
+use crate::std::vec::Vec;
 use crate::voter_set::VoterSet;
 #[cfg(feature = "derive-codec")]
 use parity_scale_codec::{Encode, Decode};
