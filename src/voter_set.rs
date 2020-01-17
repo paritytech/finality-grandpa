@@ -90,9 +90,8 @@ impl<Id: Eq + Ord> VoterSet<Id> {
 
 		let total_weight = VoterWeight::new(total_weight).expect("voters nonempty; qed");
 
-		// Establish the total order on the set based on the voter IDs.
-		let mut order = voters.keys().cloned().collect::<Vec<_>>();
-		order.sort_unstable();
+		// Establish the total order based on the voter IDs.
+		let order = voters.keys().cloned().collect::<Vec<_>>();
 		for (i, id) in order.iter().enumerate() {
 			voters.get_mut(id).expect("def. of order; qed").position = i;
 		}
