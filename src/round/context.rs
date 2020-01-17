@@ -23,7 +23,7 @@ use crate::weights::VoteWeight;
 use super::Phase;
 
 /// The context of a `Round` in which vote weights are calculated.
-#[cfg_attr(feature = "std", derive(Debug))]
+#[cfg_attr(any(feature = "std", test), derive(Debug))]
 #[cfg_attr(test, derive(Clone))]
 pub struct Context<T: Ord + Eq> {
 	voters: VoterSet<T>,
@@ -110,8 +110,7 @@ impl Vote {
 ///
 /// The weight of any `VoteNode` is always computed in a `Context`,
 /// taking into account equivocations. See [`Context::weight`].
-#[derive(Clone)]
-#[cfg_attr(feature = "std", derive(Debug))]
+#[derive(Clone, Debug)]
 pub struct VoteNode {
 	bits: Bitfield,
 }
@@ -157,6 +156,7 @@ where
 
 #[cfg(test)]
 mod tests {
+	use crate::std::vec::Vec;
 	use super::*;
 	use quickcheck::*;
 	use rand::Rng;

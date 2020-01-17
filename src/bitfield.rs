@@ -21,8 +21,7 @@ use crate::std::{iter, cmp::Ordering, vec::Vec, ops::BitOr};
 use either::Either;
 
 /// A dynamically sized, write-once (per bit), lazily allocating bitfield.
-#[derive(Eq, PartialEq, Clone)]
-#[cfg_attr(feature = "std", derive(Debug))]
+#[derive(Eq, PartialEq, Clone, Debug)]
 pub struct Bitfield { bits: Vec<u64> }
 
 impl Default for Bitfield {

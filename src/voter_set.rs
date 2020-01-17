@@ -28,8 +28,7 @@ use crate::weights::VoterWeight;
 /// A `VoterSet` identifies all voters that are permitted to vote in a round
 /// of the protocol and their associated weights. A `VoterSet` is furthermore
 /// equipped with a total order, given by the ordering of the voter's IDs.
-#[derive(Clone, PartialEq, Eq)]
-#[cfg_attr(feature = "std", derive(Debug))]
+#[derive(Clone, PartialEq, Eq, Debug)]
 pub struct VoterSet<Id: Eq + Ord> {
 	/// The voters in the set.
 	voters: BTreeMap<Id, VoterInfo>,
@@ -156,9 +155,7 @@ impl<Id: Eq + Ord> VoterSet<Id> {
 }
 
 /// Information about a voter in a `VoterSet`.
-#[derive(Clone, PartialEq, Eq)]
-#[cfg_attr(any(feature = "std", test), derive(
-Debug))]
+#[derive(Clone, PartialEq, Eq, Debug)]
 pub struct VoterInfo {
 	position: usize,
 	weight: VoterWeight,
