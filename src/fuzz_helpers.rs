@@ -14,7 +14,11 @@
 
 use crate::round::{RoundParams, Round};
 use crate::vote_graph::VoteGraph;
+use crate::voter_set::VoterSet;
 use crate::{Chain, Error, Prevote, Precommit};
+
+#[cfg(not(feature = "std"))]
+use alloc::vec::Vec;
 
 type Voter = u8;
 type Hash = u8;
@@ -267,7 +271,7 @@ fn rand_block(s: &mut RandomnessStream) -> Option<Block> {
 
 /// Execute a fuzzed voting process on a `Round`.
 pub fn execute_fuzzed_vote(data: &[u8]) {
-	assert!(voters().len() <= std::u8::MAX as usize);
+	assert!(voters().len() <= core::u8::MAX as usize);
 
 	let n = voters().len() as u8;
 	let f = (n - 1) / 3;
@@ -279,7 +283,7 @@ pub fn execute_fuzzed_vote(data: &[u8]) {
 	let mut rounds: Vec<Round<Voter, Hash, BlockNumber, Signature>>
 		= voters().iter().map(|_| Round::new(RoundParams {
 			round_number: 0,
-			voters: voters().iter().cloned().map(|v| (v, 1)).collect(),
+			voters: VoterSet::new(voters().iter().cloned().map(|v| (v, 1))).expect("nonempty"),
 			base: (0, 0),
 		})).collect();
 
@@ -408,15 +412,15 @@ pub fn execute_fuzzed_graph(data: &[u8]) {
 	fn new_precommit() -> Vote {
 		Vote { prevote: 0, precommit: 1 }
 	}
-	impl std::ops::AddAssign for Vote {
-		fn add_assign(&mut self, other: Vote) {
+	impl core::ops::AddAssign<&Vote> for Vote {
+		fn add_assign(&mut self, other: &Vote) {
 			self.prevote += other.prevote;
 			self.precommit += other.precommit;
 		}
 	}
 
 	let mut stream = RandomnessStream::new(data);
-	let mut graph = VoteGraph::new(0, 0);
+	let mut graph = VoteGraph::new(0, 0, Vote::default());
 
 	// Record all prevote weights, checking the prevote-ghost.
 	let mut prevote_ghost = None;

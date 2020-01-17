@@ -12,148 +12,234 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Maintains the `VoterSet` of the blockchain.
-//!
-//! See docs on `VoterSet` for more information.
+//! Implementation of a `VoterSet`, representing the complete set
+//! of voters and their weights in the context of a round of the
+//! protocol.
 
-use crate::std::{self, collections::BTreeMap, vec::Vec};
+use crate::std::{
+	collections::{BTreeMap, btree_map::Entry},
+	num::{NonZeroU64, NonZeroUsize},
+	vec::Vec
+};
+use crate::weights::VoterWeight;
 
-use super::threshold;
-
-/// A voter set, with accompanying indices.
-#[derive(Clone, PartialEq, Eq)]
-#[cfg_attr(any(feature = "std", test), derive(Debug))]
-pub struct VoterSet<Id: Ord + Eq> {
-	weights: BTreeMap<Id, VoterInfo>,
-	voters: Vec<(Id, u64)>,
-	threshold: u64,
+/// A (non-empty) set of voters and associated weights.
+///
+/// A `VoterSet` identifies all voters that are permitted to vote in a round
+/// of the protocol and their associated weights. A `VoterSet` is furthermore
+/// equipped with a total order, given by the ordering of the voter's IDs.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct VoterSet<Id: Eq + Ord> {
+	/// The voters in the set.
+	voters: BTreeMap<Id, VoterInfo>,
+	/// The total order associated with the keys in `voters`.
+	order: Vec<Id>,
+	/// The required weight threshold for supermajority w.r.t. this set.
+	threshold: VoterWeight,
+	/// The total weight of all voters.
+	total_weight: VoterWeight,
 }
 
-impl<Id: Ord + Eq> VoterSet<Id> {
-	/// Get the voter info for a voter.
-	pub fn info<'a>(&'a self, id: &Id) -> Option<&'a VoterInfo> {
-		self.weights.get(id)
-	}
+impl<Id: Eq + Ord> VoterSet<Id> {
+	/// Create a voter set from a weight distribution produced by the given iterator.
+	///
+	/// If the distribution contains multiple weights for the same voter ID, they are
+	/// understood to be partial weights and are accumulated. As a result, the
+	/// order in which the iterator produces the weights is irrelevant.
+	///
+	/// Returns `None` if the iterator does not yield a valid voter set, which is
+	/// the case if it either produced no non-zero weights or, i.e. the voter set
+	/// would be empty, or if the total voter weight exceeds `u64::MAX`.
+	pub fn new<I>(weights: I) -> Option<Self>
+	where
+		Id: Ord + Clone,
+		I: IntoIterator<Item = (Id, u64)>
+	{
+		let weights = weights.into_iter();
 
-	/// Get the length of the set.
-	pub fn len(&self) -> usize { self.voters.len() }
-
-	/// Whether the set contains the key.
-	pub fn contains_key(&self, id: &Id) -> bool {
-		self.weights.contains_key(id)
-	}
-
-	// Get voter by index.
-	pub fn voter_by_index(&self, idx: usize) -> &(Id, u64) {
-		&self.voters[idx]
-	}
-
-	/// Get voter info by index.
-	pub fn weight_by_index(&self, idx: usize) -> Option<u64> {
-		self.voters.get(idx).map(|&(_, weight)| weight)
-	}
-
-	/// Get the threshold weight.
-	pub fn threshold(&self) -> u64 { self.threshold }
-
-	/// Get the total weight.
-	pub fn total_weight(&self) -> u64 {
-		self.voters.iter().map(|&(_, weight)| weight).sum()
-	}
-
-	/// Get the voters.
-	pub fn voters(&self) -> &[(Id, u64)] {
-		&self.voters
-	}
-}
-
-impl<Id: Eq + Clone + Ord> std::iter::FromIterator<(Id, u64)> for VoterSet<Id> {
-	fn from_iter<I: IntoIterator<Item = (Id, u64)>>(iterable: I) -> Self {
-		let iter = iterable.into_iter();
-		let (lower, _) = iter.size_hint();
-
-		let mut voters = Vec::with_capacity(lower);
-		let mut weights = BTreeMap::new();
-
-		let mut total_weight = 0;
-		for (id, weight) in iter {
-			voters.push((id.clone(), weight));
-			total_weight += weight;
+		// Populate the voter set, thereby calculating the total weight.
+		let mut voters = BTreeMap::new();
+		let mut total_weight = 0u64;
+		for (id, weight) in weights {
+			if let Some(w) = NonZeroU64::new(weight) {
+				// Prevent construction of inconsistent voter sets by checking
+				// for weight overflow (not just in debug mode). The protocol
+				// should never run with such voter sets.
+				total_weight = total_weight.checked_add(weight)?;
+				match voters.entry(id) {
+					Entry::Vacant(e) => {
+						e.insert(VoterInfo {
+							position: 0, // The total order is determined afterwards.
+							weight: VoterWeight(w)
+						});
+					},
+					Entry::Occupied(mut e) => {
+						let v = e.get_mut();
+						let n = v.weight.get() + weight;
+						let w = NonZeroU64::new(n).expect("nonzero + nonzero is nonzero");
+						v.weight = VoterWeight(w);
+					}
+				}
+			}
 		}
 
-		voters.sort_unstable();
+		if voters.is_empty() {
+			// No non-zero weights; the set would be empty.
+			return None
+		}
 
-		for (idx, (id, weight)) in voters.iter().enumerate() {
-			weights.insert(id.clone(), VoterInfo { canon_idx: idx, weight: *weight });
+		let total_weight = VoterWeight::new(total_weight).expect("voters nonempty; qed");
+
+		// Establish the total order based on the voter IDs.
+		let order = voters.keys().cloned().collect::<Vec<_>>();
+		for (i, id) in order.iter().enumerate() {
+			voters.get_mut(id).expect("def. of order; qed").position = i;
 		}
 
 		let threshold = threshold(total_weight);
-		VoterSet { weights, voters, threshold }
+
+		Some(VoterSet { voters, order, total_weight, threshold })
+	}
+
+	/// Get the voter info for the voter with the given ID, if any.
+	pub fn get(&self, id: &Id) -> Option<&VoterInfo> {
+		self.voters.get(id)
+	}
+
+	/// Get the size of the set.
+	pub fn len(&self) -> NonZeroUsize {
+		unsafe {
+			// SAFETY: By VoterSet::new()
+			NonZeroUsize::new_unchecked(self.order.len())
+		}
+	}
+
+	/// Whether the set contains a voter with the given ID.
+	pub fn contains(&self, id: &Id) -> bool {
+		self.voters.contains_key(id)
+	}
+
+	/// Get the nth voter in the set, modulo the size of the set,
+	/// as per the associated total order.
+	pub fn nth_mod(&self, n: usize) -> (&Id, &VoterInfo) {
+		self.nth(n % self.order.len())
+			.expect("set is nonempty and n % len < len; qed")
+	}
+
+	/// Get the nth voter in the set, if any.
+	///
+	/// Returns `None` if `n >= len`.
+	pub fn nth(&self, n: usize) -> Option<(&Id, &VoterInfo)> {
+		self.order.get(n)
+			.and_then(|i| self.voters.get(i)
+				.map(|info| (i, info)))
+	}
+
+	/// Get the threshold vote weight required for supermajority
+	/// w.r.t. this set of voters.
+	pub fn threshold(&self) -> VoterWeight {
+		self.threshold
+	}
+
+	/// Get the total weight of all voters.
+	pub fn total_weight(&self) -> VoterWeight {
+		self.total_weight
+	}
+
+	/// Get an iterator over the voters in the set, as given by
+	/// the associated total order.
+	pub fn iter(&self) -> impl Iterator<Item = (&Id, &VoterInfo)> {
+		(0 .. self.order.len()).map(move |n| self.nth_mod(n))
 	}
 }
 
-#[derive(Clone, PartialEq, Eq)]
-#[cfg_attr(any(feature = "std", test), derive(Debug))]
+/// Information about a voter in a `VoterSet`.
+#[derive(Clone, PartialEq, Eq, Debug)]
 pub struct VoterInfo {
-	canon_idx: usize,
-	weight: u64,
+	position: usize,
+	weight: VoterWeight,
 }
 
 impl VoterInfo {
-	/// Get the canonical index of the voter.
-	pub fn canon_idx(&self) -> usize { self.canon_idx }
+	/// Get the position of the voter in the total order associated
+	/// with the `VoterSet` from which the `VoterInfo` was obtained.
+	pub fn position(&self) -> usize { self.position }
 
 	/// Get the weight of the voter.
-	pub fn weight(&self) -> u64 { self.weight }
+	pub fn weight(&self) -> VoterWeight { self.weight }
 }
 
+/// Compute the threshold weight given the total voting weight.
+fn threshold(total_weight: VoterWeight) -> VoterWeight {
+	let faulty = total_weight.get().saturating_sub(1) / 3;
+	VoterWeight::new(total_weight.get() - faulty).expect("subtrahend > minuend; qed")
+}
 
 #[cfg(test)]
 mod tests {
+	use crate::std::iter;
 	use super::*;
+	use quickcheck::*;
+	use rand::{thread_rng, Rng, seq::SliceRandom};
 
-	#[test]
-	fn voters_are_sorted() {
-		let v1: VoterSet<usize> = [
-			(1, 5),
-			(4, 1),
-			(3, 9),
-			(5, 7),
-			(9, 9),
-			(2, 7),
-		].iter().cloned().collect();
-
-		let v2: VoterSet<usize> = [
-			(1, 5),
-			(2, 7),
-			(3, 9),
-			(4, 1),
-			(5, 7),
-			(9, 9),
-		].iter().cloned().collect();
-
-		assert_eq!(v1, v2);
+	impl<Id: Arbitrary + Eq + Ord> Arbitrary for VoterSet<Id> {
+		fn arbitrary<G: Gen>(g: &mut G) -> VoterSet<Id> {
+			let mut ids = Vec::<Id>::arbitrary(g);
+			if ids.is_empty() {
+				ids.push(Id::arbitrary(g))
+			}
+			let weights = iter::from_fn(move || Some(g.gen::<u32>() as u64));
+			VoterSet::new(ids.into_iter().zip(weights)).expect("nonempty")
+		}
 	}
 
 	#[test]
-	fn voter_by_index_works() {
-		let v: VoterSet<usize> = [
-			(1, 5),
-			(4, 1),
-			(3, 9),
-			(5, 7),
-			(9, 9),
-			(2, 7),
-		].iter().cloned().collect();
+	fn consistency() {
+		fn prop(s: VoterSet<usize>) -> bool {
+			s.order.len() == s.voters.len() &&
+			s.order.iter().all(|id| s.voters.contains_key(id))
+		}
 
-		assert_eq!(v.len(), 6);
-		assert_eq!(v.total_weight(), 38);
+		quickcheck(prop as fn(_) -> _)
+	}
 
-		assert_eq!(v.voter_by_index(0), &(1, 5));
-		assert_eq!(v.voter_by_index(1), &(2, 7));
-		assert_eq!(v.voter_by_index(2), &(3, 9));
-		assert_eq!(v.voter_by_index(3), &(4, 1));
-		assert_eq!(v.voter_by_index(4), &(5, 7));
-		assert_eq!(v.voter_by_index(5), &(9, 9));
+	#[test]
+	fn equality() {
+		fn prop(mut v: Vec<(usize, u64)>) {
+			if let Some(v1) = VoterSet::new(v.clone()) {
+				v.shuffle(&mut thread_rng());
+				let v2 = VoterSet::new(v).expect("nonempty");
+				assert_eq!(v1, v2)
+			} else {
+				assert!(v.iter().all(|(_, w)| w == &0))
+			}
+		}
+
+		quickcheck(prop as fn(_))
+	}
+
+	#[test]
+	fn total_weight() {
+		fn prop(v: Vec<(usize, u64)>) {
+			let expected = VoterWeight::new(v.iter().map(|(_, weight)| *weight).sum());
+			if let Some(v1) = VoterSet::new(v) {
+				assert_eq!(Some(v1.total_weight()), expected)
+			} else {
+				assert_eq!(expected, None)
+			}
+		}
+
+		quickcheck(prop as fn(_))
+	}
+
+	#[test]
+	fn min_threshold() {
+		fn prop(v: VoterSet<usize>) -> bool {
+			let t = v.threshold.get();
+			let w = v.total_weight.get();
+			t >= 2 * (w / 3) + (w % 3)
+		}
+
+		quickcheck(prop as fn(_) -> _);
 	}
 }

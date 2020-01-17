@@ -30,13 +30,30 @@
 #[cfg(not(feature = "std"))]
 #[macro_use]
 extern crate alloc;
+#[cfg(feature = "std")]
+extern crate std;
 
+pub mod round;
+pub mod vote_graph;
+pub mod voter_set;
+#[cfg(feature = "std")]
+pub mod voter;
+
+mod bitfield;
+mod weights;
+#[cfg(feature = "std")]
+mod bridge_state;
+#[cfg(any(test, feature = "test-helpers"))]
+mod testing;
+#[cfg(any(test, feature = "fuzz-helpers"))]
+pub mod fuzz_helpers;
 #[cfg(not(feature = "std"))]
 mod std {
 	pub use core::cmp;
 	pub use core::hash;
 	pub use core::iter;
 	pub use core::mem;
+	pub use core::num;
 	pub use core::ops;
 
 	pub mod vec {
@@ -49,40 +66,18 @@ mod std {
 	}
 
 	pub mod fmt {
+		pub use core::fmt::{Display, Result, Formatter};
+
 		pub trait Debug {}
 		impl<T> Debug for T {}
 	}
 }
 
-#[cfg(feature = "std")]
-extern crate std;
-
 use crate::std::vec::Vec;
-
-pub mod bitfield;
-
-pub mod round;
-use round::ImportResult;
-
-pub mod vote_graph;
-
-pub mod voter_set;
 use crate::voter_set::VoterSet;
-
-#[cfg(feature = "std")]
-pub mod voter;
-
-#[cfg(feature = "std")]
-mod bridge_state;
-
-#[cfg(any(test, feature = "test-helpers"))]
-mod testing;
-
-#[cfg(any(test, feature = "fuzz-helpers"))]
-pub mod fuzz_helpers;
-
 #[cfg(feature = "derive-codec")]
 use parity_scale_codec::{Encode, Decode};
+use round::ImportResult;
 
 /// A prevote for a block and its ancestors.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -259,6 +254,8 @@ pub struct SignedMessage<H, N, S, Id> {
 	/// The Id of the signer
 	pub id: Id,
 }
+
+impl<H, N, S, Id> Unpin for SignedMessage<H, N, S, Id> {}
 
 impl<H, N: Copy, S, Id> SignedMessage<H, N, S, Id> {
 	/// Get the target block of the vote.
@@ -493,12 +490,6 @@ pub fn validate_commit<H, N, S, I, C: Chain<H, N>>(
 	Ok(validation_result)
 }
 
-/// Get the threshold weight given the total voting weight.
-pub fn threshold(total_weight: u64) -> u64 {
-	let faulty = total_weight.saturating_sub(1) / 3;
-	total_weight - faulty
-}
-
 /// Runs the callback with the appropriate `CommitProcessingOutcome` based on
 /// the given `CommitValidationResult`. Outcome is bad if ghost is undefined,
 /// good otherwise.
@@ -580,28 +571,13 @@ impl<H, N, S, Id> HistoricalVotes<H, N, S, Id> {
 	}
 
 	/// Set the number of messages seen before precommiting.
-	pub fn set_precommited_idx(&mut self) {
+	pub fn set_precommitted_idx(&mut self) {
 		self.precommit_idx = Some(self.seen.len() as u64)
 	}
 }
 
 #[cfg(test)]
 mod tests {
-	use super::threshold;
-
-	#[test]
-	fn threshold_is_right() {
-		assert_eq!(threshold(3), 3);
-		assert_eq!(threshold(4), 3);
-		assert_eq!(threshold(5), 4);
-		assert_eq!(threshold(6), 5);
-		assert_eq!(threshold(7), 5);
-		assert_eq!(threshold(10), 7);
-		assert_eq!(threshold(100), 67);
-		assert_eq!(threshold(101), 68);
-		assert_eq!(threshold(102), 69);
-		assert_eq!(threshold(103), 69);
-	}
 
 	#[cfg(feature = "derive-codec")]
 	#[test]
