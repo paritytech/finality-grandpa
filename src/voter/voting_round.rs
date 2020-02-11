@@ -361,6 +361,8 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 			}
 			Message::PrimaryPropose(primary) => {
 				let primary_id = self.votes.primary_voter().0.clone();
+				// note that id here refers to the party which has cast the vote
+				// and not the id of the party which has received the vote message.
 				if id == primary_id {
 					self.primary_block = Some((primary.target_hash, primary.target_number));
 				}
@@ -553,7 +555,7 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 					// if the primary block is in the ancestry of p-G we vote for the
 					// best chain containing it.
 					let &(ref p_hash, p_num) = primary_block;
-					match self.env.ancestry(last_round_estimate.0.clone(), last_prevote_g.0) {
+					match self.env.ancestry(last_round_estimate.0.clone(), last_prevote_g.0.clone()) {
 						Ok(ancestry) => {
 							let to_sub = p_num + N::one();
 
@@ -569,7 +571,17 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 								last_round_estimate.0
 							}
 						}
-						Err(crate::Error::NotDescendent) => last_round_estimate.0,
+						Err(crate::Error::NotDescendent) => {
+							// This is only possible in case of massive equivocation
+							warn!(target: "afg",
+								"Possible case of massive equivocation: \
+								last round prevote GHOST: {:?} is not a descendant of last round estimate: {:?}",
+								last_prevote_g,
+								last_round_estimate,
+							);
+
+							last_round_estimate.0
+						}
 					}
 				}
 			}
