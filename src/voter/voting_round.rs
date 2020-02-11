@@ -559,7 +559,7 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 						Ok(ancestry) => {
 							let to_sub = p_num + N::one();
 
-							let offset: usize = if   last_prevote_g.1 < to_sub {
+							let offset: usize = if last_prevote_g.1 < to_sub {
 								0
 							} else {
 								(last_prevote_g.1 - to_sub).as_()
@@ -576,8 +576,8 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 							warn!(target: "afg",
 								"Possible case of massive equivocation: \
 								last round prevote GHOST: {:?} is not a descendant of last round estimate: {:?}",
-								&last_prevote_g,
-								&last_round_estimate,
+								last_prevote_g,
+								last_round_estimate,
 							);
 
 							last_round_estimate.0
