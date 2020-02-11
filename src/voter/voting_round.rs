@@ -361,8 +361,8 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 			}
 			Message::PrimaryPropose(primary) => {
 				let primary_id = self.votes.primary_voter().0.clone();
-                // note that id here refers to party which has casted the vote
-			    // and not the id of party which has received the vote message.
+				// note that id here refers to the party which has cast the vote
+				// and not the id of the party which has received the vote message.
 				if id == primary_id {
 					self.primary_block = Some((primary.target_hash, primary.target_number));
 				}
@@ -571,12 +571,17 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 								last_round_estimate.0
 							}
 						}
-						Err(crate::Error::NotDescendent) =>
-                        {
-                            //This is only possible in case of massive equivocation
-			                warn!(target: "afg", "Possible case of massive equivocation: last round prevote GHOST {:?} is not a descendant of last round estimate {:?}", &last_prevote_g, &last_round_estimate);
-                            last_round_estimate.0
-                        }
+						Err(crate::Error::NotDescendent) => {
+							// This is only possible in case of massive equivocation
+							warn!(target: "afg",
+								"Possible case of massive equivocation: \
+								last round prevote GHOST: {:?} is not a descendant of last round estimate: {:?}",
+								&last_prevote_g,
+								&last_round_estimate,
+							);
+
+							last_round_estimate.0
+						}
 					}
 				}
 			}
