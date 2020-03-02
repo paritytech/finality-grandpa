@@ -203,6 +203,7 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 
 		// early exit if the current round is not completable
 		if !self.votes.completable() {
+			self.log_participation(log::Level::Trace);
 			return Poll::Pending;
 		}
 
@@ -384,8 +385,12 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 		log::log!(target: "afg", log_level, "Round {}: prevotes: {}/{}/{} weight, {}/{} actual",
 			number, prevote_weight, threshold, total_weight, n_prevotes, n_voters);
 
+		log::trace!(target: "afg", "Prevote voters: {:?}", self.votes.prevotes().iter().map(|x|&x.0).collect::<Vec<_>>());
+
 		log::log!(target: "afg", log_level, "Round {}: precommits: {}/{}/{} weight, {}/{} actual",
 			number, precommit_weight, threshold, total_weight, n_precommits, n_voters);
+
+		log::trace!(target: "afg", "Precommit voters: {:?}", self.votes.precommits().iter().map(|x|&x.0).collect::<Vec<_>>());
 	}
 
 	fn process_incoming(&mut self, cx: &mut Context) -> Result<(), E::Error> {
