@@ -390,7 +390,7 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 
 	fn process_incoming(&mut self, cx: &mut Context) -> Result<(), E::Error> {
 		while let Poll::Ready(Some(incoming)) = Stream::poll_next(Pin::new(&mut self.incoming), cx) {
-			trace!(target: "afg", "Got incoming message");
+			trace!(target: "afg", "Round {}: Got incoming message", self.round_number());
 			self.handle_vote(incoming?)?;
 		}
 
