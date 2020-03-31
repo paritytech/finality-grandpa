@@ -419,6 +419,18 @@ fn instantiate_last_round<H, N, E: Environment<H, N>>(
 	}
 }
 
+// NOTE to jon: The interface we expose no longer needs to be typed on Environment.
+trait VoterState {
+	fn voter_state(&self) -> (u32, u32, u32, u32);
+}
+
+struct NullVoterState;
+impl VoterState for NullVoterState {
+	fn voter_state(&self) -> (u32, u32, u32, u32) {
+		(0, 0 ,0 ,0)
+	}
+}
+
 /// A future that maintains and multiplexes between different rounds,
 /// and caches votes.
 ///
@@ -535,6 +547,10 @@ impl<H, N, E: Environment<H, N>, GlobalIn, GlobalOut> Voter<H, N, E, GlobalIn, G
 			global_in,
 			global_out: Buffered::new(global_out),
 		}
+	}
+
+	fn voter_state(&self) -> Box<dyn VoterState> {
+		Box::new(NullVoterState)
 	}
 
 	fn prune_background_rounds(&mut self, cx: &mut Context) -> Result<(), E::Error> {
