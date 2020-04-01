@@ -30,6 +30,8 @@ use futures::channel::mpsc::{self, UnboundedReceiver};
 #[cfg(feature = "std")]
 use log::trace;
 
+use parking_lot::RwLock;
+
 use std::collections::VecDeque;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -420,15 +422,34 @@ fn instantiate_last_round<H, N, E: Environment<H, N>>(
 	}
 }
 
-// NOTE to jon: The interface we expose no longer needs to be typed on Environment.
 trait VoterState {
 	fn voter_state(&self) -> (u32, u32, u32, u32);
 }
 
 struct NullVoterState;
+
 impl VoterState for NullVoterState {
 	fn voter_state(&self) -> (u32, u32, u32, u32) {
 		(0, 0 ,0 ,0)
+	}
+}
+
+pub struct Inner<H, N, E> where
+	H: Clone + Ord + std::fmt::Debug,
+	N: BlockNumberOps,
+	E: Environment<H, N>,
+{
+	best_round: VotingRound<H, N, E>,
+	past_rounds: PastRounds<H, N, E>,
+}
+
+impl<H, N, E> VoterState for Arc<RwLock<Inner<H, N, E>>> where
+	H: Clone + Eq + Ord + std::fmt::Debug,
+	N: BlockNumberOps,
+	E: Environment<H, N>,
+{
+	fn voter_state(&self) -> (u32, u32, u32, u32) {
+		unimplemented!()
 	}
 }
 
@@ -458,8 +479,7 @@ pub struct Voter<H, N, E: Environment<H, N>, GlobalIn, GlobalOut> where
 {
 	env: Arc<E>,
 	voters: VoterSet<E::Id>,
-	best_round: VotingRound<H, N, E>,
-	past_rounds: PastRounds<H, N, E>,
+	inner: Arc<RwLock<Inner<H, N, E>>>,
 	finalized_notifications: UnboundedReceiver<FinalizedNotification<H, N, E>>,
 	last_finalized_number: N,
 	global_in: GlobalIn,
@@ -468,6 +488,18 @@ pub struct Voter<H, N, E: Environment<H, N>, GlobalIn, GlobalOut> where
 	// behind), we keep track of last finalized in round so we don't violate any
 	// assumptions from round-to-round.
 	last_finalized_in_rounds: (H, N),
+}
+
+impl<'a, H: 'a, N, E: 'a, GlobalIn, GlobalOut> Voter<H, N, E, GlobalIn, GlobalOut> where
+	H: Clone + Ord + ::std::fmt::Debug,
+	N: BlockNumberOps,
+	E: Environment<H, N>,
+	GlobalIn: Stream<Item=Result<CommunicationIn<H, N, E::Signature, E::Id>, E::Error>> + Unpin,
+	GlobalOut: Sink<CommunicationOut<H, N, E::Signature, E::Id>, Error=E::Error> + Unpin,
+{
+	fn voter_state(&self) -> Box<dyn VoterState + 'a> {
+		Box::new(self.inner.clone())
+	}
 }
 
 impl<H, N, E: Environment<H, N>, GlobalIn, GlobalOut> Voter<H, N, E, GlobalIn, GlobalOut> where
@@ -537,11 +569,15 @@ impl<H, N, E: Environment<H, N>, GlobalIn, GlobalOut> Voter<H, N, E, GlobalIn, G
 
 		let (global_in, global_out) = global_comms;
 
+		let inner = Arc::new(RwLock::new(Inner {
+			best_round,
+			past_rounds,
+		}));
+
 		Voter {
 			env,
 			voters,
-			best_round,
-			past_rounds,
+			inner,
 			finalized_notifications,
 			last_finalized_number,
 			last_finalized_in_rounds: last_finalized,
@@ -550,23 +586,25 @@ impl<H, N, E: Environment<H, N>, GlobalIn, GlobalOut> Voter<H, N, E, GlobalIn, G
 		}
 	}
 
-	fn voter_state(&self) -> Box<dyn VoterState> {
-		Box::new(NullVoterState)
-	}
-
 	fn prune_background_rounds(&mut self, cx: &mut Context) -> Result<(), E::Error> {
-		// Do work on all background rounds, broadcasting any commits generated.
-		while let Poll::Ready(Some(item)) = Stream::poll_next(Pin::new(&mut self.past_rounds), cx) {
-			let (number, commit) = item?;
-			self.global_out.push(CommunicationOut::Commit(number, commit));
+		{
+			let mut inner = self.inner.write();
+
+			// Do work on all background rounds, broadcasting any commits generated.
+			while let Poll::Ready(Some(item)) = Stream::poll_next(Pin::new(&mut inner.past_rounds), cx) {
+				let (number, commit) = item?;
+				self.global_out.push(CommunicationOut::Commit(number, commit));
+			}
 		}
 
 		while let Poll::Ready(res) = Stream::poll_next(Pin::new(&mut self.finalized_notifications), cx) {
+			let inner = self.inner.clone();
+			let mut inner = inner.write();
+	
 			let (f_hash, f_num, round, commit) =
 				res.expect("one sender always kept alive in self.best_round; qed");
 
-
-			self.past_rounds.update_finalized(f_num);
+			inner.past_rounds.update_finalized(f_num);
 
 			if self.set_last_finalized_number(f_num) {
 				self.env.finalize_block(f_hash.clone(), f_num, round, commit)?;
@@ -600,9 +638,11 @@ impl<H, N, E: Environment<H, N>, GlobalIn, GlobalOut> Voter<H, N, E, GlobalIn, G
 
 					let commit: Commit<_, _, _, _> = commit.into();
 
+					let inner = self.inner.write();
+
 					// if the commit is for a background round dispatch to round committer.
 					// that returns Some if there wasn't one.
-					if let Some(commit) = self.past_rounds.import_commit(round_number, commit) {
+					if let Some(commit) = inner.past_rounds.import_commit(round_number, commit) {
 						// otherwise validate the commit and signal the finalized block
 						// (if any) to the environment
 						let validation_result = validate_commit(&commit, &self.voters, &*self.env)?;
@@ -632,11 +672,13 @@ impl<H, N, E: Environment<H, N>, GlobalIn, GlobalOut> Voter<H, N, E, GlobalIn, G
 				CommunicationIn::CatchUp(catch_up, mut process_catch_up_outcome) => {
 					trace!(target: "afg", "Got catch-up message for round {}", catch_up.round_number);
 
+					let mut inner = self.inner.write();
+
 					let round = if let Some(round) = validate_catch_up(
 						catch_up,
 						&*self.env,
 						&self.voters,
-						self.best_round.round_number(),
+						inner.best_round.round_number(),
 					) {
 						round
 					} else {
@@ -650,7 +692,7 @@ impl<H, N, E: Environment<H, N>, GlobalIn, GlobalOut> Voter<H, N, E, GlobalIn, G
 					// start voting in the next round.
 					let mut just_completed = VotingRound::completed(
 						round,
-						self.best_round.finalized_sender(),
+						inner.best_round.finalized_sender(),
 						None,
 						self.env.clone(),
 					);
@@ -660,7 +702,7 @@ impl<H, N, E: Environment<H, N>, GlobalIn, GlobalOut> Voter<H, N, E, GlobalIn, G
 						self.voters.clone(),
 						self.last_finalized_in_rounds.clone(),
 						Some(just_completed.bridge_state()),
-						self.best_round.finalized_sender(),
+						inner.best_round.finalized_sender(),
 						self.env.clone(),
 					);
 
@@ -679,11 +721,12 @@ impl<H, N, E: Environment<H, N>, GlobalIn, GlobalOut> Voter<H, N, E, GlobalIn, G
 						just_completed.historical_votes(),
 					)?;
 
-					self.past_rounds.push(&*self.env, just_completed);
+					inner.past_rounds.push(&*self.env, just_completed);
 
-					self.past_rounds.push(
+					let old_best = std::mem::replace(&mut inner.best_round, new_best);
+					inner.past_rounds.push(
 						&*self.env,
-						std::mem::replace(&mut self.best_round, new_best),
+						old_best,
 					);
 
 					process_catch_up_outcome.run(CatchUpProcessingOutcome::Good(GoodCatchUp::new()));
@@ -698,26 +741,30 @@ impl<H, N, E: Environment<H, N>, GlobalIn, GlobalOut> Voter<H, N, E, GlobalIn, G
 	fn process_best_round(&mut self, cx: &mut Context) -> Poll<Result<(), E::Error>> {
 		// If the current `best_round` is completable and we've already precommitted,
 		// we start a new round at `best_round + 1`.
-		let should_start_next = {
-			let completable = match self.best_round.poll(cx)? {
-				Poll::Ready(()) => true,
-				Poll::Pending => false,
+		{
+			let mut inner = self.inner.write();
+
+			let should_start_next = {
+				let completable = match inner.best_round.poll(cx)? {
+					Poll::Ready(()) => true,
+					Poll::Pending => false,
+				};
+
+				let precommitted = match inner.best_round.state() {
+					Some(&VotingRoundState::Precommitted) => true, // start when we've cast all votes.
+					_ => false,
+				};
+
+				completable && precommitted
 			};
 
-			let precommitted = match self.best_round.state() {
-				Some(&VotingRoundState::Precommitted) => true, // start when we've cast all votes.
-				_ => false,
-			};
+			if !should_start_next { return Poll::Pending }
 
-			completable && precommitted
-		};
-
-		if !should_start_next { return Poll::Pending }
-
-		trace!(target: "afg", "Best round at {} has become completable. Starting new best round at {}",
-			self.best_round.round_number(),
-			self.best_round.round_number() + 1,
-		);
+			trace!(target: "afg", "Best round at {} has become completable. Starting new best round at {}",
+				   inner.best_round.round_number(),
+				   inner.best_round.round_number() + 1,
+			);
+		}
 
 		self.completed_best_round()?;
 
@@ -726,26 +773,28 @@ impl<H, N, E: Environment<H, N>, GlobalIn, GlobalOut> Voter<H, N, E, GlobalIn, G
 	}
 
 	fn completed_best_round(&mut self) -> Result<(), E::Error> {
+		let mut inner = self.inner.write();
+
 		self.env.completed(
-			self.best_round.round_number(),
-			self.best_round.round_state(),
-			self.best_round.dag_base(),
-			self.best_round.historical_votes(),
+			inner.best_round.round_number(),
+			inner.best_round.round_state(),
+			inner.best_round.dag_base(),
+			inner.best_round.historical_votes(),
 		)?;
 
-		let old_round_number = self.best_round.round_number();
+		let old_round_number = inner.best_round.round_number();
 
 		let next_round = VotingRound::new(
 			old_round_number + 1,
 			self.voters.clone(),
 			self.last_finalized_in_rounds.clone(),
-			Some(self.best_round.bridge_state()),
-			self.best_round.finalized_sender(),
+			Some(inner.best_round.bridge_state()),
+			inner.best_round.finalized_sender(),
 			self.env.clone(),
 		);
 
-		let old_round = ::std::mem::replace(&mut self.best_round, next_round);
-		self.past_rounds.push(&*self.env, old_round);
+		let old_round = ::std::mem::replace(&mut inner.best_round, next_round);
+		inner.past_rounds.push(&*self.env, old_round);
 		Ok(())
 	}
 
