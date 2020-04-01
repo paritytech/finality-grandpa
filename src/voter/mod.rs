@@ -421,15 +421,21 @@ fn instantiate_last_round<H, N, E: Environment<H, N>>(
 	}
 }
 
-trait VoterState {
-	fn voter_state(&self) -> (u32, u32, u32, u32);
+trait VoterState<Id> {
+	fn voter_state(&self) -> report::RoundState<Id>;
 }
 
-struct NullVoterState;
+mod report {
+	use std::collections::{HashMap, HashSet};
 
-impl VoterState for NullVoterState {
-	fn voter_state(&self) -> (u32, u32, u32, u32) {
-		(0, 0 ,0 ,0)
+	pub struct RoundState<Id> {
+		pub prevotes: HashSet<Id>,
+		pub precommits: HashSet<Id>,
+	}
+
+	pub struct VoterState<Id> {
+		pub background_rounds: HashMap<u64, RoundState<Id>>,
+		pub best_round: (u64, RoundState<Id>),
 	}
 }
 
@@ -442,12 +448,12 @@ pub struct Inner<H, N, E> where
 	past_rounds: PastRounds<H, N, E>,
 }
 
-impl<H, N, E> VoterState for Arc<RwLock<Inner<H, N, E>>> where
+impl<H, N, E> VoterState<E::Id> for Arc<RwLock<Inner<H, N, E>>> where
 	H: Clone + Eq + Ord + std::fmt::Debug,
 	N: BlockNumberOps,
 	E: Environment<H, N>,
 {
-	fn voter_state(&self) -> (u32, u32, u32, u32) {
+	fn voter_state(&self) -> report::RoundState<E::Id> {
 		unimplemented!()
 	}
 }
@@ -496,7 +502,7 @@ impl<'a, H: 'a, N, E: 'a, GlobalIn, GlobalOut> Voter<H, N, E, GlobalIn, GlobalOu
 	GlobalIn: Stream<Item=Result<CommunicationIn<H, N, E::Signature, E::Id>, E::Error>> + Unpin,
 	GlobalOut: Sink<CommunicationOut<H, N, E::Signature, E::Id>, Error=E::Error> + Unpin,
 {
-	fn voter_state(&self) -> Box<dyn VoterState + 'a> {
+	fn voter_state(&self) -> Box<dyn VoterState<E::Id> + 'a> {
 		Box::new(self.inner.clone())
 	}
 }
