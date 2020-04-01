@@ -130,12 +130,13 @@ pub mod chain {
 pub mod environment {
 	use super::chain::*;
 	use crate::round::State as RoundState;
-	use crate::voter::{RoundData, CommunicationIn, CommunicationOut, Callback};
-	use crate::{Chain, Commit, Error, Equivocation, Message, Prevote, Precommit, PrimaryPropose, SignedMessage, HistoricalVotes};
-	use futures::prelude::*;
+	use crate::voter::{Callback, CommunicationIn, CommunicationOut, RoundData};
+	use crate::{
+		Chain, Commit, Equivocation, Error, HistoricalVotes, Message, Precommit, Prevote,
+		PrimaryPropose, SignedMessage,
+	};
 	use futures::channel::mpsc::{self, UnboundedReceiver, UnboundedSender};
-	use futures::stream::BoxStream;
-	use futures::future::BoxFuture;
+	use futures::prelude::*;
 	use futures_timer::Delay;
 	use parking_lot::Mutex;
 	use std::collections::HashMap;
@@ -198,11 +199,19 @@ pub mod environment {
 	}
 
 	impl crate::voter::Environment<&'static str, u32> for Environment {
-		type Timer = BoxFuture<'static, Result<(),Error>>;
+		type Timer = Pin<Box<dyn Future<Output = Result<(), Error>> + Unpin + Send + Sync>>;
 		type Id = Id;
 		type Signature = Signature;
-		type In = BoxStream<'static, Result<SignedMessage<&'static str, u32, Signature, Id>,Error>>;
-		type Out = Pin<Box<dyn Sink<Message<&'static str, u32>,Error=Error> + Send + 'static>>;
+		type In = Pin<
+			Box<
+				dyn Stream<Item = Result<SignedMessage<&'static str, u32, Signature, Id>, Error>>
+					+ Unpin
+					+ Send
+					+ Sync,
+			>,
+		>;
+		type Out =
+			Pin<Box<dyn Sink<Message<&'static str, u32>, Error = Error> + Send + Sync + 'static>>;
 		type Error = Error;
 
 		fn round_data(&self, round: u64) -> RoundData<Self::Id, Self::Timer, Self::In, Self::Out> {
