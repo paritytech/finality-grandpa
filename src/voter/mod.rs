@@ -1314,7 +1314,7 @@ mod tests {
 		// should skip to round 6
 		pool.run_until(future::poll_fn(move |cx| -> Poll<()> {
 			let poll = unsynced_voter.poll_unpin(cx);
-			if unsynced_voter.best_round.round_number() == 6 {
+			if unsynced_voter.inner.read().best_round.round_number() == 6 {
 				Poll::Ready(())
 			} else {
 				futures::ready!(poll).unwrap();
@@ -1453,5 +1453,4 @@ mod tests {
 
 		assert_eq!(outer_env.last_completed_and_concluded(), (2, 1));
 	}
-
 }
