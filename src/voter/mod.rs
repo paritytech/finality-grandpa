@@ -422,7 +422,7 @@ fn instantiate_last_round<H, N, E: Environment<H, N>>(
 	}
 }
 
-trait VoterState<Id> {
+pub trait VoterState<Id> {
 	fn voter_state(&self) -> report::RoundState<Id>;
 }
 
@@ -503,7 +503,7 @@ impl<'a, H: 'a, N, E: 'a, GlobalIn, GlobalOut> Voter<H, N, E, GlobalIn, GlobalOu
 	GlobalIn: Stream<Item=Result<CommunicationIn<H, N, E::Signature, E::Id>, E::Error>> + Unpin,
 	GlobalOut: Sink<CommunicationOut<H, N, E::Signature, E::Id>, Error=E::Error> + Unpin,
 {
-	fn voter_state(&self) -> Box<dyn VoterState<E::Id> + 'a> {
+	pub fn voter_state(&self) -> Box<dyn VoterState<E::Id> + 'a> {
 		Box::new(self.inner.clone())
 	}
 }
@@ -606,7 +606,7 @@ impl<H, N, E: Environment<H, N>, GlobalIn, GlobalOut> Voter<H, N, E, GlobalIn, G
 		while let Poll::Ready(res) = Stream::poll_next(Pin::new(&mut self.finalized_notifications), cx) {
 			let inner = self.inner.clone();
 			let mut inner = inner.write();
-	
+
 			let (f_hash, f_num, round, commit) =
 				res.expect("one sender always kept alive in self.best_round; qed");
 
