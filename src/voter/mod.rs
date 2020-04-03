@@ -36,6 +36,7 @@ use std::collections::VecDeque;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
+use std::hash::Hash;
 
 use crate::round::State as RoundState;
 use crate::{
@@ -422,19 +423,25 @@ fn instantiate_last_round<H, N, E: Environment<H, N>>(
 }
 
 pub trait VoterState<Id> {
-	fn voter_state(&self) -> report::RoundState<Id>;
+	fn voter_state(&self) -> report::VoterState<Id>;
 }
 
-mod report {
+pub mod report {
 	use std::collections::{HashMap, HashSet};
 
 	pub struct RoundState<Id> {
-		pub prevotes: HashSet<Id>,
-		pub precommits: HashSet<Id>,
+		pub total_weight: u64,
+		pub threshold_weight: u64,
+
+		pub prevote_current_weight: u64,
+		pub prevote_ids: HashSet<Id>,
+
+		pub precommit_current_weight: u64,
+		pub precommit_ids: HashSet<Id>,
 	}
 
 	pub struct VoterState<Id> {
-		pub background_rounds: HashMap<u64, RoundState<Id>>,
+		//pub background_rounds: HashMap<u64, RoundState<Id>>,
 		pub best_round: (u64, RoundState<Id>),
 	}
 }
@@ -452,9 +459,28 @@ impl<H, N, E> VoterState<E::Id> for Arc<RwLock<Inner<H, N, E>>> where
 	H: Clone + Eq + Ord + std::fmt::Debug,
 	N: BlockNumberOps,
 	E: Environment<H, N>,
+	<E as Environment<H, N>>::Id: Hash,
 {
-	fn voter_state(&self) -> report::RoundState<E::Id> {
-		unimplemented!()
+	fn voter_state(&self) -> report::VoterState<E::Id> {
+		let best_round = &self.read().best_round;
+		let _past_rounds = &self.read().past_rounds;
+
+		let best_round = (
+			best_round.round_number(),
+			report::RoundState {
+				total_weight: best_round.voters().total_weight(),
+				threshold_weight: best_round.voters().threshold(),
+				prevote_current_weight: best_round.prevote_weight(),
+				prevote_ids: best_round.prevote_ids().collect(),
+				precommit_current_weight: best_round.precommit_weight(),
+				precommit_ids: best_round.precommit_ids().collect(),
+			}
+		);
+
+		report::VoterState {
+			best_round,
+			// background_rounds,
+		}
 	}
 }
 
@@ -505,7 +531,7 @@ impl<'a, H: 'a, N, E: 'a, GlobalIn, GlobalOut> Voter<H, N, E, GlobalIn, GlobalOu
 	pub fn voter_state(&self) -> Box<dyn VoterState<E::Id> + 'a + Send + Sync>
 	where
 		<E as Environment<H, N>>::Signature: Send + Sync,
-		<E as Environment<H, N>>::Id: Send + Sync,
+		<E as Environment<H, N>>::Id: Hash + Send + Sync,
 		<E as Environment<H, N>>::Timer: Send + Sync,
 		<E as Environment<H, N>>::Out: Send + Sync,
 		<E as Environment<H, N>>::In: Send + Sync,
