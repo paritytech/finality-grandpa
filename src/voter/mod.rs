@@ -496,13 +496,20 @@ pub struct Voter<H, N, E: Environment<H, N>, GlobalIn, GlobalOut> where
 }
 
 impl<'a, H: 'a, N, E: 'a, GlobalIn, GlobalOut> Voter<H, N, E, GlobalIn, GlobalOut> where
-	H: Clone + Ord + ::std::fmt::Debug,
-	N: BlockNumberOps,
-	E: Environment<H, N>,
+	H: Clone + Ord + ::std::fmt::Debug + Sync + Send,
+	N: BlockNumberOps + Sync + Send,
+	E: Environment<H, N> + Sync + Send,
 	GlobalIn: Stream<Item=Result<CommunicationIn<H, N, E::Signature, E::Id>, E::Error>> + Unpin,
 	GlobalOut: Sink<CommunicationOut<H, N, E::Signature, E::Id>, Error=E::Error> + Unpin,
 {
-	pub fn voter_state(&self) -> Box<dyn VoterState<E::Id> + 'a> {
+	pub fn voter_state(&self) -> Box<dyn VoterState<E::Id> + 'a + Send + Sync>
+	where
+		<E as Environment<H, N>>::Signature: Send + Sync,
+		<E as Environment<H, N>>::Id: Send + Sync,
+		<E as Environment<H, N>>::Timer: Send + Sync,
+		<E as Environment<H, N>>::Out: Send + Sync,
+		<E as Environment<H, N>>::In: Send + Sync,
+	{
 		Box::new(self.inner.clone())
 	}
 }
