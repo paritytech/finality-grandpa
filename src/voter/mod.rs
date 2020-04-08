@@ -442,7 +442,7 @@ pub mod report {
 	}
 
 	pub struct VoterState<Id> {
-		//pub background_rounds: HashMap<u64, RoundState<Id>>,
+		pub background_rounds: HashMap<u64, RoundState<Id>>,
 		pub best_round: (u64, RoundState<Id>),
 	}
 }
@@ -478,9 +478,12 @@ impl<H, N, E> VoterState<E::Id> for Arc<RwLock<Inner<H, N, E>>> where
 			}
 		);
 
+		// WIP: query past_rounds and pass in background_rounds
+		let background_rounds = Default::default();
+
 		report::VoterState {
 			best_round,
-			// background_rounds,
+			background_rounds,
 		}
 	}
 }
