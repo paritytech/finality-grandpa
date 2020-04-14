@@ -462,23 +462,28 @@ impl<H, N, E> VoterState<E::Id> for Arc<RwLock<Inner<H, N, E>>> where
 	<E as Environment<H, N>>::Id: Hash,
 {
 	fn voter_state(&self) -> report::VoterState<E::Id> {
-		let best_round = &self.read().best_round;
-		let _past_rounds = &self.read().past_rounds;
+		let lock = self.read();
 
-		let best_round = (
-			best_round.round_number(),
-			report::RoundState {
-				total_weight: best_round.voters().total_weight(),
-				threshold_weight: best_round.voters().threshold(),
-				prevote_current_weight: best_round.prevote_weight(),
-				prevote_ids: best_round.prevote_ids().collect(),
-				precommit_current_weight: best_round.precommit_weight(),
-				precommit_ids: best_round.precommit_ids().collect(),
-			}
-		);
+		let best_round = {
+			let best_round = &lock.best_round;
+			(
+				best_round.round_number(),
+				report::RoundState {
+					total_weight: best_round.voters().total_weight(),
+					threshold_weight: best_round.voters().threshold(),
+					prevote_current_weight: best_round.prevote_weight(),
+					prevote_ids: best_round.prevote_ids().collect(),
+					precommit_current_weight: best_round.precommit_weight(),
+					precommit_ids: best_round.precommit_ids().collect(),
+				}
+			)
+		};
 
 		// WIP: query past_rounds and pass in background_rounds
-		let background_rounds = Default::default();
+		let background_rounds = {
+			let _past_rounds = &lock.past_rounds;
+			Default::default()
+		};
 
 		report::VoterState {
 			best_round,
