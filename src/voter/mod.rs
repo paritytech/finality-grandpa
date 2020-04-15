@@ -398,7 +398,7 @@ fn instantiate_last_round<H, N, E: Environment<H, N>>(
 	N: Copy + BlockNumberOps + ::std::fmt::Debug,
 {
 	let last_round_tracker = crate::round::Round::new(crate::round::RoundParams {
-		voters: voters,
+		voters,
 		base: last_round_base,
 		round_number: last_round_number,
 	});
@@ -470,11 +470,11 @@ impl<H, N, E> VoterState<E::Id> for Arc<RwLock<Inner<H, N, E>>> where
 			(
 				best_round.round_number(),
 				report::RoundState {
-					total_weight: best_round.voters().total_weight(),
-					threshold_weight: best_round.voters().threshold(),
-					prevote_current_weight: best_round.prevote_weight(),
+					total_weight: best_round.voters().total_weight().get(),
+					threshold_weight: best_round.voters().threshold().get(),
+					prevote_current_weight: best_round.prevote_weight().0,
 					prevote_ids: best_round.prevote_ids().collect(),
-					precommit_current_weight: best_round.precommit_weight(),
+					precommit_current_weight: best_round.precommit_weight().0,
 					precommit_ids: best_round.precommit_ids().collect(),
 				}
 			)

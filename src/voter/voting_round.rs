@@ -29,7 +29,7 @@ use crate::round::{Round, State as RoundState};
 use crate::{
 	Commit, Message, Prevote, Precommit, PrimaryPropose, SignedMessage,
 	SignedPrecommit, BlockNumberOps, validate_commit, ImportResult,
-	HistoricalVotes,
+	HistoricalVotes, weights::VoteWeight,
 };
 use crate::voter_set::VoterSet;
 use super::{Environment, Buffered, FinalizedNotification};
@@ -286,12 +286,12 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 	}
 
 	/// Get the current weight of the prevotes
-	pub(super) fn prevote_weight(&self) -> u64 {
+	pub(super) fn prevote_weight(&self) -> VoteWeight {
 		self.votes.prevote_participation().0
 	}
 
 	/// Get the current weight of the precommits
-	pub(super) fn precommit_weight(&self) -> u64 {
+	pub(super) fn precommit_weight(&self) -> VoteWeight {
 		self.votes.precommit_participation().0
 	}
 

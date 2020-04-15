@@ -90,7 +90,7 @@ impl VoterWeight {
 		NonZeroU64::new(weight).map(Self)
 	}
 
-	pub fn get(&self) -> u64 {
+	pub fn get(self) -> u64 {
 		self.0.get()
 	}
 }
