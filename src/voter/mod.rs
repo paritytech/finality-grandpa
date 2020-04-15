@@ -429,15 +429,16 @@ pub trait VoterState<Id> {
 
 pub mod report {
 	use std::collections::{HashMap, HashSet};
+	use crate::weights::{VoteWeight, VoterWeight};
 
 	pub struct RoundState<Id> {
-		pub total_weight: u64,
-		pub threshold_weight: u64,
+		pub total_weight: VoterWeight,
+		pub threshold_weight: VoterWeight,
 
-		pub prevote_current_weight: u64,
+		pub prevote_current_weight: VoteWeight,
 		pub prevote_ids: HashSet<Id>,
 
-		pub precommit_current_weight: u64,
+		pub precommit_current_weight: VoteWeight,
 		pub precommit_ids: HashSet<Id>,
 	}
 
@@ -470,11 +471,11 @@ impl<H, N, E> VoterState<E::Id> for Arc<RwLock<Inner<H, N, E>>> where
 			(
 				best_round.round_number(),
 				report::RoundState {
-					total_weight: best_round.voters().total_weight().get(),
-					threshold_weight: best_round.voters().threshold().get(),
-					prevote_current_weight: best_round.prevote_weight().0,
+					total_weight: best_round.voters().total_weight(),
+					threshold_weight: best_round.voters().threshold(),
+					prevote_current_weight: best_round.prevote_weight(),
 					prevote_ids: best_round.prevote_ids().collect(),
-					precommit_current_weight: best_round.precommit_weight().0,
+					precommit_current_weight: best_round.precommit_weight(),
 					precommit_ids: best_round.precommit_ids().collect(),
 				}
 			)
