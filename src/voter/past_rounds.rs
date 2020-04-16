@@ -61,6 +61,10 @@ impl<H, N, E: Environment<H, N>> BackgroundRound<H, N, E> where
 		self.inner.round_number()
 	}
 
+	fn voting_round(&self) -> &VotingRound<H, N, E> {
+		&self.inner
+	}
+
 	fn is_done(&self) -> bool {
 		// no need to listen on a round anymore once the estimate is finalized.
 		//
@@ -202,7 +206,7 @@ impl<H, N, E: Environment<H, N>> RoundCommitter<H, N, E> where
 }
 
 struct SelfReturningFuture<F> {
-	inner: Option<F>,
+	pub inner: Option<F>,
 }
 
 impl<F> From<F> for SelfReturningFuture<F> {
@@ -284,6 +288,13 @@ impl<H, N, E: Environment<H, N>> PastRounds<H, N, E> where
 		for bg in self.past_rounds.iter_mut() {
 			bg.mutate(|f| f.update_finalized(f_num));
 		}
+	}
+
+	pub(super) fn voting_rounds(&self) -> impl Iterator<Item = &VotingRound<H, N, E>> {
+		self.past_rounds
+			.iter()
+			.filter_map(|self_returning_future| self_returning_future.inner.as_ref())
+			.map(|background_round| background_round.voting_round())
 	}
 
 	// import the commit into the given backgrounded round. If not possible,

@@ -429,7 +429,9 @@ pub trait VoterState<Id> {
 
 pub mod report {
 	use std::collections::{HashMap, HashSet};
-	use crate::weights::{VoteWeight, VoterWeight};
+	use crate::{voter::VotingRound, weights::{VoteWeight, VoterWeight}};
+	use crate::BlockNumberOps;
+	use crate::voter::Environment;
 
 	pub struct RoundState<Id> {
 		pub total_weight: VoterWeight,
@@ -440,6 +442,23 @@ pub mod report {
 
 		pub precommit_current_weight: VoteWeight,
 		pub precommit_ids: HashSet<Id>,
+	}
+
+	impl<Id> RoundState<Id> {
+		pub fn from_voting_round<H, N, E>(voting_round: &VotingRound<H, N, E>) -> Self where
+			H: Clone + Ord + std::fmt::Debug,
+			N: Copy + BlockNumberOps,
+			E: Environment<H, N>,
+		{
+			Self {
+				total_weight: voting_round.voters().total_weight(),
+				threshold_weight: voting_round.voters().threshold(),
+				prevote_current_weight: voting_round.prevote_weight(),
+				prevote_ids: voting_round.prevote_ids().collect(),
+				precommit_current_weight: voting_round.precommit_weight(),
+				precommit_ids: voting_round.precommit_ids().collect(),
+			}
+		}
 	}
 
 	pub struct VoterState<Id> {
@@ -465,27 +484,24 @@ impl<H, N, E> VoterState<E::Id> for Arc<RwLock<Inner<H, N, E>>> where
 {
 	fn voter_state(&self) -> report::VoterState<E::Id> {
 		let lock = self.read();
-
 		let best_round = {
 			let best_round = &lock.best_round;
 			(
 				best_round.round_number(),
-				report::RoundState {
-					total_weight: best_round.voters().total_weight(),
-					threshold_weight: best_round.voters().threshold(),
-					prevote_current_weight: best_round.prevote_weight(),
-					prevote_ids: best_round.prevote_ids().collect(),
-					precommit_current_weight: best_round.precommit_weight(),
-					precommit_ids: best_round.precommit_ids().collect(),
-				}
+				report::RoundState::from_voting_round(best_round),
 			)
 		};
 
-		// WIP: query past_rounds and pass in background_rounds
-		let background_rounds = {
-			let _past_rounds = &lock.past_rounds;
-			Default::default()
-		};
+		let background_rounds = lock
+			.past_rounds
+			.voting_rounds()
+			.map(|voting_round| {
+				(
+					voting_round.round_number(),
+					report::RoundState::from_voting_round(voting_round),
+				)
+			})
+			.collect();
 
 		report::VoterState {
 			best_round,
