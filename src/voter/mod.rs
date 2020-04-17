@@ -465,28 +465,25 @@ impl<H, N, E> VoterState<E::Id> for Arc<RwLock<Inner<H, N, E>>> where
 {
 	fn voter_state(&self) -> report::VoterState<E::Id> {
 		let to_round_state = |voting_round: &VotingRound<H, N, E>| {
-			report::RoundState {
-				total_weight: voting_round.voters().total_weight(),
-				threshold_weight: voting_round.voters().threshold(),
-				prevote_current_weight: voting_round.prevote_weight(),
-				prevote_ids: voting_round.prevote_ids().collect(),
-				precommit_current_weight: voting_round.precommit_weight(),
-				precommit_ids: voting_round.precommit_ids().collect(),
-			}
+			(
+				voting_round.round_number(),
+				report::RoundState {
+					total_weight: voting_round.voters().total_weight(),
+					threshold_weight: voting_round.voters().threshold(),
+					prevote_current_weight: voting_round.prevote_weight(),
+					prevote_ids: voting_round.prevote_ids().collect(),
+					precommit_current_weight: voting_round.precommit_weight(),
+					precommit_ids: voting_round.precommit_ids().collect(),
+				}
+			)
 		};
 
 		let lock = self.read();
-		let best_round = {
-			let best_round = &lock.best_round;
-			(best_round.round_number(), to_round_state(best_round))
-		};
-
+		let best_round = to_round_state(&lock.best_round);
 		let background_rounds = lock
 			.past_rounds
 			.voting_rounds()
-			.map(|voting_round| {
-				(voting_round.round_number(), to_round_state(voting_round))
-			})
+			.map(to_round_state)
 			.collect();
 
 		report::VoterState {
