@@ -199,17 +199,16 @@ pub mod environment {
 	}
 
 	impl crate::voter::Environment<&'static str, u32> for Environment {
-		type Timer = Pin<Box<dyn Future<Output = Result<(), Error>> + Unpin + Send + Sync>>;
+		type Timer = Box<dyn Future<Output = Result<(), Error>> + Unpin + Send + Sync>;
 		type Id = Id;
 		type Signature = Signature;
-		type In = Pin<
+		type In =
 			Box<
 				dyn Stream<Item = Result<SignedMessage<&'static str, u32, Signature, Id>, Error>>
 					+ Unpin
 					+ Send
 					+ Sync,
-			>,
-		>;
+			>;
 		type Out =
 			Pin<Box<dyn Sink<Message<&'static str, u32>, Error = Error> + Send + Sync + 'static>>;
 		type Error = Error;
@@ -220,9 +219,9 @@ pub mod environment {
 			let (incoming, outgoing) = self.network.make_round_comms(round, self.local_id);
 			RoundData {
 				voter_id: Some(self.local_id),
-				prevote_timer: Box::pin(Delay::new(GOSSIP_DURATION).map(Ok)),
-				precommit_timer: Box::pin(Delay::new(GOSSIP_DURATION + GOSSIP_DURATION).map(Ok)),
-				incoming: Box::pin(incoming),
+				prevote_timer: Box::new(Delay::new(GOSSIP_DURATION).map(Ok)),
+				precommit_timer: Box::new(Delay::new(GOSSIP_DURATION + GOSSIP_DURATION).map(Ok)),
+				incoming: Box::new(incoming),
 				outgoing: Box::pin(outgoing),
 			}
 		}
@@ -235,7 +234,7 @@ pub mod environment {
 			let delay = Duration::from_millis(
 				rand::thread_rng().gen_range(0, COMMIT_DELAY_MILLIS));
 
-			Box::pin(Delay::new(delay).map(Ok))
+			Box::new(Delay::new(delay).map(Ok))
 		}
 
 		fn completed(
