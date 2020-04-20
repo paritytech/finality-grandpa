@@ -290,6 +290,7 @@ impl<H, N, E: Environment<H, N>> PastRounds<H, N, E> where
 		}
 	}
 
+	/// Get the underlying `VotingRound` items that are being run in the background.
 	pub(super) fn voting_rounds(&self) -> impl Iterator<Item = &VotingRound<H, N, E>> {
 		self.past_rounds
 			.iter()
