@@ -424,7 +424,7 @@ fn instantiate_last_round<H, N, E: Environment<H, N>>(
 }
 
 /// Allows querying the state of the voter.
-pub trait VoterState<Id> {
+pub trait VoterState<Id: Eq + std::hash::Hash> {
 	fn voter_state(&self) -> report::VoterState<Id>;
 }
 
@@ -433,7 +433,9 @@ pub mod report {
 	use crate::weights::{VoteWeight, VoterWeight};
 
 	/// Basic data struct for the state of a round.
-	pub struct RoundState<Id> {
+	#[derive(PartialEq, Eq, Clone)]
+	#[cfg_attr(test, derive(Debug))]
+	pub struct RoundState<Id: Eq + std::hash::Hash> {
 		pub total_weight: VoterWeight,
 		pub threshold_weight: VoterWeight,
 
@@ -446,7 +448,9 @@ pub mod report {
 
 	/// Basic data struct for the current state of the voter in a form suitable
 	/// for passing on to other systems.
-	pub struct VoterState<Id> {
+	#[derive(PartialEq, Eq)]
+	#[cfg_attr(test, derive(Debug))]
+	pub struct VoterState<Id: Eq + std::hash::Hash> {
 		pub background_rounds: HashMap<u64, RoundState<Id>>,
 		pub best_round: (u64, RoundState<Id>),
 	}
@@ -1016,11 +1020,13 @@ mod tests {
 		chain::GENESIS_HASH,
 		environment::{Environment, Id, Signature},
 	};
+	use crate::weights::{VoteWeight, VoterWeight};
 	use futures::executor::LocalPool;
 	use futures::task::SpawnExt;
 	use futures_timer::Delay;
 	use std::iter;
 	use std::time::Duration;
+	use std::collections::HashSet;
 
 	#[test]
 	fn talking_to_myself() {
@@ -1101,6 +1107,103 @@ mod tests {
 		pool.spawner().spawn(routing_task.map(|_| ())).unwrap();
 
 		pool.run_until(future::join_all(finalized_streams.into_iter()));
+	}
+
+	#[test]
+	fn exposing_voter_state() {
+		let num_voters = 10;
+		let voters_online = 7;
+		let voters = VoterSet::new((0..num_voters).map(|i| (Id(i), 1))).expect("nonempty");
+		let voter_ids: HashSet<Id> = (0..voters_online).map(|i| Id(i)).collect();
+
+		let (network, routing_task) = testing::environment::make_network();
+		let mut pool = LocalPool::new();
+
+		// some voters offline
+		let (finalized_streams, voter_states): (Vec<_>, Vec<_>) = (0..voters_online).map(|i| {
+			let local_id = Id(i);
+			// initialize chain
+			let env = Arc::new(Environment::new(network.clone(), local_id));
+			let last_finalized = env.with_chain(|chain| {
+				chain.push_blocks(GENESIS_HASH, &["A", "B", "C", "D", "E"]);
+				chain.last_finalized()
+			});
+
+			// run voter in background. scheduling it to shut down at the end.
+			let finalized = env.finalized_stream();
+			let voter = Voter::new(
+				env.clone(),
+				voters.clone(),
+				network.make_global_comms(),
+				0,
+				Vec::new(),
+				last_finalized,
+				last_finalized,
+			);
+			let voter_state = voter.voter_state();
+
+			pool.spawner().spawn(voter.map(|v| v.expect("Error voting"))).unwrap();
+
+			(
+				// wait for the best block to be finalized by all honest voters
+				finalized
+					.take_while(|&(_, n, _)| future::ready(n < 6))
+					.for_each(|_| future::ready(())),
+				voter_state,
+			)
+		}).unzip();
+
+		let voter_state = &voter_states[0];
+		voter_states.iter().all(|vs| vs.voter_state() == voter_state.voter_state());
+
+		assert_eq!(
+			voter_state.voter_state(),
+			report::VoterState {
+				background_rounds: Default::default(),
+				best_round: (
+					1,
+					report::RoundState::<Id> {
+						total_weight: VoterWeight::new(num_voters.into()).expect("nonzero"),
+						threshold_weight: VoterWeight::new(voters_online.into()).expect("nonzero"),
+						prevote_current_weight: VoteWeight(0),
+						prevote_ids: Default::default(),
+						precommit_current_weight: VoteWeight(0),
+						precommit_ids: Default::default(),
+					}
+				),
+			}
+		);
+
+		pool.spawner().spawn(routing_task.map(|_| ())).unwrap();
+		pool.run_until(future::join_all(finalized_streams.into_iter()));
+
+		assert_eq!(
+			voter_state.voter_state(),
+			report::VoterState {
+				background_rounds: vec![(
+					1,
+					report::RoundState::<Id> {
+						total_weight: VoterWeight::new(num_voters.into()).expect("nonzero"),
+						threshold_weight: VoterWeight::new(voters_online.into()).expect("nonzero"),
+						prevote_current_weight: VoteWeight(voters_online.into()),
+						prevote_ids: voter_ids.clone(),
+						precommit_current_weight: VoteWeight(voters_online.into()),
+						precommit_ids: voter_ids,
+					},
+				)].into_iter().collect(),
+				best_round: (
+					2,
+					report::RoundState::<Id> {
+						total_weight: VoterWeight::new(num_voters.into()).expect("nonzero"),
+						threshold_weight: VoterWeight::new(voters_online.into()).expect("nonzero"),
+						prevote_current_weight: VoteWeight(0),
+						prevote_ids: Default::default(),
+						precommit_current_weight: VoteWeight(0),
+						precommit_ids: Default::default(),
+					}
+				),
+			}
+		);
 	}
 
 	#[test]
