@@ -1114,7 +1114,6 @@ mod tests {
 		let num_voters = 10;
 		let voters_online = 7;
 		let voters = VoterSet::new((0..num_voters).map(|i| (Id(i), 1))).expect("nonempty");
-		let voter_ids: HashSet<Id> = (0..voters_online).map(|i| Id(i)).collect();
 
 		let (network, routing_task) = testing::environment::make_network();
 		let mut pool = LocalPool::new();
@@ -1178,31 +1177,18 @@ mod tests {
 		pool.run_until(future::join_all(finalized_streams.into_iter()));
 
 		assert_eq!(
-			voter_state.voter_state(),
-			report::VoterState {
-				background_rounds: vec![(
-					1,
-					report::RoundState::<Id> {
-						total_weight: VoterWeight::new(num_voters.into()).expect("nonzero"),
-						threshold_weight: VoterWeight::new(voters_online.into()).expect("nonzero"),
-						prevote_current_weight: VoteWeight(voters_online.into()),
-						prevote_ids: voter_ids.clone(),
-						precommit_current_weight: VoteWeight(voters_online.into()),
-						precommit_ids: voter_ids,
-					},
-				)].into_iter().collect(),
-				best_round: (
-					2,
-					report::RoundState::<Id> {
-						total_weight: VoterWeight::new(num_voters.into()).expect("nonzero"),
-						threshold_weight: VoterWeight::new(voters_online.into()).expect("nonzero"),
-						prevote_current_weight: VoteWeight(0),
-						prevote_ids: Default::default(),
-						precommit_current_weight: VoteWeight(0),
-						precommit_ids: Default::default(),
-					}
-				),
-			}
+			voter_state.voter_state().best_round,
+			(
+				2,
+				report::RoundState::<Id> {
+					total_weight: VoterWeight::new(num_voters.into()).expect("nonzero"),
+					threshold_weight: VoterWeight::new(voters_online.into()).expect("nonzero"),
+					prevote_current_weight: VoteWeight(0),
+					prevote_ids: Default::default(),
+					precommit_current_weight: VoteWeight(0),
+					precommit_ids: Default::default(),
+				}
+			)
 		);
 	}
 
