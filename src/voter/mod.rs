@@ -1155,41 +1155,27 @@ mod tests {
 		let voter_state = &voter_states[0];
 		voter_states.iter().all(|vs| vs.voter_state() == voter_state.voter_state());
 
+		let expected_round_state = report::RoundState::<Id> {
+			total_weight: VoterWeight::new(num_voters.into()).expect("nonzero"),
+			threshold_weight: VoterWeight::new(voters_online.into()).expect("nonzero"),
+			prevote_current_weight: VoteWeight(0),
+			prevote_ids: Default::default(),
+			precommit_current_weight: VoteWeight(0),
+			precommit_ids: Default::default(),
+		};
+
 		assert_eq!(
 			voter_state.voter_state(),
 			report::VoterState {
 				background_rounds: Default::default(),
-				best_round: (
-					1,
-					report::RoundState::<Id> {
-						total_weight: VoterWeight::new(num_voters.into()).expect("nonzero"),
-						threshold_weight: VoterWeight::new(voters_online.into()).expect("nonzero"),
-						prevote_current_weight: VoteWeight(0),
-						prevote_ids: Default::default(),
-						precommit_current_weight: VoteWeight(0),
-						precommit_ids: Default::default(),
-					}
-				),
+				best_round: (1, expected_round_state.clone()),
 			}
 		);
 
 		pool.spawner().spawn(routing_task.map(|_| ())).unwrap();
 		pool.run_until(future::join_all(finalized_streams.into_iter()));
 
-		assert_eq!(
-			voter_state.voter_state().best_round,
-			(
-				2,
-				report::RoundState::<Id> {
-					total_weight: VoterWeight::new(num_voters.into()).expect("nonzero"),
-					threshold_weight: VoterWeight::new(voters_online.into()).expect("nonzero"),
-					prevote_current_weight: VoteWeight(0),
-					prevote_ids: Default::default(),
-					precommit_current_weight: VoteWeight(0),
-					precommit_ids: Default::default(),
-				}
-			)
-		);
+		assert_eq!(voter_state.voter_state().best_round, (2, expected_round_state.clone()));
 	}
 
 	#[test]
