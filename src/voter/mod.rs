@@ -1393,6 +1393,9 @@ mod tests {
 	fn skips_to_latest_round_after_catch_up() {
 		// 3 voters
 		let voters = VoterSet::new((0..3).map(|i| (Id(i), 1u64))).expect("nonempty");
+		let total_weight = voters.total_weight();
+		let threshold_weight = voters.threshold();
+		let voter_ids: HashSet<Id> = (0..3).map(|i| Id(i)).collect();
 
 		let (network, routing_task) = testing::environment::make_network();
 		let mut pool = LocalPool::new();
@@ -1444,9 +1447,12 @@ mod tests {
 			Callback::Blank,
 		));
 
+		let voter_state = unsynced_voter.voter_state();
+		assert_eq!(voter_state.voter_state().background_rounds.get(&5), None);
+
 		// poll until it's caught up.
 		// should skip to round 6
-		pool.run_until(future::poll_fn(move |cx| -> Poll<()> {
+		let output = pool.run_until(future::poll_fn(move |cx| -> Poll<()> {
 			let poll = unsynced_voter.poll_unpin(cx);
 			if unsynced_voter.inner.read().best_round.round_number() == 6 {
 				Poll::Ready(())
@@ -1454,7 +1460,36 @@ mod tests {
 				futures::ready!(poll).unwrap();
 				Poll::Ready(())
 			}
-		}))
+		}));
+
+		assert_eq!(
+			voter_state.voter_state().best_round,
+			(
+				6,
+				report::RoundState::<Id> {
+					total_weight,
+					threshold_weight,
+					prevote_current_weight: VoteWeight(0),
+					prevote_ids: Default::default(),
+					precommit_current_weight: VoteWeight(0),
+					precommit_ids: Default::default(),
+				}
+			)
+		);
+		assert_eq!(
+			voter_state.voter_state().background_rounds.get(&5),
+			Some(&report::RoundState::<Id> {
+				total_weight,
+				threshold_weight,
+				prevote_current_weight: VoteWeight(3),
+				prevote_ids: voter_ids.clone(),
+				precommit_current_weight: VoteWeight(3),
+				precommit_ids: voter_ids,
+			})
+		);
+
+
+		output
 	}
 
 	#[test]
