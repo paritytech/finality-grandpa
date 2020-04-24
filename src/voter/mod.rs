@@ -816,8 +816,8 @@ impl<H, N, E: Environment<H, N>, GlobalIn, GlobalOut> Voter<H, N, E, GlobalIn, G
 			if !should_start_next { return Poll::Pending }
 
 			trace!(target: "afg", "Best round at {} has become completable. Starting new best round at {}",
-				   inner.best_round.round_number(),
-				   inner.best_round.round_number() + 1,
+				inner.best_round.round_number(),
+				inner.best_round.round_number() + 1,
 			);
 		}
 
@@ -1462,6 +1462,7 @@ mod tests {
 				}
 			)
 		);
+
 		assert_eq!(
 			voter_state.voter_state().background_rounds.get(&5),
 			Some(&report::RoundState::<Id> {
@@ -1473,7 +1474,6 @@ mod tests {
 				precommit_ids: voter_ids,
 			})
 		);
-
 
 		output
 	}
