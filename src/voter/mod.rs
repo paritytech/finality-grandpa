@@ -456,7 +456,7 @@ pub mod report {
 	}
 }
 
-pub struct Inner<H, N, E> where
+struct Inner<H, N, E> where
 	H: Clone + Ord + std::fmt::Debug,
 	N: BlockNumberOps,
 	E: Environment<H, N>,
