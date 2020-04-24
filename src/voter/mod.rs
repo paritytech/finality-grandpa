@@ -423,11 +423,15 @@ fn instantiate_last_round<H, N, E: Environment<H, N>>(
 	}
 }
 
-/// Allows querying the state of the voter.
+/// Trait for querying the state of the voter. Used by `Voter` to return a queryable object without exposing too may
+/// data types.
 pub trait VoterState<Id: Eq + std::hash::Hash> {
+	/// Returns a plain data type, `report::VoterState`, describing the current state of the voter relevant to the
+	/// voting process.
 	fn voter_state(&self) -> report::VoterState<Id>;
 }
 
+/// Contains a number of data transfer objects for reporting data to the outside world.
 pub mod report {
 	use std::collections::{HashMap, HashSet};
 	use crate::weights::{VoteWeight, VoterWeight};
@@ -436,13 +440,19 @@ pub mod report {
 	#[derive(PartialEq, Eq, Clone)]
 	#[cfg_attr(test, derive(Debug))]
 	pub struct RoundState<Id: Eq + std::hash::Hash> {
+		/// Total weight of all votes.
 		pub total_weight: VoterWeight,
+		/// The threshold voter weight.
 		pub threshold_weight: VoterWeight,
 
+		/// Current weight of the prevotes.
 		pub prevote_current_weight: VoteWeight,
+		/// The identities of nodes that have cast prevotes so far.
 		pub prevote_ids: HashSet<Id>,
 
+		/// Current weight of the precommits.
 		pub precommit_current_weight: VoteWeight,
+		/// The identities of nodes that have cast precommits so far.
 		pub precommit_ids: HashSet<Id>,
 	}
 
@@ -451,11 +461,14 @@ pub mod report {
 	#[derive(PartialEq, Eq)]
 	#[cfg_attr(test, derive(Debug))]
 	pub struct VoterState<Id: Eq + std::hash::Hash> {
+		/// Voting rounds run in the background.
 		pub background_rounds: HashMap<u64, RoundState<Id>>,
+		/// The current best voting round.
 		pub best_round: (u64, RoundState<Id>),
 	}
 }
 
+// Collect the voter state that we want to wrap in an `Arc<RwLock>` suitable for sharing.
 struct Inner<H, N, E> where
 	H: Clone + Ord + std::fmt::Debug,
 	N: BlockNumberOps,
