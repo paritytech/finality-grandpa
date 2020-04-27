@@ -468,6 +468,11 @@ pub mod report {
 	}
 }
 
+struct SharedVoterState<H, N, E>(Arc<RwLock<Inner<H, N, E>>>) where
+	H: Clone + Ord + std::fmt::Debug,
+	N: BlockNumberOps,
+	E: Environment<H, N>;
+
 // Collect the voter state that we want to wrap in an `Arc<RwLock>` suitable for sharing.
 struct Inner<H, N, E> where
 	H: Clone + Ord + std::fmt::Debug,
@@ -478,7 +483,7 @@ struct Inner<H, N, E> where
 	past_rounds: PastRounds<H, N, E>,
 }
 
-impl<H, N, E> VoterState<E::Id> for Arc<RwLock<Inner<H, N, E>>> where
+impl<H, N, E> VoterState<E::Id> for SharedVoterState<H, N, E> where
 	H: Clone + Eq + Ord + std::fmt::Debug,
 	N: BlockNumberOps,
 	E: Environment<H, N>,
@@ -499,7 +504,7 @@ impl<H, N, E> VoterState<E::Id> for Arc<RwLock<Inner<H, N, E>>> where
 			)
 		};
 
-		let lock = self.read();
+		let lock = self.0.read();
 		let best_round = to_round_state(&lock.best_round);
 		let background_rounds = lock
 			.past_rounds
@@ -566,7 +571,7 @@ impl<'a, H: 'a, N, E: 'a, GlobalIn, GlobalOut> Voter<H, N, E, GlobalIn, GlobalOu
 		<E as Environment<H, N>>::Out: Send + Sync,
 		<E as Environment<H, N>>::In: Send + Sync,
 	{
-		Box::new(self.inner.clone())
+		Box::new(SharedVoterState(self.inner.clone()))
 	}
 }
 
