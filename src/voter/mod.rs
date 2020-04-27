@@ -56,11 +56,18 @@ mod voting_round;
 ///
 /// This encapsulates the database and networking layers of the chain.
 pub trait Environment<H: Eq, N: BlockNumberOps>: Chain<H, N> {
+	/// Associated timer for the Environment. See also
+	/// [round_commit_data](trait.Environment.html#tymethod.round_commit_timer).
 	type Timer: Future<Output=Result<(),Self::Error>> + Unpin;
+	/// The associated Id for the Environment.
 	type Id: Ord + Clone + Eq + ::std::fmt::Debug;
+	/// The associated Signature for the Environment.
 	type Signature: Eq + Clone;
+	/// The input stream used to communicate with the outside world.
 	type In: Stream<Item=Result<SignedMessage<H, N, Self::Signature, Self::Id>, Self::Error>> + Unpin;
+	/// The output stream used to communicate with the outside world.
 	type Out: Sink<Message<H, N>, Error=Self::Error> + Unpin;
+	/// The assocated Error type.
 	type Error: From<crate::Error> + ::std::error::Error;
 
 	/// Produce data necessary to start a round of voting. This may also be called
@@ -133,9 +140,9 @@ pub trait Environment<H: Eq, N: BlockNumberOps>: Chain<H, N> {
 	// TODO: make this a future that resolves when it's e.g. written to disk?
 	fn finalize_block(&self, hash: H, number: N, round: u64, commit: Commit<H, N, Self::Signature, Self::Id>) -> Result<(), Self::Error>;
 
-	// Note that an equivocation in prevotes has occurred.s
+	/// Note that an equivocation in prevotes has occurred.
 	fn prevote_equivocation(&self, round: u64, equivocation: Equivocation<Self::Id, Prevote<H, N>, Self::Signature>);
-	// Note that an equivocation in precommits has occurred.
+	/// Note that an equivocation in precommits has occurred.
 	fn precommit_equivocation(&self, round: u64, equivocation: Equivocation<Self::Id, Precommit<H, N>, Self::Signature>);
 }
 
@@ -563,6 +570,7 @@ impl<'a, H: 'a, N, E: 'a, GlobalIn, GlobalOut> Voter<H, N, E, GlobalIn, GlobalOu
 	GlobalIn: Stream<Item=Result<CommunicationIn<H, N, E::Signature, E::Id>, E::Error>> + Unpin,
 	GlobalOut: Sink<CommunicationOut<H, N, E::Signature, E::Id>, Error=E::Error> + Unpin,
 {
+	/// Returns an object allowing to query the voter state.
 	pub fn voter_state(&self) -> Box<dyn VoterState<E::Id> + 'a + Send + Sync>
 	where
 		<E as Environment<H, N>>::Signature: Send + Sync,
