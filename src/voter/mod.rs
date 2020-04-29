@@ -430,8 +430,10 @@ fn instantiate_last_round<H, N, E: Environment<H, N>>(
 	}
 }
 
-// Collect the voter state that we want to wrap in an `Arc<RwLock>` suitable for sharing.
-struct Inner<H, N, E> where
+// The inner state of a voter aggregating the currently running round state
+// (i.e. best and background rounds). This state exists separately since it's
+// useful to wrap in a `Arc<RwLock<_>>` for sharing.
+struct InnerVoterState<H, N, E> where
 	H: Clone + Ord + std::fmt::Debug,
 	N: BlockNumberOps,
 	E: Environment<H, N>,
@@ -466,7 +468,7 @@ pub struct Voter<H, N, E: Environment<H, N>, GlobalIn, GlobalOut> where
 {
 	env: Arc<E>,
 	voters: VoterSet<E::Id>,
-	inner: Arc<RwLock<Inner<H, N, E>>>,
+	inner: Arc<RwLock<InnerVoterState<H, N, E>>>,
 	finalized_notifications: UnboundedReceiver<FinalizedNotification<H, N, E>>,
 	last_finalized_number: N,
 	global_in: GlobalIn,
@@ -564,7 +566,7 @@ impl<H, N, E: Environment<H, N>, GlobalIn, GlobalOut> Voter<H, N, E, GlobalIn, G
 
 		let (global_in, global_out) = global_comms;
 
-		let inner = Arc::new(RwLock::new(Inner {
+		let inner = Arc::new(RwLock::new(InnerVoterState {
 			best_round,
 			past_rounds,
 		}));
@@ -873,7 +875,7 @@ pub mod report {
 	}
 }
 
-struct SharedVoterState<H, N, E>(Arc<RwLock<Inner<H, N, E>>>) where
+struct SharedVoterState<H, N, E>(Arc<RwLock<InnerVoterState<H, N, E>>>) where
 	H: Clone + Ord + std::fmt::Debug,
 	N: BlockNumberOps,
 	E: Environment<H, N>;
