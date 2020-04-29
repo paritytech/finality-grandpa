@@ -136,7 +136,7 @@ impl<H, N> PrimaryPropose<H, N> {
 #[derive(Clone, PartialEq)]
 #[cfg_attr(any(feature = "std", test), derive(Debug))]
 pub enum Error {
-	/// Raised when the block is not a descendent of the given base block.
+	/// The block is not a descendent of the given base block.
 	NotDescendent,
 }
 
