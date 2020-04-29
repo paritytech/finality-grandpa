@@ -435,7 +435,7 @@ fn instantiate_last_round<H, N, E: Environment<H, N>>(
 pub trait VoterState<Id: Eq + std::hash::Hash> {
 	/// Returns a plain data type, `report::VoterState`, describing the current state
 	/// of the voter relevant to the voting process.
-	fn voter_state(&self) -> report::VoterState<Id>;
+	fn get(&self) -> report::VoterState<Id>;
 }
 
 /// Contains a number of data transfer objects for reporting data to the outside world.
@@ -496,7 +496,7 @@ impl<H, N, E> VoterState<E::Id> for SharedVoterState<H, N, E> where
 	E: Environment<H, N>,
 	<E as Environment<H, N>>::Id: Hash,
 {
-	fn voter_state(&self) -> report::VoterState<E::Id> {
+	fn get(&self) -> report::VoterState<E::Id> {
 		let to_round_state = |voting_round: &VotingRound<H, N, E>| {
 			(
 				voting_round.round_number(),
@@ -1179,7 +1179,7 @@ mod tests {
 		}).unzip();
 
 		let voter_state = &voter_states[0];
-		voter_states.iter().all(|vs| vs.voter_state() == voter_state.voter_state());
+		voter_states.iter().all(|vs| vs.get() == voter_state.get());
 
 		let expected_round_state = report::RoundState::<Id> {
 			total_weight: VoterWeight::new(num_voters.into()).expect("nonzero"),
@@ -1191,7 +1191,7 @@ mod tests {
 		};
 
 		assert_eq!(
-			voter_state.voter_state(),
+			voter_state.get(),
 			report::VoterState {
 				background_rounds: Default::default(),
 				best_round: (1, expected_round_state.clone()),
@@ -1201,7 +1201,7 @@ mod tests {
 		pool.spawner().spawn(routing_task.map(|_| ())).unwrap();
 		pool.run_until(future::join_all(finalized_streams.into_iter()));
 
-		assert_eq!(voter_state.voter_state().best_round, (2, expected_round_state.clone()));
+		assert_eq!(voter_state.get().best_round, (2, expected_round_state.clone()));
 	}
 
 	#[test]
@@ -1460,7 +1460,7 @@ mod tests {
 		));
 
 		let voter_state = unsynced_voter.voter_state();
-		assert_eq!(voter_state.voter_state().background_rounds.get(&5), None);
+		assert_eq!(voter_state.get().background_rounds.get(&5), None);
 
 		// poll until it's caught up.
 		// should skip to round 6
@@ -1475,7 +1475,7 @@ mod tests {
 		}));
 
 		assert_eq!(
-			voter_state.voter_state().best_round,
+			voter_state.get().best_round,
 			(
 				6,
 				report::RoundState::<Id> {
@@ -1490,7 +1490,7 @@ mod tests {
 		);
 
 		assert_eq!(
-			voter_state.voter_state().background_rounds.get(&5),
+			voter_state.get().background_rounds.get(&5),
 			Some(&report::RoundState::<Id> {
 				total_weight,
 				threshold_weight,
