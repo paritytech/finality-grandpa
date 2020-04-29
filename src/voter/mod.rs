@@ -430,56 +430,6 @@ fn instantiate_last_round<H, N, E: Environment<H, N>>(
 	}
 }
 
-/// Trait for querying the state of the voter. Used by `Voter` to return a queryable object
-/// without exposing too many data types.
-pub trait VoterState<Id: Eq + std::hash::Hash> {
-	/// Returns a plain data type, `report::VoterState`, describing the current state
-	/// of the voter relevant to the voting process.
-	fn get(&self) -> report::VoterState<Id>;
-}
-
-/// Contains a number of data transfer objects for reporting data to the outside world.
-pub mod report {
-	use std::collections::{HashMap, HashSet};
-	use crate::weights::{VoteWeight, VoterWeight};
-
-	/// Basic data struct for the state of a round.
-	#[derive(PartialEq, Eq, Clone)]
-	#[cfg_attr(test, derive(Debug))]
-	pub struct RoundState<Id: Eq + std::hash::Hash> {
-		/// Total weight of all votes.
-		pub total_weight: VoterWeight,
-		/// The threshold voter weight.
-		pub threshold_weight: VoterWeight,
-
-		/// Current weight of the prevotes.
-		pub prevote_current_weight: VoteWeight,
-		/// The identities of nodes that have cast prevotes so far.
-		pub prevote_ids: HashSet<Id>,
-
-		/// Current weight of the precommits.
-		pub precommit_current_weight: VoteWeight,
-		/// The identities of nodes that have cast precommits so far.
-		pub precommit_ids: HashSet<Id>,
-	}
-
-	/// Basic data struct for the current state of the voter in a form suitable
-	/// for passing on to other systems.
-	#[derive(PartialEq, Eq)]
-	#[cfg_attr(test, derive(Debug))]
-	pub struct VoterState<Id: Eq + std::hash::Hash> {
-		/// Voting rounds running in the background.
-		pub background_rounds: HashMap<u64, RoundState<Id>>,
-		/// The current best voting round.
-		pub best_round: (u64, RoundState<Id>),
-	}
-}
-
-struct SharedVoterState<H, N, E>(Arc<RwLock<Inner<H, N, E>>>) where
-	H: Clone + Ord + std::fmt::Debug,
-	N: BlockNumberOps,
-	E: Environment<H, N>;
-
 // Collect the voter state that we want to wrap in an `Arc<RwLock>` suitable for sharing.
 struct Inner<H, N, E> where
 	H: Clone + Ord + std::fmt::Debug,
@@ -488,42 +438,6 @@ struct Inner<H, N, E> where
 {
 	best_round: VotingRound<H, N, E>,
 	past_rounds: PastRounds<H, N, E>,
-}
-
-impl<H, N, E> VoterState<E::Id> for SharedVoterState<H, N, E> where
-	H: Clone + Eq + Ord + std::fmt::Debug,
-	N: BlockNumberOps,
-	E: Environment<H, N>,
-	<E as Environment<H, N>>::Id: Hash,
-{
-	fn get(&self) -> report::VoterState<E::Id> {
-		let to_round_state = |voting_round: &VotingRound<H, N, E>| {
-			(
-				voting_round.round_number(),
-				report::RoundState {
-					total_weight: voting_round.voters().total_weight(),
-					threshold_weight: voting_round.voters().threshold(),
-					prevote_current_weight: voting_round.prevote_weight(),
-					prevote_ids: voting_round.prevote_ids().collect(),
-					precommit_current_weight: voting_round.precommit_weight(),
-					precommit_ids: voting_round.precommit_ids().collect(),
-				}
-			)
-		};
-
-		let lock = self.0.read();
-		let best_round = to_round_state(&lock.best_round);
-		let background_rounds = lock
-			.past_rounds
-			.voting_rounds()
-			.map(to_round_state)
-			.collect();
-
-		report::VoterState {
-			best_round,
-			background_rounds,
-		}
-	}
 }
 
 /// A future that maintains and multiplexes between different rounds,
@@ -912,6 +826,92 @@ impl<H, N, E: Environment<H, N>, GlobalIn, GlobalOut> Unpin for Voter<H, N, E, G
 	GlobalIn: Stream<Item=Result<CommunicationIn<H, N, E::Signature, E::Id>, E::Error>> + Unpin,
 	GlobalOut: Sink<CommunicationOut<H, N, E::Signature, E::Id>, Error=E::Error> + Unpin,
 {
+}
+
+/// Trait for querying the state of the voter. Used by `Voter` to return a queryable object
+/// without exposing too many data types.
+pub trait VoterState<Id: Eq + std::hash::Hash> {
+	/// Returns a plain data type, `report::VoterState`, describing the current state
+	/// of the voter relevant to the voting process.
+	fn get(&self) -> report::VoterState<Id>;
+}
+
+/// Contains a number of data transfer objects for reporting data to the outside world.
+pub mod report {
+	use std::collections::{HashMap, HashSet};
+	use crate::weights::{VoteWeight, VoterWeight};
+
+	/// Basic data struct for the state of a round.
+	#[derive(PartialEq, Eq, Clone)]
+	#[cfg_attr(test, derive(Debug))]
+	pub struct RoundState<Id: Eq + std::hash::Hash> {
+		/// Total weight of all votes.
+		pub total_weight: VoterWeight,
+		/// The threshold voter weight.
+		pub threshold_weight: VoterWeight,
+
+		/// Current weight of the prevotes.
+		pub prevote_current_weight: VoteWeight,
+		/// The identities of nodes that have cast prevotes so far.
+		pub prevote_ids: HashSet<Id>,
+
+		/// Current weight of the precommits.
+		pub precommit_current_weight: VoteWeight,
+		/// The identities of nodes that have cast precommits so far.
+		pub precommit_ids: HashSet<Id>,
+	}
+
+	/// Basic data struct for the current state of the voter in a form suitable
+	/// for passing on to other systems.
+	#[derive(PartialEq, Eq)]
+	#[cfg_attr(test, derive(Debug))]
+	pub struct VoterState<Id: Eq + std::hash::Hash> {
+		/// Voting rounds running in the background.
+		pub background_rounds: HashMap<u64, RoundState<Id>>,
+		/// The current best voting round.
+		pub best_round: (u64, RoundState<Id>),
+	}
+}
+
+struct SharedVoterState<H, N, E>(Arc<RwLock<Inner<H, N, E>>>) where
+	H: Clone + Ord + std::fmt::Debug,
+	N: BlockNumberOps,
+	E: Environment<H, N>;
+
+impl<H, N, E> VoterState<E::Id> for SharedVoterState<H, N, E> where
+	H: Clone + Eq + Ord + std::fmt::Debug,
+	N: BlockNumberOps,
+	E: Environment<H, N>,
+	<E as Environment<H, N>>::Id: Hash,
+{
+	fn get(&self) -> report::VoterState<E::Id> {
+		let to_round_state = |voting_round: &VotingRound<H, N, E>| {
+			(
+				voting_round.round_number(),
+				report::RoundState {
+					total_weight: voting_round.voters().total_weight(),
+					threshold_weight: voting_round.voters().threshold(),
+					prevote_current_weight: voting_round.prevote_weight(),
+					prevote_ids: voting_round.prevote_ids().collect(),
+					precommit_current_weight: voting_round.precommit_weight(),
+					precommit_ids: voting_round.precommit_ids().collect(),
+				}
+			)
+		};
+
+		let lock = self.0.read();
+		let best_round = to_round_state(&lock.best_round);
+		let background_rounds = lock
+			.past_rounds
+			.voting_rounds()
+			.map(to_round_state)
+			.collect();
+
+		report::VoterState {
+			best_round,
+			background_rounds,
+		}
+	}
 }
 
 /// Validate the given catch up and return a completed round with all prevotes
