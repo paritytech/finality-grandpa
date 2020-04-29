@@ -61,13 +61,13 @@ pub trait Environment<H: Eq, N: BlockNumberOps>: Chain<H, N> {
 	type Timer: Future<Output=Result<(),Self::Error>> + Unpin;
 	/// The associated Id for the Environment.
 	type Id: Ord + Clone + Eq + ::std::fmt::Debug;
-	/// The associated Signature for the Environment.
+	/// The associated Signature type for the Environment.
 	type Signature: Eq + Clone;
 	/// The input stream used to communicate with the outside world.
 	type In: Stream<Item=Result<SignedMessage<H, N, Self::Signature, Self::Id>, Self::Error>> + Unpin;
 	/// The output stream used to communicate with the outside world.
 	type Out: Sink<Message<H, N>, Error=Self::Error> + Unpin;
-	/// The assocated Error type.
+	/// The associated Error type.
 	type Error: From<crate::Error> + ::std::error::Error;
 
 	/// Produce data necessary to start a round of voting. This may also be called
@@ -430,13 +430,11 @@ fn instantiate_last_round<H, N, E: Environment<H, N>>(
 	}
 }
 
-/// Trait for querying the state of the voter. Used by `Voter` to return a queryable object 
+/// Trait for querying the state of the voter. Used by `Voter` to return a queryable object
 /// without exposing too many data types.
-/// data types.
 pub trait VoterState<Id: Eq + std::hash::Hash> {
-	/// Returns a plain data type, `report::VoterState`, describing the current state 
+	/// Returns a plain data type, `report::VoterState`, describing the current state
 	/// of the voter relevant to the voting process.
-	/// voting process.
 	fn voter_state(&self) -> report::VoterState<Id>;
 }
 
