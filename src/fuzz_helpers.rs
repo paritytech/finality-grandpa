@@ -12,10 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::round::{RoundParams, Round};
+//! Fuzzing utilities for the vote graph.
+
+use crate::round::{Round, RoundParams};
 use crate::vote_graph::VoteGraph;
 use crate::voter_set::VoterSet;
-use crate::{Chain, Error, Prevote, Precommit};
+use crate::{Chain, Error, Precommit, Prevote};
 
 #[cfg(not(feature = "std"))]
 use alloc::vec::Vec;
