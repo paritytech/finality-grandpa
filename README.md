@@ -28,7 +28,7 @@ Add this to your Cargo.toml:
 
 ```toml
 [dependencies]
-finality-grandpa = "0.10"
+finality-grandpa = "0.12"
 ```
 
 **Features:**
