@@ -29,7 +29,7 @@ use crate::round::{Round, State as RoundState};
 use crate::{
 	Commit, Message, Prevote, Precommit, PrimaryPropose, SignedMessage,
 	SignedPrecommit, BlockNumberOps, validate_commit, ImportResult,
-	HistoricalVotes,
+	HistoricalVotes, weights::VoteWeight,
 };
 use crate::voter_set::VoterSet;
 use super::{Environment, Buffered, FinalizedNotification};
@@ -283,6 +283,26 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 	/// Get the best block finalized in this round.
 	pub(super) fn finalized(&self) -> Option<&(H, N)> {
 		self.votes.finalized()
+	}
+
+	/// Get the current total weight of prevotes.
+	pub(super) fn prevote_weight(&self) -> VoteWeight {
+		self.votes.prevote_participation().0
+	}
+
+	/// Get the current total weight of precommits.
+	pub(super) fn precommit_weight(&self) -> VoteWeight {
+		self.votes.precommit_participation().0
+	}
+
+	/// Get the Ids of the prevoters.
+	pub(super) fn prevote_ids(&self) -> impl Iterator<Item = E::Id> {
+		self.votes.prevotes().into_iter().map(|pv| pv.0)
+	}
+
+	/// Get the Ids of the precommitters.
+	pub(super) fn precommit_ids(&self) -> impl Iterator<Item = E::Id> {
+		self.votes.precommits().into_iter().map(|pv| pv.0)
 	}
 
 	/// Check a commit. If it's valid, import all the votes into the round as well.
