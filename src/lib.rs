@@ -44,7 +44,7 @@ mod bitfield;
 mod weights;
 #[cfg(feature = "std")]
 mod bridge_state;
-#[cfg(any(test, feature = "test-helpers"))]
+#[cfg(any(test))]
 mod testing;
 #[cfg(any(test, feature = "fuzz-helpers"))]
 pub mod fuzz_helpers;
