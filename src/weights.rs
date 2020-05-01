@@ -24,7 +24,7 @@ use crate::std::fmt;
 pub struct VoteWeight(pub u64);
 
 impl fmt::Display for VoteWeight {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+	fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
 		write!(f, "{}", self.0)
 	}
 }
@@ -73,6 +73,12 @@ impl PartialOrd<VoterWeight> for VoteWeight {
 	}
 }
 
+impl From<u64> for VoteWeight {
+	fn from(weight: u64) -> Self {
+		VoteWeight(weight)
+	}
+}
+
 /// The (non-zero) weight of one or more voters.
 ///
 /// Having a non-zero weight is part of the definition of being a voter.
@@ -80,7 +86,7 @@ impl PartialOrd<VoterWeight> for VoteWeight {
 pub struct VoterWeight(pub NonZeroU64);
 
 impl fmt::Display for VoterWeight {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+	fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
 		write!(f, "{}", self.0)
 	}
 }
@@ -108,5 +114,13 @@ impl Sub<VoterWeight> for VoterWeight {
 
 	fn sub(self, rhs: VoterWeight) -> VoteWeight {
 		VoteWeight(self.0.get()) - VoteWeight(rhs.get())
+	}
+}
+
+impl std::convert::TryFrom<u64> for VoterWeight {
+	type Error = &'static str;
+
+	fn try_from(weight: u64) -> Result<Self, Self::Error> {
+		VoterWeight::new(weight).ok_or("VoterWeight only takes non-zero values.")
 	}
 }
