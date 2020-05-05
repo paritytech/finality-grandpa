@@ -117,6 +117,7 @@ impl Sub<VoterWeight> for VoterWeight {
 	}
 }
 
+#[cfg(feature = "std")]
 impl std::convert::TryFrom<u64> for VoterWeight {
 	type Error = &'static str;
 
