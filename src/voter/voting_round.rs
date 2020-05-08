@@ -657,18 +657,27 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 		let sent_finality_notifications = self.best_finalized.is_some();
 
 		if new_state.completable && (state_changed || !sent_finality_notifications) {
-			if let (&Some(State::Precommitted), Some((ref f_hash, ref f_number))) = (&self.state, new_state.finalized) {
-				let commit = Commit {
-					target_hash: f_hash.clone(),
-					target_number: *f_number,
-					precommits: self.votes.finalizing_precommits(&*self.env)
-						.expect("always returns none if something was finalized; this is checked above; qed")
-						.collect(),
-				};
-				let finalized = (f_hash.clone(), *f_number, self.votes.number(), commit.clone());
+			let precommitted = matches!(self.state, Some(State::Precommitted));
+			let cant_vote = self.last_round_state.is_none();
 
-				let _ = self.finalized_sender.unbounded_send(finalized);
-				self.best_finalized = Some(commit);
+			if precommitted || cant_vote {
+				if let Some((f_hash, f_number)) = new_state.finalized {
+					let commit = Commit {
+						target_hash: f_hash.clone(),
+						target_number: f_number,
+						precommits: self.votes.finalizing_precommits(&*self.env)
+							.expect("always returns none if something was finalized; this is checked above; qed")
+							.collect(),
+					};
+					let finalized = (
+						f_hash.clone(),
+						f_number,
+						self.votes.number(),
+						commit.clone(),
+					);
+					let _ = self.finalized_sender.unbounded_send(finalized);
+					self.best_finalized = Some(commit);
+				}
 			}
 		}
 	}
