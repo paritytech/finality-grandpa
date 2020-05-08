@@ -1421,7 +1421,7 @@ mod tests {
 		pool.spawner().spawn(routing_task.map(|_| ())).unwrap();
 
 		// initialize unsynced voter at round 0
-		let mut unsynced_voter = {
+		let (env, unsynced_voter) = {
 			let local_id = Id(4);
 
 			let env = Arc::new(Environment::new(network.clone(), local_id));
@@ -1430,7 +1430,7 @@ mod tests {
 				chain.last_finalized()
 			});
 
-			Voter::new(
+			let voter = Voter::new(
 				env.clone(),
 				voters.clone(),
 				network.make_global_comms(),
@@ -1438,7 +1438,9 @@ mod tests {
 				Vec::new(),
 				last_finalized,
 				last_finalized,
-			)
+			);
+
+			(env, voter)
 		};
 
 		let pv = |id| crate::SignedPrevote {
@@ -1468,17 +1470,23 @@ mod tests {
 		let voter_state = unsynced_voter.voter_state();
 		assert_eq!(voter_state.get().background_rounds.get(&5), None);
 
-		// poll until it's caught up.
-		// should skip to round 6
-		let output = pool.run_until(future::poll_fn(move |cx| -> Poll<()> {
-			let poll = unsynced_voter.poll_unpin(cx);
-			if unsynced_voter.inner.read().best_round.round_number() == 6 {
+		// spawn the voter in the background
+		pool.spawner().spawn(unsynced_voter.map(|_| ())).unwrap();
+
+		// wait until it's caught up, it should skip to round 6 and send a
+		// finality notification for the block that was finalized by catching
+		// up.
+		let caught_up = future::poll_fn(|_| {
+			if voter_state.get().best_round.0 == 6 {
 				Poll::Ready(())
 			} else {
-				futures::ready!(poll).unwrap();
-				Poll::Ready(())
+				Poll::Pending
 			}
-		}));
+		});
+
+		let finalized = env.finalized_stream().take(1).into_future();
+
+		pool.run_until(caught_up.then(|_| finalized.map(|_| ())));
 
 		assert_eq!(
 			voter_state.get().best_round,
@@ -1506,8 +1514,6 @@ mod tests {
 				precommit_ids: voter_ids,
 			})
 		);
-
-		output
 	}
 
 	#[test]
