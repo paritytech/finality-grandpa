@@ -658,6 +658,8 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 
 		if new_state.completable && (state_changed || !sent_finality_notifications) {
 			let precommitted = matches!(self.state, Some(State::Precommitted));
+			// we only cast votes when we have access to the previous round state,
+			// which won't be the case whenever we catch up to a later round.
 			let cant_vote = self.last_round_state.is_none();
 
 			if precommitted || cant_vote {
