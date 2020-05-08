@@ -635,7 +635,7 @@ impl<H, N, E: Environment<H, N>, GlobalIn, GlobalOut> Voter<H, N, E, GlobalIn, G
 
 					let commit: Commit<_, _, _, _> = commit.into();
 
-					let inner = self.inner.write();
+					let mut inner = self.inner.write();
 
 					// if the commit is for a background round dispatch to round committer.
 					// that returns Some if there wasn't one.
@@ -650,10 +650,14 @@ impl<H, N, E: Environment<H, N>, GlobalIn, GlobalOut> Voter<H, N, E, GlobalIn, G
 							// (due to the call to `self.rounds.get_mut`).
 							let last_finalized_number = &mut self.last_finalized_number;
 
+							// clean up any background rounds
+							inner.past_rounds.update_finalized(finalized_number);
+
 							if finalized_number > *last_finalized_number {
 								*last_finalized_number = finalized_number;
 								self.env.finalize_block(finalized_hash, finalized_number, round_number, commit)?;
 							}
+
 							process_commit_outcome.run(CommitProcessingOutcome::Good(GoodCommit::new()));
 						} else {
 							// Failing validation of a commit is bad.
