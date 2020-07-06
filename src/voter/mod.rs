@@ -25,17 +25,16 @@
 //!  votes will not be pushed to the sink. The protocol state machine still
 //!  transitions state as if the votes had been pushed out.
 
-use futures::{prelude::*, ready};
+use futures::prelude::*;
 use futures::channel::mpsc::{self, UnboundedReceiver};
 #[cfg(feature = "std")]
 use log::trace;
 
+use async_trait::async_trait;
 use parking_lot::RwLock;
 
 use std::collections::VecDeque;
-use std::pin::Pin;
 use std::sync::Arc;
-use std::task::{Context, Poll};
 use std::hash::Hash;
 
 use crate::round::State as RoundState;
@@ -55,18 +54,19 @@ mod voting_round;
 /// Necessary environment for a voter.
 ///
 /// This encapsulates the database and networking layers of the chain.
+#[async_trait]
 pub trait Environment<H: Eq, N: BlockNumberOps>: Chain<H, N> {
 	/// Associated timer for the Environment. See also
 	/// [round_commit_data](trait.Environment.html#tymethod.round_commit_timer).
-	type Timer: Future<Output=Result<(),Self::Error>> + Unpin;
+	type Timer: Future<Output=Result<(),Self::Error>> + Send + Sync + Unpin;
 	/// The associated Id for the Environment.
-	type Id: Ord + Clone + Eq + ::std::fmt::Debug;
+	type Id: Ord + Clone + Eq + ::std::fmt::Debug + Send + Sync + Unpin;
 	/// The associated Signature type for the Environment.
-	type Signature: Eq + Clone;
+	type Signature: Eq + Clone + Send + Sync + Unpin;
 	/// The input stream used to communicate with the outside world.
-	type In: Stream<Item=Result<SignedMessage<H, N, Self::Signature, Self::Id>, Self::Error>> + Unpin;
+	type In: Stream<Item=Result<SignedMessage<H, N, Self::Signature, Self::Id>, Self::Error>> + Send + Sync + Unpin;
 	/// The output stream used to communicate with the outside world.
-	type Out: Sink<Message<H, N>, Error=Self::Error> + Unpin;
+	type Out: Sink<Message<H, N>, Error=Self::Error> + Send + Sync + Unpin;
 	/// The associated Error type.
 	type Error: From<crate::Error> + ::std::error::Error;
 
@@ -89,7 +89,7 @@ pub trait Environment<H: Eq, N: BlockNumberOps>: Chain<H, N> {
 	///
 	/// Furthermore, this means that actual logic of creating and verifying
 	/// signatures is flexible and can be maintained outside this crate.
-	fn round_data(&self, round: u64) -> RoundData<
+	async fn round_data(&self, round: u64) -> RoundData<
 		Self::Id,
 		Self::Timer,
 		Self::In,
@@ -354,28 +354,18 @@ impl<S: Sink<I> + Unpin, I> Buffered<S, I> {
 	}
 
 	// returns ready when the sink and the buffer are completely flushed.
-	fn poll(&mut self, cx: &mut Context) -> Poll<Result<(), S::Error>> {
-		let polled = self.schedule_all(cx)?;
-
-		match polled {
-			Poll::Ready(()) => Sink::poll_flush(Pin::new(&mut self.inner), cx),
-			Poll::Pending => {
-				ready!(Sink::poll_flush(Pin::new(&mut self.inner), cx))?;
-				Poll::Pending
-			}
-		}
+	async fn flush(&mut self) -> Result<(), S::Error> {
+		self.schedule_all().await
 	}
 
-	fn schedule_all(&mut self, cx: &mut Context) -> Poll<Result<(), S::Error>> {
+	async fn schedule_all(&mut self) -> Result<(), S::Error> {
 		while !self.buffer.is_empty() {
-			ready!(Sink::poll_ready(Pin::new(&mut self.inner), cx))?;
-
 			let item = self.buffer.pop_front()
 				.expect("we checked self.buffer.is_empty() just above; qed");
-			Sink::start_send(Pin::new(&mut self.inner), item)?;
+			self.inner.send(item).await?;
 		}
 
-		Poll::Ready(Ok(()))
+		Ok(())
 	}
 }
 
@@ -393,7 +383,7 @@ type FinalizedNotification<H, N, E> = (
 // the estimate backwards and conclude the round (i.e. finalize its estimate).
 //
 // may only be called with non-zero last round.
-fn instantiate_last_round<H, N, E: Environment<H, N>>(
+async fn instantiate_last_round<H, N, E: Environment<H, N>>(
 	voters: VoterSet<E::Id>,
 	last_round_votes: Vec<SignedMessage<H, N, E::Signature, E::Id>>,
 	last_round_number: u64,
@@ -401,8 +391,8 @@ fn instantiate_last_round<H, N, E: Environment<H, N>>(
 	finalized_sender: mpsc::UnboundedSender<FinalizedNotification<H, N, E>>,
 	env: Arc<E>,
 ) -> Option<VotingRound<H, N, E>> where
-	H: Clone + Eq + Ord + ::std::fmt::Debug,
-	N: Copy + BlockNumberOps + ::std::fmt::Debug,
+	H: Clone + Eq + Ord + ::std::fmt::Debug + Send + Sync + Unpin,
+	N: Copy + BlockNumberOps + ::std::fmt::Debug + Unpin,
 {
 	let last_round_tracker = crate::round::Round::new(crate::round::RoundParams {
 		voters,
@@ -416,7 +406,7 @@ fn instantiate_last_round<H, N, E: Environment<H, N>>(
 		finalized_sender,
 		None,
 		env,
-	);
+	).await;
 
 	for vote in last_round_votes {
 		// bail if any votes are bad.
@@ -434,9 +424,9 @@ fn instantiate_last_round<H, N, E: Environment<H, N>>(
 // (i.e. best and background rounds). This state exists separately since it's
 // useful to wrap in a `Arc<RwLock<_>>` for sharing.
 struct InnerVoterState<H, N, E> where
-	H: Clone + Ord + std::fmt::Debug,
-	N: BlockNumberOps,
-	E: Environment<H, N>,
+	H: Clone + Ord + std::fmt::Debug + Send + Sync,
+	N: BlockNumberOps + Send + Sync,
+	E: Environment<H, N> + Send + Sync,
 {
 	best_round: VotingRound<H, N, E>,
 	past_rounds: PastRounds<H, N, E>,
@@ -460,9 +450,9 @@ struct InnerVoterState<H, N, E> where
 /// Additionally, we also listen to commit messages from rounds that aren't
 /// currently running, we validate the commit and dispatch a finalization
 /// notification (if any) to the environment.
-pub struct Voter<H, N, E: Environment<H, N>, GlobalIn, GlobalOut> where
-	H: Clone + Eq + Ord + ::std::fmt::Debug,
-	N: Copy + BlockNumberOps + ::std::fmt::Debug,
+pub struct Voter<H, N, E: Environment<H, N> + Send + Sync, GlobalIn, GlobalOut> where
+	H: Clone + Eq + Ord + ::std::fmt::Debug + Send + Sync,
+	N: Copy + BlockNumberOps + ::std::fmt::Debug + Send + Sync,
 	GlobalIn: Stream<Item=Result<CommunicationIn<H, N, E::Signature, E::Id>, E::Error>> + Unpin,
 	GlobalOut: Sink<CommunicationOut<H, N, E::Signature, E::Id>, Error=E::Error> + Unpin,
 {
@@ -480,8 +470,8 @@ pub struct Voter<H, N, E: Environment<H, N>, GlobalIn, GlobalOut> where
 }
 
 impl<'a, H: 'a, N, E: 'a, GlobalIn, GlobalOut> Voter<H, N, E, GlobalIn, GlobalOut> where
-	H: Clone + Ord + ::std::fmt::Debug + Sync + Send,
-	N: BlockNumberOps + Sync + Send,
+	H: Clone + Ord + ::std::fmt::Debug + Sync + Send + Unpin,
+	N: BlockNumberOps + Sync + Send + Unpin,
 	E: Environment<H, N> + Sync + Send,
 	GlobalIn: Stream<Item=Result<CommunicationIn<H, N, E::Signature, E::Id>, E::Error>> + Unpin,
 	GlobalOut: Sink<CommunicationOut<H, N, E::Signature, E::Id>, Error=E::Error> + Unpin,
@@ -499,9 +489,9 @@ impl<'a, H: 'a, N, E: 'a, GlobalIn, GlobalOut> Voter<H, N, E, GlobalIn, GlobalOu
 	}
 }
 
-impl<H, N, E: Environment<H, N>, GlobalIn, GlobalOut> Voter<H, N, E, GlobalIn, GlobalOut> where
-	H: Clone + Eq + Ord + ::std::fmt::Debug,
-	N: Copy + BlockNumberOps + ::std::fmt::Debug,
+impl<H, N, E: Environment<H, N> + Send + Sync, GlobalIn, GlobalOut> Voter<H, N, E, GlobalIn, GlobalOut> where
+	H: Clone + Eq + Ord + ::std::fmt::Debug + Send + Sync + Unpin,
+	N: Copy + BlockNumberOps + ::std::fmt::Debug + Send + Sync + Unpin,
 	GlobalIn: Stream<Item=Result<CommunicationIn<H, N, E::Signature, E::Id>, E::Error>> + Unpin,
 	GlobalOut: Sink<CommunicationOut<H, N, E::Signature, E::Id>, Error=E::Error> + Unpin,
 {
@@ -516,7 +506,7 @@ impl<H, N, E: Environment<H, N>, GlobalIn, GlobalOut> Voter<H, N, E, GlobalIn, G
 	/// correspond to known blocks only (including all its precommits). It
 	/// is also responsible for validating the signature data in commit
 	/// messages.
-	pub fn new(
+	pub async fn new(
 		env: Arc<E>,
 		voters: VoterSet<E::Id>,
 		global_comms: (GlobalIn, GlobalOut),
@@ -542,7 +532,7 @@ impl<H, N, E: Environment<H, N>, GlobalIn, GlobalOut> Voter<H, N, E, GlobalIn, G
 				last_round_base,
 				finalized_sender.clone(),
 				env.clone(),
-			);
+			).await;
 
 			if let Some(mut last_round) = maybe_completed_last_round {
 				last_round_state = last_round.bridge_state();
@@ -562,7 +552,7 @@ impl<H, N, E: Environment<H, N>, GlobalIn, GlobalOut> Voter<H, N, E, GlobalIn, G
 			Some(last_round_state),
 			finalized_sender,
 			env.clone(),
-		);
+		).await;
 
 		let (global_in, global_out) = global_comms;
 
@@ -583,23 +573,22 @@ impl<H, N, E: Environment<H, N>, GlobalIn, GlobalOut> Voter<H, N, E, GlobalIn, G
 		}
 	}
 
-	fn prune_background_rounds(&mut self, cx: &mut Context) -> Result<(), E::Error> {
+	async fn prune_background_rounds(&mut self) -> Result<(), E::Error> {
 		{
 			let mut inner = self.inner.write();
 
 			// Do work on all background rounds, broadcasting any commits generated.
-			while let Poll::Ready(Some(item)) = Stream::poll_next(Pin::new(&mut inner.past_rounds), cx) {
+			while let Some(item) = inner.past_rounds.next().await {
 				let (number, commit) = item?;
 				self.global_out.push(CommunicationOut::Commit(number, commit));
 			}
 		}
 
-		while let Poll::Ready(res) = Stream::poll_next(Pin::new(&mut self.finalized_notifications), cx) {
+		while let Some(res) = self.finalized_notifications.next().await {
 			let inner = self.inner.clone();
 			let mut inner = inner.write();
 
-			let (f_hash, f_num, round, commit) =
-				res.expect("one sender always kept alive in self.best_round; qed");
+			let (f_hash, f_num, round, commit) = res;
 
 			inner.past_rounds.update_finalized(f_num);
 
@@ -623,8 +612,8 @@ impl<H, N, E: Environment<H, N>, GlobalIn, GlobalOut> Voter<H, N, E, GlobalIn, G
 	///
 	/// Otherwise, we will simply handle the commit and issue a finalization command
 	/// to the environment.
-	fn process_incoming(&mut self, cx: &mut Context) -> Result<(), E::Error> {
-		while let Poll::Ready(Some(item)) = Stream::poll_next(Pin::new(&mut self.global_in), cx) {
+	async fn process_incoming(&mut self) -> Result<(), E::Error> {
+		while let Some(item) = self.global_in.next().await {
 			match item? {
 				CommunicationIn::Commit(round_number, commit, mut process_commit_outcome) => {
 					trace!(target: "afg", "Got commit for round_number {:?}: target_number: {:?}, target_hash: {:?}",
@@ -696,7 +685,7 @@ impl<H, N, E: Environment<H, N>, GlobalIn, GlobalOut> Voter<H, N, E, GlobalIn, G
 						inner.best_round.finalized_sender(),
 						None,
 						self.env.clone(),
-					);
+					).await;
 
 					let new_best = VotingRound::new(
 						just_completed.round_number() + 1,
@@ -705,7 +694,7 @@ impl<H, N, E: Environment<H, N>, GlobalIn, GlobalOut> Voter<H, N, E, GlobalIn, G
 						Some(just_completed.bridge_state()),
 						inner.best_round.finalized_sender(),
 						self.env.clone(),
-					);
+					).await;
 
 					// update last-finalized in rounds _after_ starting new round.
 					// otherwise the base could be too eagerly set forward.
@@ -739,27 +728,24 @@ impl<H, N, E: Environment<H, N>, GlobalIn, GlobalOut> Voter<H, N, E, GlobalIn, G
 	}
 
 	// process the logic of the best round.
-	fn process_best_round(&mut self, cx: &mut Context) -> Poll<Result<(), E::Error>> {
+	async fn process_best_round(&mut self) -> Result<(), E::Error> {
 		// If the current `best_round` is completable and we've already precommitted,
 		// we start a new round at `best_round + 1`.
 		{
 			let mut inner = self.inner.write();
 
 			let should_start_next = {
-				let completable = match inner.best_round.poll(cx)? {
-					Poll::Ready(()) => true,
-					Poll::Pending => false,
-				};
+				inner.best_round.poll().await?;
 
 				let precommitted = match inner.best_round.state() {
 					Some(&VotingRoundState::Precommitted) => true, // start when we've cast all votes.
 					_ => false,
 				};
 
-				completable && precommitted
+				precommitted
 			};
 
-			if !should_start_next { return Poll::Pending }
+			if !should_start_next { return Ok(()) }
 
 			trace!(target: "afg", "Best round at {} has become completable. Starting new best round at {}",
 				inner.best_round.round_number(),
@@ -767,13 +753,10 @@ impl<H, N, E: Environment<H, N>, GlobalIn, GlobalOut> Voter<H, N, E, GlobalIn, G
 			);
 		}
 
-		self.completed_best_round()?;
-
-		// round has been updated. so we need to re-poll.
-		self.poll_unpin(cx)
+		self.completed_best_round().await
 	}
 
-	fn completed_best_round(&mut self) -> Result<(), E::Error> {
+	async fn completed_best_round(&mut self) -> Result<(), E::Error> {
 		let mut inner = self.inner.write();
 
 		self.env.completed(
@@ -792,7 +775,7 @@ impl<H, N, E: Environment<H, N>, GlobalIn, GlobalOut> Voter<H, N, E, GlobalIn, G
 			Some(inner.best_round.bridge_state()),
 			inner.best_round.finalized_sender(),
 			self.env.clone(),
-		);
+		).await;
 
 		let old_round = ::std::mem::replace(&mut inner.best_round, next_round);
 		inner.past_rounds.push(&*self.env, old_round);
@@ -807,28 +790,19 @@ impl<H, N, E: Environment<H, N>, GlobalIn, GlobalOut> Voter<H, N, E, GlobalIn, G
 		}
 		false
 	}
-}
 
-impl<H, N, E: Environment<H, N>, GlobalIn, GlobalOut> Future for Voter<H, N, E, GlobalIn, GlobalOut> where
-	H: Clone + Eq + Ord + ::std::fmt::Debug,
-	N: Copy + BlockNumberOps + ::std::fmt::Debug,
-	GlobalIn: Stream<Item=Result<CommunicationIn<H, N, E::Signature, E::Id>, E::Error>> + Unpin,
-	GlobalOut: Sink<CommunicationOut<H, N, E::Signature, E::Id>, Error=E::Error> + Unpin,
-{
-	type Output = Result<(), E::Error>;
+	async fn poll(&mut self) -> Result<(), E::Error> {
+		self.process_incoming().await?;
+		self.prune_background_rounds().await?;
+		let _ = self.global_out.flush().await?;
 
-	fn poll(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Result<(), E::Error>> {
-		self.process_incoming(cx)?;
-		self.prune_background_rounds(cx)?;
-		let _ = self.global_out.poll(cx)?;
-
-		self.process_best_round(cx)
+		self.process_best_round().await
 	}
 }
 
-impl<H, N, E: Environment<H, N>, GlobalIn, GlobalOut> Unpin for Voter<H, N, E, GlobalIn, GlobalOut> where
-	H: Clone + Eq + Ord + ::std::fmt::Debug,
-	N: Copy + BlockNumberOps + ::std::fmt::Debug,
+impl<H, N, E: Environment<H, N> + Send + Sync, GlobalIn, GlobalOut> Unpin for Voter<H, N, E, GlobalIn, GlobalOut> where
+	H: Clone + Eq + Ord + ::std::fmt::Debug + Send + Sync,
+	N: Copy + BlockNumberOps + ::std::fmt::Debug + Send + Sync,
 	GlobalIn: Stream<Item=Result<CommunicationIn<H, N, E::Signature, E::Id>, E::Error>> + Unpin,
 	GlobalOut: Sink<CommunicationOut<H, N, E::Signature, E::Id>, Error=E::Error> + Unpin,
 {
@@ -880,14 +854,14 @@ pub mod report {
 }
 
 struct SharedVoterState<H, N, E>(Arc<RwLock<InnerVoterState<H, N, E>>>) where
-	H: Clone + Ord + std::fmt::Debug,
-	N: BlockNumberOps,
-	E: Environment<H, N>;
+	H: Clone + Ord + std::fmt::Debug + Send + Sync,
+	N: BlockNumberOps + Send + Sync,
+	E: Environment<H, N> + Send + Sync;
 
 impl<H, N, E> VoterState<E::Id> for SharedVoterState<H, N, E> where
-	H: Clone + Eq + Ord + std::fmt::Debug,
-	N: BlockNumberOps,
-	E: Environment<H, N>,
+	H: Clone + Eq + Ord + std::fmt::Debug + Send + Sync + Unpin,
+	N: BlockNumberOps + Send + Sync + Unpin,
+	E: Environment<H, N> + Send + Sync,
 	<E as Environment<H, N>>::Id: Hash,
 {
 	fn get(&self) -> report::VoterState<E::Id> {

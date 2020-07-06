@@ -44,18 +44,19 @@ use super::voting_round::VotingRound;
 //
 // that point is when the round-estimate is finalized.
 struct BackgroundRound<H, N, E: Environment<H, N>> where
-	H: Clone + Eq + Ord + ::std::fmt::Debug,
+	H: Clone + Eq + Ord + ::std::fmt::Debug + Send + Sync,
 	N: Copy + BlockNumberOps + ::std::fmt::Debug,
 {
 	inner: VotingRound<H, N, E>,
 	waker: Option<task::Waker>,
 	finalized_number: N,
 	round_committer: Option<RoundCommitter<H, N, E>>,
+	inner_future: Option<Pin<Box<dyn Future<Output = Result<(), E::Error>> + Send + Sync>>>,
 }
 
 impl<H, N, E: Environment<H, N>> BackgroundRound<H, N, E> where
-	H: Clone + Eq + Ord + ::std::fmt::Debug,
-	N: Copy + BlockNumberOps + ::std::fmt::Debug,
+	H: Clone + Eq + Ord + ::std::fmt::Debug + Send + Sync + Unpin,
+	N: Copy + BlockNumberOps + ::std::fmt::Debug + Unpin,
 {
 	fn round_number(&self) -> u64 {
 		self.inner.round_number()
@@ -88,9 +89,9 @@ impl<H, N, E: Environment<H, N>> BackgroundRound<H, N, E> where
 	}
 }
 
-enum BackgroundRoundChange<H, N, E: Environment<H, N>> where
+enum BackgroundRoundChange<H, N, E: Environment<H, N> + Send + Sync> where
 	H: Clone + Eq + Ord + ::std::fmt::Debug,
-	N: Copy + BlockNumberOps + ::std::fmt::Debug,
+	N: Copy + BlockNumberOps + ::std::fmt::Debug + Send + Sync,
 {
 	/// Background round has fully concluded and can be discarded.
 	Concluded(u64),
@@ -99,16 +100,23 @@ enum BackgroundRoundChange<H, N, E: Environment<H, N>> where
 	Committed(Commit<H, N, E::Signature, E::Id>),
 }
 
-impl<H, N, E: Environment<H, N>> Future for BackgroundRound<H, N, E> where
-	H: Clone + Eq + Ord + ::std::fmt::Debug,
-	N: Copy + BlockNumberOps + ::std::fmt::Debug,
+impl<H, N, E: Environment<H, N> + Send + Sync> Future for BackgroundRound<H, N, E> where
+	H: Clone + Eq + Ord + ::std::fmt::Debug + Send + Sync + Unpin,
+	N: Copy + BlockNumberOps + ::std::fmt::Debug + Send + Sync + Unpin,
 {
 	type Output = Result<BackgroundRoundChange<H, N, E>, E::Error>;
 
 	fn poll(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
 		self.waker = Some(cx.waker().clone());
 
-		let _ = self.inner.poll(cx)?;
+		if self.inner_future.is_none() {
+			self.inner_future = Some(Box::pin(&mut self.inner.poll()));
+			return Poll::Pending;
+		}
+
+		if let Some(mut fut) = self.inner_future {
+			ready!(fut.poll(cx));
+		}
 
 		self.round_committer = match self.round_committer.take() {
 			None => None,
@@ -132,7 +140,7 @@ impl<H, N, E: Environment<H, N>> Future for BackgroundRound<H, N, E> where
 }
 
 impl<H, N, E: Environment<H, N>> Unpin for BackgroundRound<H, N, E> where
-	H: Clone + Eq + Ord + ::std::fmt::Debug,
+	H: Clone + Eq + Ord + ::std::fmt::Debug + Send + Sync,
 	N: Copy + BlockNumberOps + ::std::fmt::Debug,
 {
 }
@@ -147,8 +155,8 @@ struct RoundCommitter<H, N, E: Environment<H, N>> where
 }
 
 impl<H, N, E: Environment<H, N>> RoundCommitter<H, N, E> where
-	H: Clone + Eq + Ord + ::std::fmt::Debug,
-	N: Copy + BlockNumberOps + ::std::fmt::Debug,
+	H: Clone + Eq + Ord + ::std::fmt::Debug + Send + Sync + Unpin,
+	N: Copy + BlockNumberOps + ::std::fmt::Debug + Unpin,
 {
 	fn new(
 		commit_timer: E::Timer,
@@ -243,7 +251,7 @@ impl<F: Future + Unpin> Future for SelfReturningFuture<F> {
 /// A stream for past rounds, which produces any commit messages from those
 /// rounds and drives them to completion.
 pub(super) struct PastRounds<H, N, E: Environment<H, N>> where
-	H: Clone + Eq + Ord + ::std::fmt::Debug,
+	H: Clone + Eq + Ord + ::std::fmt::Debug + Send + Sync,
 	N: Copy + BlockNumberOps + ::std::fmt::Debug,
 {
 	past_rounds: FuturesUnordered<SelfReturningFuture<BackgroundRound<H, N, E>>>,
@@ -251,8 +259,8 @@ pub(super) struct PastRounds<H, N, E: Environment<H, N>> where
 }
 
 impl<H, N, E: Environment<H, N>> PastRounds<H, N, E> where
-	H: Clone + Eq + Ord + ::std::fmt::Debug,
-	N: Copy + BlockNumberOps + ::std::fmt::Debug,
+	H: Clone + Eq + Ord + ::std::fmt::Debug + Send + Sync + Unpin,
+	N: Copy + BlockNumberOps + ::std::fmt::Debug + Unpin,
 {
 	/// Create a new past rounds stream.
 	pub(super) fn new() -> Self {
@@ -275,6 +283,7 @@ impl<H, N, E: Environment<H, N>> PastRounds<H, N, E> where
 				env.round_commit_timer(),
 				rx,
 			)),
+			inner_future: None,
 		};
 		self.past_rounds.push(background.into());
 		self.commit_senders.insert(round_number, tx);
@@ -311,9 +320,9 @@ impl<H, N, E: Environment<H, N>> PastRounds<H, N, E> where
 	}
 }
 
-impl<H, N, E: Environment<H, N>> Stream for PastRounds<H, N, E> where
-	H: Clone + Eq + Ord + ::std::fmt::Debug,
-	N: Copy + BlockNumberOps + ::std::fmt::Debug,
+impl<H, N, E: Environment<H, N> + Send + Sync> Stream for PastRounds<H, N, E> where
+	H: Clone + Eq + Ord + ::std::fmt::Debug + Send + Sync + Unpin,
+	N: Copy + BlockNumberOps + ::std::fmt::Debug + Send + Sync + Unpin,
 {
 	type Item = Result<(u64, Commit<H, N, E::Signature, E::Id>), E::Error>;
 

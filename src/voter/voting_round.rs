@@ -15,15 +15,12 @@
 //! Logic for voting and handling messages within a single round.
 
 #[cfg(feature = "std")]
-use futures::ready;
 use futures::prelude::*;
 use futures::channel::mpsc::UnboundedSender;
 #[cfg(feature = "std")]
 use log::{trace, warn, debug};
 
-use std::pin::Pin;
 use std::sync::Arc;
-use std::task::{Context, Poll};
 
 use crate::round::{Round, State as RoundState};
 use crate::{
@@ -55,7 +52,7 @@ impl<T> std::fmt::Debug for State<T> {
 
 /// Logic for a voter on a specific round.
 pub(super) struct VotingRound<H, N, E: Environment<H, N>> where
-	H: Clone + Eq + Ord + ::std::fmt::Debug,
+	H: Clone + Eq + Ord + ::std::fmt::Debug + Send + Sync,
 	N: Copy + BlockNumberOps + ::std::fmt::Debug,
 {
 	env: Arc<E>,
@@ -101,11 +98,11 @@ impl Voting {
 }
 
 impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
-	H: Clone + Eq + Ord + ::std::fmt::Debug,
-	N: Copy + BlockNumberOps + ::std::fmt::Debug,
+	H: Clone + Eq + Ord + ::std::fmt::Debug + Send + Sync + Unpin,
+	N: Copy + BlockNumberOps + ::std::fmt::Debug + Unpin,
 {
 	/// Create a new voting round.
-	pub (super) fn new(
+	pub (super) async fn new(
 		round_number: u64,
 		voters: VoterSet<E::Id>,
 		base: (H, N),
@@ -113,7 +110,7 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 		finalized_sender: UnboundedSender<FinalizedNotification<H, N, E>>,
 		env: Arc<E>,
 	) -> VotingRound<H, N, E> {
-		let round_data = env.round_data(round_number);
+		let round_data = env.round_data(round_number).await;
 		let round_params = crate::round::RoundParams {
 			voters,
 			base,
@@ -152,14 +149,14 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 
 	/// Create a voting round from a completed `Round`. We will not vote further
 	/// in this round.
-	pub (super) fn completed(
+	pub (super) async fn completed(
 		votes: Round<E::Id, H, N, E::Signature>,
 		finalized_sender: UnboundedSender<FinalizedNotification<H, N, E>>,
 		last_round_state: Option<crate::bridge_state::LatterView<H, N>>,
 		env: Arc<E>,
 	) -> VotingRound<H, N, E> {
 
-		let round_data = env.round_data(votes.number());
+		let round_data = env.round_data(votes.number()).await;
 
 		VotingRound {
 			votes,
@@ -178,33 +175,28 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 
 	/// Poll the round. When the round is completable and messages have been flushed, it will return `Poll::Ready` but
 	/// can continue to be polled.
-	pub(super) fn poll(&mut self, cx: &mut Context) -> Poll<Result<(), E::Error>> {
+	pub(super) async fn poll(&mut self) -> Result<(), E::Error> {
 		trace!(target: "afg", "Polling round {}, state = {:?}, step = {:?}", self.votes.number(), self.votes.state(), self.state);
 
 		let pre_state = self.votes.state();
-		self.process_incoming(cx)?;
+		self.process_incoming().await?;
 
 		// we only cast votes when we have access to the previous round state.
 		// we might have started this round as a prospect "future" round to
 		// check whether the voter is lagging behind the current round.
-		let last_round_state = self.last_round_state.as_ref().map(|s| s.get(cx).clone());
+		let last_round_state = self.last_round_state.as_ref().map(|s| s.get().clone());
 		if let Some(ref last_round_state) = last_round_state {
 			self.primary_propose(last_round_state)?;
-			self.prevote(cx, last_round_state)?;
-			self.precommit(cx, last_round_state)?;
+			self.prevote(last_round_state).await?;
+			self.precommit(last_round_state).await?;
 		}
 
-		ready!(self.outgoing.poll(cx))?;
-		self.process_incoming(cx)?; // in case we got a new message signed locally.
+		self.outgoing.flush().await?;
+		self.process_incoming().await?; // in case we got a new message signed locally.
 
 		// broadcast finality notifications after attempting to cast votes
 		let post_state = self.votes.state();
 		self.notify(pre_state, post_state);
-
-		// early exit if the current round is not completable
-		if !self.votes.completable() {
-			return Poll::Pending;
-		}
 
 		// make sure that the previous round estimate has been finalized
 		let last_round_estimate_finalized = match last_round_state {
@@ -238,7 +230,7 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 		if !last_round_estimate_finalized {
 			trace!(target: "afg", "Round {} completable but estimate not finalized.", self.round_number());
 			self.log_participation(log::Level::Trace);
-			return Poll::Pending;
+			return Ok(());
 		}
 
 		debug!(target: "afg", "Completed round {}, state = {:?}, step = {:?}",
@@ -247,7 +239,7 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 		self.log_participation(log::Level::Debug);
 
 		// both exit conditions verified, we can complete this round
-		Poll::Ready(Ok(()))
+		Ok(())
 	}
 
 	/// Inspect the state of this round.
@@ -408,8 +400,8 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 			number, precommit_weight, threshold, total_weight, n_precommits, n_voters);
 	}
 
-	fn process_incoming(&mut self, cx: &mut Context) -> Result<(), E::Error> {
-		while let Poll::Ready(Some(incoming)) = Stream::poll_next(Pin::new(&mut self.incoming), cx) {
+	async fn process_incoming(&mut self) -> Result<(), E::Error> {
+		while let Some(incoming) = self.incoming.next().await {
 			trace!(target: "afg", "Round {}: Got incoming message", self.round_number());
 			self.handle_vote(incoming?)?;
 		}
@@ -459,48 +451,53 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 		Ok(())
 	}
 
-	fn prevote(&mut self, cx: &mut Context, last_round_state: &RoundState<H, N>) -> Result<(), E::Error> {
-		let state = self.state.take();
-
-		let mut handle_prevote = |mut prevote_timer: E::Timer, precommit_timer: E::Timer, proposed| {
-			let should_prevote = match prevote_timer.poll_unpin(cx) {
-				Poll::Ready(Err(e)) => return Err(e),
-				Poll::Ready(Ok(())) => true,
-				Poll::Pending => self.votes.completable(),
-			};
-
-			if should_prevote {
-				if self.voting.is_active() {
-					if let Some(prevote) = self.construct_prevote(last_round_state)? {
-						debug!(target: "afg", "Casting prevote for round {}", self.votes.number());
-						self.env.prevoted(self.round_number(), prevote.clone())?;
-						self.votes.set_prevoted_index();
-						self.outgoing.push(Message::Prevote(prevote));
-						self.state = Some(State::Prevoted(precommit_timer));
-					} else {
-						// when we can't construct a prevote, we shouldn't
-						// precommit.
-						self.state = None;
-						self.voting = Voting::No;
-					}
-				} else {
-					self.state = Some(State::Prevoted(precommit_timer));
-				}
-			} else if proposed {
-				self.state = Some(State::Proposed(prevote_timer, precommit_timer));
-			} else {
-				self.state = Some(State::Start(prevote_timer, precommit_timer));
-			}
-
-			Ok(())
+	async fn handle_prevote(
+		&mut self,
+		last_round_state: &RoundState<H, N>,
+		mut prevote_timer: E::Timer,
+		precommit_timer: E::Timer,
+		proposed: bool,
+	) -> Result<(), E::Error> {
+		let should_prevote = match (&mut prevote_timer).await {
+			Err(e) => return Err(e),
+			Ok(()) => true,
 		};
+
+		if should_prevote {
+			if self.voting.is_active() {
+				if let Some(prevote) = self.construct_prevote(last_round_state)? {
+					debug!(target: "afg", "Casting prevote for round {}", self.votes.number());
+					self.env.prevoted(self.round_number(), prevote.clone())?;
+					self.votes.set_prevoted_index();
+					self.outgoing.push(Message::Prevote(prevote));
+					self.state = Some(State::Prevoted(precommit_timer));
+				} else {
+					// when we can't construct a prevote, we shouldn't
+					// precommit.
+					self.state = None;
+					self.voting = Voting::No;
+				}
+			} else {
+				self.state = Some(State::Prevoted(precommit_timer));
+			}
+		} else if proposed {
+			self.state = Some(State::Proposed(prevote_timer, precommit_timer));
+		} else {
+			self.state = Some(State::Start(prevote_timer, precommit_timer));
+		}
+
+		Ok(())
+	}
+
+	async fn prevote(&mut self, last_round_state: &RoundState<H, N>) -> Result<(), E::Error> {
+		let state = self.state.take();
 
 		match state {
 			Some(State::Start(prevote_timer, precommit_timer)) => {
-				handle_prevote(prevote_timer, precommit_timer, false)?;
+				self.handle_prevote(last_round_state, prevote_timer, precommit_timer, false).await?;
 			},
 			Some(State::Proposed(prevote_timer, precommit_timer)) => {
-				handle_prevote(prevote_timer, precommit_timer, true)?;
+				self.handle_prevote(last_round_state, prevote_timer, precommit_timer, true).await?;
 			},
 			x => { self.state = x; }
 		}
@@ -508,7 +505,7 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 		Ok(())
 	}
 
-	fn precommit(&mut self, cx: &mut Context, last_round_state: &RoundState<H, N>) -> Result<(), E::Error> {
+	async fn precommit(&mut self, last_round_state: &RoundState<H, N>) -> Result<(), E::Error> {
 		match self.state.take() {
 			Some(State::Prevoted(mut precommit_timer)) => {
 				let last_round_estimate = last_round_state.estimate.clone()
@@ -521,10 +518,9 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 						p_g == &last_round_estimate ||
 							self.env.is_equal_or_descendent_of(last_round_estimate.0, p_g.0.clone())
 					})
-				} && match precommit_timer.poll_unpin(cx) {
-					Poll::Ready(Err(e)) => return Err(e),
-					Poll::Ready(Ok(())) => true,
-					Poll::Pending => self.votes.completable(),
+				} && match (&mut precommit_timer).await {
+					Err(e) => return Err(e),
+					Ok(()) => true,
 				};
 
 				if should_precommit {
