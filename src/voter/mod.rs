@@ -45,7 +45,7 @@ use crate::{
 };
 use crate::voter_set::VoterSet;
 use crate::weights::VoteWeight;
-use past_rounds::PastRounds;
+use past_rounds::BackgroundRound;
 use voting_round::{VotingRound, State as VotingRoundState};
 
 mod past_rounds;
@@ -429,7 +429,6 @@ struct InnerVoterState<H, N, E> where
 	E: Environment<H, N> + Send + Sync,
 {
 	best_round: VotingRound<H, N, E>,
-	past_rounds: PastRounds<H, N, E>,
 }
 
 /// A future that maintains and multiplexes between different rounds,
@@ -514,14 +513,15 @@ impl<H, N, E: Environment<H, N> + Send + Sync, GlobalIn, GlobalOut> Voter<H, N, 
 		last_round_votes: Vec<SignedMessage<H, N, E::Signature, E::Id>>,
 		last_round_base: (H, N),
 		last_finalized: (H, N),
-	) -> Self {
+	) -> Result<Self, E::Error> {
 		let (finalized_sender, finalized_notifications) = mpsc::unbounded();
 		let last_finalized_number = last_finalized.1;
+
+		let (global_in, mut global_out) = global_comms;
 
 		// re-start the last round and queue all messages to be processed on first poll.
 		// keep it in the background so we can push the estimate backwards until finalized
 		// by actually waiting for more messages.
-		let mut past_rounds = PastRounds::new();
 		let mut last_round_state = crate::bridge_state::bridge_state(RoundState::genesis(last_round_base.clone())).1;
 
 		if last_round_number > 0 {
@@ -536,7 +536,10 @@ impl<H, N, E: Environment<H, N> + Send + Sync, GlobalIn, GlobalOut> Voter<H, N, 
 
 			if let Some(mut last_round) = maybe_completed_last_round {
 				last_round_state = last_round.bridge_state();
-				past_rounds.push(&*env, last_round);
+				let mut background_round = BackgroundRound::new(&*env, last_round);
+				let (number, commit) = background_round.poll().await?;
+				global_out.send(CommunicationOut::Commit(number, commit)).await;
+				// past_rounds.push(&*env, last_round);
 			}
 
 			// when there is no information about the last completed round,
@@ -554,14 +557,11 @@ impl<H, N, E: Environment<H, N> + Send + Sync, GlobalIn, GlobalOut> Voter<H, N, 
 			env.clone(),
 		).await;
 
-		let (global_in, global_out) = global_comms;
-
 		let inner = Arc::new(RwLock::new(InnerVoterState {
 			best_round,
-			past_rounds,
 		}));
 
-		Voter {
+		Ok(Voter {
 			env,
 			voters,
 			inner,
@@ -570,7 +570,7 @@ impl<H, N, E: Environment<H, N> + Send + Sync, GlobalIn, GlobalOut> Voter<H, N, 
 			last_finalized_in_rounds: last_finalized,
 			global_in,
 			global_out: Buffered::new(global_out),
-		}
+		})
 	}
 
 	async fn prune_background_rounds(&mut self) -> Result<(), E::Error> {
@@ -579,8 +579,6 @@ impl<H, N, E: Environment<H, N> + Send + Sync, GlobalIn, GlobalOut> Voter<H, N, 
 
 			// Do work on all background rounds, broadcasting any commits generated.
 			while let Some(item) = inner.past_rounds.next().await {
-				let (number, commit) = item?;
-				self.global_out.push(CommunicationOut::Commit(number, commit));
 			}
 		}
 
