@@ -45,7 +45,7 @@ use crate::{
 };
 use crate::voter_set::VoterSet;
 use crate::weights::VoteWeight;
-use past_rounds::BackgroundRound;
+use past_rounds::PastRounds;
 use voting_round::{VotingRound, State as VotingRoundState};
 
 mod past_rounds;
@@ -429,6 +429,7 @@ struct InnerVoterState<H, N, E> where
 	E: Environment<H, N> + Send + Sync,
 {
 	best_round: VotingRound<H, N, E>,
+	past_rounds: PastRounds<H, N, E>,
 }
 
 /// A future that maintains and multiplexes between different rounds,
@@ -517,11 +518,12 @@ impl<H, N, E: Environment<H, N> + Send + Sync, GlobalIn, GlobalOut> Voter<H, N, 
 		let (finalized_sender, finalized_notifications) = mpsc::unbounded();
 		let last_finalized_number = last_finalized.1;
 
-		let (global_in, mut global_out) = global_comms;
+		let (global_in, global_out) = global_comms;
 
 		// re-start the last round and queue all messages to be processed on first poll.
 		// keep it in the background so we can push the estimate backwards until finalized
 		// by actually waiting for more messages.
+		let mut past_rounds = PastRounds::new();
 		let mut last_round_state = crate::bridge_state::bridge_state(RoundState::genesis(last_round_base.clone())).1;
 
 		if last_round_number > 0 {
@@ -536,12 +538,8 @@ impl<H, N, E: Environment<H, N> + Send + Sync, GlobalIn, GlobalOut> Voter<H, N, 
 
 			if let Some(mut last_round) = maybe_completed_last_round {
 				last_round_state = last_round.bridge_state();
-				let mut background_round = BackgroundRound::new(&*env, last_round);
-				let (number, commit) = background_round.poll().await?;
-				global_out.send(CommunicationOut::Commit(number, commit)).await;
-				// past_rounds.push(&*env, last_round);
+				past_rounds.push(&*env, last_round);
 			}
-
 			// when there is no information about the last completed round,
 			// the best we can do is assume that the estimate == the given base
 			// and that it is finalized. This is always the case for the genesis
@@ -559,6 +557,7 @@ impl<H, N, E: Environment<H, N> + Send + Sync, GlobalIn, GlobalOut> Voter<H, N, 
 
 		let inner = Arc::new(RwLock::new(InnerVoterState {
 			best_round,
+			past_rounds,
 		}));
 
 		Ok(Voter {
@@ -578,7 +577,10 @@ impl<H, N, E: Environment<H, N> + Send + Sync, GlobalIn, GlobalOut> Voter<H, N, 
 			let mut inner = self.inner.write();
 
 			// Do work on all background rounds, broadcasting any commits generated.
-			while let Some(item) = inner.past_rounds.next().await {
+			while let Some(item) = inner.past_rounds.iter().next() {
+				if let Some((number, commit)) = item.poll().await? {
+					self.global_out.push(CommunicationOut::Commit(number, commit));
+				}
 			}
 		}
 
@@ -1025,8 +1027,8 @@ mod tests {
 		environment::{Environment, Id, Signature},
 	};
 	use crate::weights::{VoteWeight, VoterWeight};
-	use futures::executor::LocalPool;
-	use futures::task::SpawnExt;
+	use futures::executor::{block_on, LocalPool};
+	use futures::task::{Poll, SpawnExt};
 	use futures_timer::Delay;
 	use std::iter;
 	use std::time::Duration;
@@ -1050,7 +1052,7 @@ mod tests {
 
 		// run voter in background. scheduling it to shut down at the end.
 		let finalized = env.finalized_stream();
-		let voter = Voter::new(
+		let mut voter = block_on(Voter::new(
 			env.clone(),
 			voters,
 			global_comms,
@@ -1058,10 +1060,12 @@ mod tests {
 			Vec::new(),
 			last_finalized,
 			last_finalized,
-		);
+		)).expect("Voter not created");
 
 		let mut pool = LocalPool::new();
-		pool.spawner().spawn(voter.map(|v| v.expect("Error voting"))).unwrap();
+		pool.spawner().spawn(async move {
+			voter.poll();
+		}).unwrap();
 		pool.spawner().spawn(routing_task).unwrap();
 
 		// wait for the best block to finalize.
@@ -1090,7 +1094,7 @@ mod tests {
 
 			// run voter in background. scheduling it to shut down at the end.
 			let finalized = env.finalized_stream();
-			let voter = Voter::new(
+			let mut voter = block_on(Voter::new(
 				env.clone(),
 				voters.clone(),
 				network.make_global_comms(),
@@ -1098,9 +1102,11 @@ mod tests {
 				Vec::new(),
 				last_finalized,
 				last_finalized,
-			);
+			)).expect("Voter not created");
 
-			pool.spawner().spawn(voter.map(|v| v.expect("Error voting"))).unwrap();
+			pool.spawner().spawn(async move {
+				voter.poll();
+			}).unwrap();
 
 			// wait for the best block to be finalized by all honest voters
 			finalized
@@ -1134,7 +1140,7 @@ mod tests {
 
 			// run voter in background. scheduling it to shut down at the end.
 			let finalized = env.finalized_stream();
-			let voter = Voter::new(
+			let mut voter = block_on(Voter::new(
 				env.clone(),
 				voters.clone(),
 				network.make_global_comms(),
@@ -1142,10 +1148,12 @@ mod tests {
 				Vec::new(),
 				last_finalized,
 				last_finalized,
-			);
+			)).expect("Voter not created");
 			let voter_state = voter.voter_state();
 
-			pool.spawner().spawn(voter.map(|v| v.expect("Error voting"))).unwrap();
+			pool.spawner().spawn(async move {
+				voter.poll();
+			}).unwrap();
 
 			(
 				// wait for the best block to be finalized by all honest voters
@@ -1200,7 +1208,7 @@ mod tests {
 		});
 
 		// run voter in background. scheduling it to shut down at the end.
-		let voter = Voter::new(
+		let mut voter = block_on(Voter::new(
 			env.clone(),
 			voters.clone(),
 			global_comms,
@@ -1208,10 +1216,12 @@ mod tests {
 			Vec::new(),
 			last_finalized,
 			last_finalized,
-		);
+		)).expect("Voter not created");
 
 		let mut pool = LocalPool::new();
-		pool.spawner().spawn(voter.map(|v| v.expect("Error voting"))).unwrap();
+		pool.spawner().spawn(async move {
+			voter.poll();
+		}).unwrap();
 		pool.spawner().spawn(routing_task).unwrap();
 
 		// wait for the node to broadcast a commit message
@@ -1261,7 +1271,7 @@ mod tests {
 		});
 
 		// run voter in background. scheduling it to shut down at the end.
-		let voter = Voter::new(
+		let mut voter = block_on(Voter::new(
 			env.clone(),
 			voters.clone(),
 			global_comms,
@@ -1269,10 +1279,12 @@ mod tests {
 			Vec::new(),
 			last_finalized,
 			last_finalized,
-		);
+		)).expect("Voter not created");
 
 		let mut pool = LocalPool::new();
-		pool.spawner().spawn(voter.map(|v| v.expect("Error voting: {:?}"))).unwrap();
+		pool.spawner().spawn(async move {
+			voter.poll();
+		}).unwrap();
 		pool.spawner().spawn(routing_task.map(|_| ())).unwrap();
 
 		pool.spawner().spawn(
@@ -1350,7 +1362,7 @@ mod tests {
 		});
 
 		// run voter in background.
-		let voter = Voter::new(
+		let mut voter = block_on(Voter::new(
 			env.clone(),
 			voters.clone(),
 			global_comms,
@@ -1358,10 +1370,12 @@ mod tests {
 			Vec::new(),
 			last_finalized,
 			last_finalized,
-		);
+		)).expect("Voter not created");
 
 		let mut pool = LocalPool::new();
-		pool.spawner().spawn(voter.map(|v| v.expect("Error voting"))).unwrap();
+		pool.spawner().spawn(async move {
+			voter.poll();
+		}).unwrap();
 		pool.spawner().spawn(routing_task.map(|_| ())).unwrap();
 
 		// Send the commit message.
@@ -1393,7 +1407,7 @@ mod tests {
 		pool.spawner().spawn(routing_task.map(|_| ())).unwrap();
 
 		// initialize unsynced voter at round 0
-		let (env, unsynced_voter) = {
+		let (env, mut unsynced_voter) = {
 			let local_id = Id(4);
 
 			let env = Arc::new(Environment::new(network.clone(), local_id));
@@ -1402,7 +1416,7 @@ mod tests {
 				chain.last_finalized()
 			});
 
-			let voter = Voter::new(
+			let voter = block_on(Voter::new(
 				env.clone(),
 				voters.clone(),
 				network.make_global_comms(),
@@ -1410,7 +1424,7 @@ mod tests {
 				Vec::new(),
 				last_finalized,
 				last_finalized,
-			);
+			)).expect("Voter not created");
 
 			(env, voter)
 		};
@@ -1443,7 +1457,9 @@ mod tests {
 		assert_eq!(voter_state.get().background_rounds.get(&5), None);
 
 		// spawn the voter in the background
-		pool.spawner().spawn(unsynced_voter.map(|_| ())).unwrap();
+		pool.spawner().spawn(async move {
+			unsynced_voter.poll();
+		}).unwrap();
 
 		// wait until it's caught up, it should skip to round 6 and send a
 		// finality notification for the block that was finalized by catching
@@ -1505,7 +1521,7 @@ mod tests {
 		});
 
 		// run voter in background. scheduling it to shut down at the end.
-		let voter = Voter::new(
+		let mut voter = block_on(Voter::new(
 			env.clone(),
 			voters,
 			global_comms,
@@ -1513,10 +1529,12 @@ mod tests {
 			Vec::new(),
 			last_finalized,
 			last_finalized,
-		);
+		)).expect("Voter not created");
 
 		let mut pool = LocalPool::new();
-		pool.spawner().spawn(voter.map(|v| v.expect("Error voting"))).unwrap();
+		pool.spawner().spawn(async move {
+			voter.poll().await;
+		}).unwrap();
 		pool.spawner().spawn(routing_task.map(|_| ())).unwrap();
 
 		// wait for the best block to finalize.

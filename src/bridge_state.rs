@@ -84,8 +84,8 @@ mod tests {
 		};
 
 		let (prior, latter) = bridge_state(initial);
-		let waits_for_finality = ::futures::future::poll_fn(move |cx| -> Poll<()> {
-			if latter.get(cx).finalized.is_some() {
+		let waits_for_finality = ::futures::future::poll_fn(move |_| -> Poll<()> {
+			if latter.get().finalized.is_some() {
 				Poll::Ready(())
 			} else {
 				Poll::Pending

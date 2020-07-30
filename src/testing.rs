@@ -135,6 +135,7 @@ pub mod environment {
 		Chain, Commit, Equivocation, Error, HistoricalVotes, Message, Precommit, Prevote,
 		PrimaryPropose, SignedMessage,
 	};
+	use async_trait::async_trait;
 	use futures::channel::mpsc::{self, UnboundedReceiver, UnboundedSender};
 	use futures::prelude::*;
 	use futures_timer::Delay;
@@ -198,6 +199,7 @@ pub mod environment {
 		}
 	}
 
+	#[async_trait]
 	impl crate::voter::Environment<&'static str, u32> for Environment {
 		type Timer = Box<dyn Future<Output = Result<(), Error>> + Unpin + Send + Sync>;
 		type Id = Id;
@@ -213,7 +215,7 @@ pub mod environment {
 			Pin<Box<dyn Sink<Message<&'static str, u32>, Error = Error> + Send + Sync + 'static>>;
 		type Error = Error;
 
-		fn round_data(&self, round: u64) -> RoundData<Self::Id, Self::Timer, Self::In, Self::Out> {
+		async fn round_data(&self, round: u64) -> RoundData<Self::Id, Self::Timer, Self::In, Self::Out> {
 			const GOSSIP_DURATION: Duration = Duration::from_millis(500);
 
 			let (incoming, outgoing) = self.network.make_round_comms(round, self.local_id);

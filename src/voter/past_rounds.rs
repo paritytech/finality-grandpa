@@ -24,12 +24,11 @@
 #[cfg(feature = "std")]
 use futures::prelude::*;
 use futures::stream;
-use futures::task;
-use futures::channel::mpsc;
+use futures::channel::{mpsc, oneshot};
 #[cfg(feature = "std")]
 use log::{debug, trace};
-
 use std::cmp;
+use std::collections::HashMap;
 
 use crate::{Commit, BlockNumberOps};
 use super::Environment;
@@ -44,35 +43,15 @@ pub(super) struct BackgroundRound<H, N, E: Environment<H, N>> where
 	N: Copy + BlockNumberOps + ::std::fmt::Debug,
 {
 	inner: VotingRound<H, N, E>,
-	waker: Option<task::Waker>,
 	finalized_number: N,
 	round_committer: RoundCommitter<H, N, E>,
+	done: (oneshot::Sender<bool>, oneshot::Receiver<bool>),
 }
 
 impl<H, N, E: Environment<H, N> + Send + Sync> BackgroundRound<H, N, E> where
 	H: Clone + Eq + Ord + ::std::fmt::Debug + Send + Sync + Unpin,
 	N: Copy + BlockNumberOps + ::std::fmt::Debug + Send + Sync + Unpin,
 {
-
-	// push an old voting round onto this stream.
-	pub(super) fn new(env: &E, round: VotingRound<H, N, E>) -> Self {
-		let round_number = round.round_number();
-		let (tx, rx) = mpsc::unbounded();
-		let background = BackgroundRound {
-			inner: round,
-			waker: None,
-			// https://github.com/paritytech/finality-grandpa/issues/50
-			finalized_number: N::zero(),
-			round_committer: RoundCommitter::new(
-				env.round_commit_timer(),
-				rx,
-			),
-		};
-		// self.past_rounds.push(background.into());
-		// self.commit_senders.insert(round_number, tx);
-		background
-	}
-
 	fn round_number(&self) -> u64 {
 		self.inner.round_number()
 	}
@@ -88,19 +67,12 @@ impl<H, N, E: Environment<H, N> + Send + Sync> BackgroundRound<H, N, E> where
 		//   - rounds are not backgrounded when incomplete unless we've skipped forward
 		//   - if we skipped forward we may never complete this round and we don't need
 		//     to keep it forever.
-		self.round_committer.is_none() && self.inner.round_state().estimate
+		self.inner.round_state().estimate
 			.map_or(true, |x| x.1 <= self.finalized_number)
 	}
 
 	fn update_finalized(&mut self, new_finalized: N) {
 		self.finalized_number = cmp::max(self.finalized_number, new_finalized);
-
-		// wake up the future to be polled if done.
-		if self.is_done() {
-			if let Some(ref waker) = self.waker {
-				waker.wake_by_ref();
-			}
-		}
 	}
 
 	pub(super) async fn poll(&mut self) -> Result<Option<(u64, Commit<H, N, E::Signature, E::Id>)>, E::Error> {
@@ -120,19 +92,20 @@ impl<H, N, E: Environment<H, N> + Send + Sync> BackgroundRound<H, N, E> where
 
 				Ok(Some((number, commit)))
 			},
-			None => None,
+			None => Ok(None),
 		};
 
-		if self.is_done() {
-			// if this is fully concluded (has committed _and_ estimate finalized)
-			// we bail for real.
-			self.inner.env().concluded(
-				self.inner.round_number(),
-				self.inner.round_state(),
-				self.inner.dag_base(),
-				self.inner.historical_votes(),
-			)?;
-		}
+		let (_, done_rx) = &mut self.done;
+		done_rx.await;
+
+		// if this is fully concluded (has committed _and_ estimate finalized)
+		// we bail for real.
+		self.inner.env().concluded(
+			self.inner.round_number(),
+			self.inner.round_state(),
+			self.inner.dag_base(),
+			self.inner.historical_votes(),
+		)?;
 
 		commit_result
 	}
@@ -223,74 +196,76 @@ impl<H, N, E: Environment<H, N>> RoundCommitter<H, N, E> where
 	}
 }
 
-// A stream for past rounds, which produces any commit messages from those
-// rounds and drives them to completion.
-// pub(super) struct PastRounds<H, N, E: Environment<H, N>> where
-// 	H: Clone + Eq + Ord + ::std::fmt::Debug + Send + Sync,
-// 	N: Copy + BlockNumberOps + ::std::fmt::Debug,
-// {
-// 	past_rounds: FuturesUnordered<SelfReturningFuture<BackgroundRound<H, N, E>>>,
-// 	commit_senders: HashMap<u64, mpsc::UnboundedSender<Commit<H, N, E::Signature, E::Id>>>,
-// }
+/// A container for past rounds, which produces any commit messages from those
+/// rounds and drives them to completion.
+pub(super) struct PastRounds<H, N, E: Environment<H, N>> where
+	H: Clone + Eq + Ord + ::std::fmt::Debug + Send + Sync,
+	N: Copy + BlockNumberOps + ::std::fmt::Debug,
+{
+	past_rounds: Vec<BackgroundRound<H, N, E>>,
+	commit_senders: HashMap<u64, mpsc::UnboundedSender<Commit<H, N, E::Signature, E::Id>>>,
+}
 
-// impl<H, N, E: Environment<H, N>> PastRounds<H, N, E> where
-// 	H: Clone + Eq + Ord + ::std::fmt::Debug + Send + Sync + Unpin,
-// 	N: Copy + BlockNumberOps + ::std::fmt::Debug + Unpin,
-// {
-// 	/// Create a new past rounds stream.
-// 	pub(super) fn new() -> Self {
-// 		PastRounds {
-// 			past_rounds: FuturesUnordered::new(),
-// 			commit_senders: HashMap::new(),
-// 		}
-// 	}
+impl<H, N, E: Environment<H, N> + Send + Sync> PastRounds<H, N, E> where
+	H: Clone + Eq + Ord + ::std::fmt::Debug + Send + Sync + Unpin,
+	N: Copy + BlockNumberOps + ::std::fmt::Debug + Send + Sync + Unpin,
+{
+	/// Create a new past rounds stream.
+	pub(super) fn new() -> Self {
+		PastRounds {
+			past_rounds: vec![],
+			commit_senders: HashMap::new(),
+		}
+	}
 
-// 	// push an old voting round onto this stream.
-// 	pub(super) fn push(&mut self, env: &E, round: VotingRound<H, N, E>) {
-// 		let round_number = round.round_number();
-// 		let (tx, rx) = mpsc::unbounded();
-// 		let background = BackgroundRound {
-// 			inner: round,
-// 			waker: None,
-// 			// https://github.com/paritytech/finality-grandpa/issues/50
-// 			finalized_number: N::zero(),
-// 			round_committer: Some(RoundCommitter::new(
-// 				env.round_commit_timer(),
-// 				rx,
-// 			)),
-// 			inner_future: None,
-// 		};
-// 		self.past_rounds.push(background.into());
-// 		self.commit_senders.insert(round_number, tx);
-// 	}
+	// push an old voting round onto this stream.
+	pub(super) fn push(&mut self, env: &E, round: VotingRound<H, N, E>) {
+		let round_number = round.round_number();
+		let (tx, rx) = mpsc::unbounded();
+		let background = BackgroundRound {
+			inner: round,
+			// https://github.com/paritytech/finality-grandpa/issues/50
+			finalized_number: N::zero(),
+			round_committer: RoundCommitter::new(
+				env.round_commit_timer(),
+				rx,
+			),
+			done: oneshot::channel(),
+		};
+		self.past_rounds.push(background.into());
+		self.commit_senders.insert(round_number, tx);
+	}
 
-// 	/// update the last finalized block. this will lead to
-// 	/// any irrelevant background rounds being pruned.
-// 	pub(super) fn update_finalized(&mut self, f_num: N) {
-// 		// have the task check if it should be pruned.
-// 		// if so, this future will be re-polled
-// 		for bg in self.past_rounds.iter_mut() {
-// 			bg.mutate(|f| f.update_finalized(f_num));
-// 		}
-// 	}
+	/// update the last finalized block. this will lead to
+	/// any irrelevant background rounds being pruned.
+	pub(super) fn update_finalized(&mut self, f_num: N) {
+		// have the task check if it should be pruned.
+		// if so, this future will be re-polled
+		for bg in self.past_rounds.iter_mut() {
+			bg.update_finalized(f_num);
+		}
+	}
 
-// 	/// Get the underlying `VotingRound` items that are being run in the background.
-// 	pub(super) fn voting_rounds(&self) -> impl Iterator<Item = &VotingRound<H, N, E>> {
-// 		self.past_rounds
-// 			.iter()
-// 			.filter_map(|self_returning_future| self_returning_future.inner.as_ref())
-// 			.map(|background_round| background_round.voting_round())
-// 	}
+	/// Get the underlying `VotingRound` items that are being run in the background.
+	pub(super) fn voting_rounds(&self) -> impl Iterator<Item = &VotingRound<H, N, E>> {
+		self.past_rounds
+			.iter()
+			.map(|background_round| background_round.voting_round())
+	}
 
-// 	// import the commit into the given backgrounded round. If not possible,
-// 	// just return and process the commit.
-// 	pub(super) fn import_commit(&self, round_number: u64, commit: Commit<H, N, E::Signature, E::Id>)
-// 		-> Option<Commit<H, N, E::Signature, E::Id>>
-// 	{
-// 		if let Some(sender) = self.commit_senders.get(&round_number) {
-// 			sender.unbounded_send(commit).map_err(|e| e.into_inner()).err()
-// 		} else {
-// 			Some(commit)
-// 		}
-// 	}
-// }
+	// import the commit into the given backgrounded round. If not possible,
+	// just return and process the commit.
+	pub(super) fn import_commit(&self, round_number: u64, commit: Commit<H, N, E::Signature, E::Id>)
+		-> Option<Commit<H, N, E::Signature, E::Id>>
+	{
+		if let Some(sender) = self.commit_senders.get(&round_number) {
+			sender.unbounded_send(commit).map_err(|e| e.into_inner()).err()
+		} else {
+			Some(commit)
+		}
+	}
+
+	pub(super) fn iter(&mut self) -> impl Iterator<Item = &mut BackgroundRound<H, N, E>> {
+		self.past_rounds.iter_mut()
+	}
+}
