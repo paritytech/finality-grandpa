@@ -115,15 +115,13 @@ impl<Id: Ord + Eq + Clone, Vote: Clone + Eq, Signature: Clone + Eq> VoteTracker<
 				// import, but ignore further equivocations.
 				let new_val = match *occupied.get_mut() {
 					VoteMultiplicity::Single(ref v, ref s) =>
-						Some(VoteMultiplicity::Equivocated((v.clone(), s.clone()), (vote, signature))),
+						VoteMultiplicity::Equivocated((v.clone(), s.clone()), (vote, signature)),
 					VoteMultiplicity::Equivocated(_, _) => {
 						return AddVoteResult { multiplicity: None, duplicated: false }
 					}
 				};
 
-				if let Some(new_val) = new_val {
-					*occupied.get_mut() = new_val;
-				}
+				*occupied.get_mut() = new_val;
 
 				AddVoteResult {
 					multiplicity: Some(&*occupied.into_mut()),
