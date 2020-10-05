@@ -16,7 +16,7 @@
 
 use crate::round::State as RoundState;
 use futures::task;
-use parking_lot::{RwLock, RwLockReadGuard};
+use async_rwlock::{RwLock, RwLockReadGuard};
 use std::sync::Arc;
 
 // round state bridged across rounds.
@@ -39,8 +39,8 @@ pub(crate) struct PriorView<H, N>(Arc<Bridged<H, N>>);
 
 impl<H, N> PriorView<H, N> {
 	/// Push an update to the latter view.
-	pub(crate) fn update(&self, new: RoundState<H, N>) {
-		*self.0.inner.write() = new;
+	pub(crate) async fn update(&self, new: RoundState<H, N>) {
+		*self.0.inner.write().await = new;
 		self.0.waker.wake();
 	}
 }
@@ -50,8 +50,8 @@ pub(crate) struct LatterView<H, N>(Arc<Bridged<H, N>>);
 
 impl<H, N> LatterView<H, N> {
 	/// Fetch a handle to the last round-state.
-	pub(crate) fn get(&self) -> RwLockReadGuard<RoundState<H, N>> {
-		self.0.inner.read()
+	pub(crate) async fn get(&self) -> RwLockReadGuard<'_, RoundState<H, N>> {
+		self.0.inner.read().await
 	}
 }
 
@@ -71,7 +71,7 @@ pub(crate) fn bridge_state<H, N>(initial: RoundState<H, N>) -> (PriorView<H, N>,
 
 #[cfg(test)]
 mod tests {
-	use std::{sync::Barrier, task::Poll};
+	use std::sync::Barrier;
 	use super::*;
 
 	#[test]
@@ -84,13 +84,9 @@ mod tests {
 		};
 
 		let (prior, latter) = bridge_state(initial);
-		let waits_for_finality = ::futures::future::poll_fn(move |_| -> Poll<()> {
-			if latter.get().finalized.is_some() {
-				Poll::Ready(())
-			} else {
-				Poll::Pending
-			}
-		});
+		let waits_for_finality = async {
+			while !latter.get().await.finalized.is_some() {}
+		};
 
 		let barrier = Arc::new(Barrier::new(2));
 		let barrier_other = barrier.clone();

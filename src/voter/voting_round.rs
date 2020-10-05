@@ -184,7 +184,11 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 		// we only cast votes when we have access to the previous round state.
 		// we might have started this round as a prospect "future" round to
 		// check whether the voter is lagging behind the current round.
-		let last_round_state = self.last_round_state.as_ref().map(|s| s.get().clone());
+		let last_round_state = match self.last_round_state.as_ref() {
+			Some(s) => Some(s.get().await.clone()),
+			None => None,
+		};
+
 		if let Some(ref last_round_state) = last_round_state {
 			self.primary_propose(last_round_state)?;
 			self.prevote(last_round_state).await?;
