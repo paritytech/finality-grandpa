@@ -1048,7 +1048,7 @@ mod tests {
 
 		// initialize chain
 		let last_finalized = env.with_chain(|chain| {
-			chain.push_blocks(GENESIS_HASH, &["A", "B", "C", "D", "E"]);
+			chain.push_blocks(GENESIS_HASH.into(), &["A".to_string(), "B".to_string(), "C".to_string(), "D".to_string(), "E".to_string()]);
 			chain.last_finalized()
 		});
 
@@ -1056,18 +1056,18 @@ mod tests {
 
 		// run voter in background. scheduling it to shut down at the end.
 		let mut pool = LocalPool::new();
-		let voter = block_on(Voter::new(
-			env.clone(),
-			voters,
-			global_comms,
-			0,
-			Vec::new(),
-			last_finalized,
-			last_finalized,
-		)).expect("voter not created");
 
 		pool.spawner().spawn(async move {
-			voter.vote().await.unwrap()
+			let mut voter = Voter::new(
+				env.clone(),
+				voters,
+				global_comms,
+				0,
+				Vec::new(),
+				last_finalized.clone(),
+				last_finalized,
+			).await.expect("voter not created");
+			voter.vote().await.unwrap();
 		}).unwrap();
 		pool.spawner().spawn(routing_task).unwrap();
 
@@ -1080,8 +1080,6 @@ mod tests {
 	#[test]
 	fn finalizing_at_fault_threshold() {
 		// 10 voters
-		let voters = VoterSet::new((0..10).map(|i| (Id(i), 1))).expect("nonempty");
-
 		let (network, routing_task) = testing::environment::make_network();
 		let mut pool = LocalPool::new();
 
@@ -1091,24 +1089,28 @@ mod tests {
 			// initialize chain
 			let env = Arc::new(Environment::new(network.clone(), local_id));
 			let last_finalized = env.with_chain(|chain| {
-				chain.push_blocks(GENESIS_HASH, &["A", "B", "C", "D", "E"]);
+				chain.push_blocks(GENESIS_HASH.into(), &["A".to_string(), "B".to_string(), "C".to_string(), "D".to_string(), "E".to_string()]);
 				chain.last_finalized()
 			});
+
+			let global_comms = network.make_global_comms();
 
 			// run voter in background. scheduling it to shut down at the end.
 			let finalized = env.finalized_stream();
 
-			pool.spawner().spawn(Voter::new(
-				env.clone(),
-				voters,
-				network.make_global_comms(),
-				0,
-				Vec::new(),
-				last_finalized,
-				last_finalized,
-			).then(|voter|
-				voter.expect("voter not created").vote().map(|_| ())
-			)).unwrap();
+			pool.spawner().spawn(async move {
+				let voters = VoterSet::new((0..10).map(|i| (Id(i), 1))).expect("nonempty");
+				let mut voter = Voter::new(
+					env.clone(),
+					voters.clone(),
+					global_comms,
+					0,
+					Vec::new(),
+					last_finalized.clone(),
+					last_finalized,
+				).await.expect("voter not created");
+				voter.vote().await.unwrap()
+			}).unwrap();
 
 			// wait for the best block to be finalized by all honest voters
 			finalized
@@ -1136,7 +1138,7 @@ mod tests {
 			// initialize chain
 			let env = Arc::new(Environment::new(network.clone(), local_id));
 			let last_finalized = env.with_chain(|chain| {
-				chain.push_blocks(GENESIS_HASH, &["A", "B", "C", "D", "E"]);
+				chain.push_blocks(GENESIS_HASH.into(), &["A".to_string(), "B".to_string(), "C".to_string(), "D".to_string(), "E".to_string()]);
 				chain.last_finalized()
 			});
 
@@ -1148,12 +1150,14 @@ mod tests {
 				network.make_global_comms(),
 				0,
 				Vec::new(),
-				last_finalized,
+				last_finalized.clone(),
 				last_finalized,
 			)).expect("Voter not created");
 			let voter_state = voter.voter_state();
 
-			pool.spawner().spawn(voter.vote().map(|_| ())).unwrap();
+			pool.spawner().spawn(async move {
+				voter.vote().await.unwrap()
+			}).unwrap();
 
 			(
 				// wait for the best block to be finalized by all honest voters
@@ -1211,23 +1215,24 @@ mod tests {
 
 		// initialize chain
 		let last_finalized = env.with_chain(|chain| {
-			chain.push_blocks(GENESIS_HASH, &["A", "B", "C", "D", "E"]);
+			chain.push_blocks(GENESIS_HASH.into(), &["A".to_string(), "B".to_string(), "C".to_string(), "D".to_string(), "E".to_string()]);
 			chain.last_finalized()
 		});
 
 		let mut pool = LocalPool::new();
 		// run voter in background. scheduling it to shut down at the end.
-		pool.spawner().spawn(Voter::new(
-			env.clone(),
-			voters,
-			global_comms,
-			0,
-			Vec::new(),
-			last_finalized,
-			last_finalized,
-		).then(|voter|
-			voter.expect("voter not created").vote().map(|_| ())
-		)).unwrap();
+		pool.spawner().spawn(async move {
+			let mut voter = Voter::new(
+				env.clone(),
+				voters.clone(),
+				global_comms,
+				0,
+				Vec::new(),
+				last_finalized.clone(),
+				last_finalized,
+			).await.expect("voter not created");
+			voter.vote().await.unwrap()
+		}).unwrap();
 		pool.spawner().spawn(routing_task).unwrap();
 
 		// wait for the node to broadcast a commit message
@@ -1248,20 +1253,20 @@ mod tests {
 		let (round_stream, round_sink) = network.make_round_comms(1, test_id);
 
 		let prevote = Message::Prevote(Prevote {
-			target_hash: "E",
+			target_hash: "E".to_string(),
 			target_number: 6,
 		});
 
 		let precommit = Message::Precommit(Precommit {
-			target_hash: "E",
+			target_hash: "E".to_string(),
 			target_number: 6,
 		});
 
 		let commit = (1, Commit {
-			target_hash: "E",
+			target_hash: "E".to_string(),
 			target_number: 6,
 			precommits: vec![SignedPrecommit {
-				precommit: Precommit { target_hash: "E", target_number: 6 },
+				precommit: Precommit { target_hash: "E".to_string(), target_number: 6 },
 				signature: Signature(test_id.0),
 				id: test_id
 			}],
@@ -1272,23 +1277,24 @@ mod tests {
 
 		// initialize chain
 		let last_finalized = env.with_chain(|chain| {
-			chain.push_blocks(GENESIS_HASH, &["A", "B", "C", "D", "E"]);
+			chain.push_blocks(GENESIS_HASH.into(), &["A".to_string(), "B".to_string(), "C".to_string(), "D".to_string(), "E".to_string()]);
 			chain.last_finalized()
 		});
 
 		let mut pool = LocalPool::new();
 		// run voter in background. scheduling it to shut down at the end.
-		pool.spawner().spawn(Voter::new(
-			env.clone(),
-			voters,
-			global_comms,
-			0,
-			Vec::new(),
-			last_finalized,
-			last_finalized,
-		).then(|voter|
-			voter.expect("voter not created").vote().map(|_| ())
-		)).unwrap();
+		pool.spawner().spawn(async move {
+			let mut voter = Voter::new(
+				env.clone(),
+				voters.clone(),
+				global_comms,
+				0,
+				Vec::new(),
+				last_finalized.clone(),
+				last_finalized,
+			).await.expect("voter not created");
+			voter.vote().await.unwrap()
+		}).unwrap();
 
 		pool.spawner().spawn(routing_task.map(|_| ())).unwrap();
 
@@ -1348,10 +1354,10 @@ mod tests {
 
 		// this is a commit for a previous round
 		let commit = Commit {
-			target_hash: "E",
+			target_hash: "E".to_string(),
 			target_number: 6,
 			precommits: vec![SignedPrecommit {
-				precommit: Precommit { target_hash: "E", target_number: 6 },
+				precommit: Precommit { target_hash: "E".to_string(), target_number: 6 },
 				signature: Signature(test_id.0),
 				id: test_id
 			}],
@@ -1362,23 +1368,25 @@ mod tests {
 
 		// initialize chain
 		let last_finalized = env.with_chain(|chain| {
-			chain.push_blocks(GENESIS_HASH, &["A", "B", "C", "D", "E"]);
+			chain.push_blocks(GENESIS_HASH.into(), &["A".to_string(), "B".to_string(), "C".to_string(), "D".to_string(), "E".to_string()]);
 			chain.last_finalized()
 		});
 
 		let mut pool = LocalPool::new();
 		// run voter in background.
-		pool.spawner().spawn(Voter::new(
-			env.clone(),
-			voters,
-			global_comms,
-			0,
-			Vec::new(),
-			last_finalized,
-			last_finalized,
-		).then(|voter|
-			voter.expect("voter not created").vote().map(|_| ())
-		)).unwrap();
+		let voter_env = env.clone();
+		pool.spawner().spawn(async move {
+			let mut voter = Voter::new(
+				voter_env,
+				voters.clone(),
+				global_comms,
+				0,
+				Vec::new(),
+				last_finalized.clone(),
+				last_finalized,
+			).await.expect("voter not created");
+			voter.vote().await.unwrap()
+		}).unwrap();
 
 		pool.spawner().spawn(routing_task.map(|_| ())).unwrap();
 
@@ -1416,7 +1424,7 @@ mod tests {
 
 			let env = Arc::new(Environment::new(network.clone(), local_id));
 			let last_finalized = env.with_chain(|chain| {
-				chain.push_blocks(GENESIS_HASH, &["A", "B", "C", "D", "E"]);
+				chain.push_blocks(GENESIS_HASH.into(), &["A".to_string(), "B".to_string(), "C".to_string(), "D".to_string(), "E".to_string()]);
 				chain.last_finalized()
 			});
 
@@ -1426,7 +1434,7 @@ mod tests {
 				network.make_global_comms(),
 				0,
 				Vec::new(),
-				last_finalized,
+				last_finalized.clone(),
 				last_finalized,
 			)).expect("Voter not created");
 
@@ -1434,13 +1442,13 @@ mod tests {
 		};
 
 		let pv = |id| crate::SignedPrevote {
-			prevote: crate::Prevote { target_hash: "C", target_number: 4 },
+			prevote: crate::Prevote { target_hash: "C".to_string(), target_number: 4 },
 			id: Id(id),
 			signature: Signature(99),
 		};
 
 		let pc = |id| crate::SignedPrecommit {
-			precommit: crate::Precommit { target_hash: "C", target_number: 4 },
+			precommit: crate::Precommit { target_hash: "C".to_string(), target_number: 4 },
 			id: Id(id),
 			signature: Signature(99),
 		};
@@ -1449,7 +1457,7 @@ mod tests {
 		network.send_message(CommunicationIn::CatchUp(
 			CatchUp {
 				base_number: 1,
-				base_hash: GENESIS_HASH,
+				base_hash: GENESIS_HASH.into(),
 				round_number: 5,
 				prevotes: vec![pv(0), pv(1), pv(2)],
 				precommits: vec![pc(0), pc(1), pc(2)],
@@ -1463,7 +1471,9 @@ mod tests {
 		});
 
 		// spawn the voter in the background
-		pool.spawner().spawn(unsynced_voter.vote().map(|_| ())).unwrap();
+		pool.spawner().spawn(async move {
+			unsynced_voter.vote().await.unwrap()
+		}).unwrap();
 
 		let finalized = env.finalized_stream().take(1).into_future();
 
@@ -1517,22 +1527,23 @@ mod tests {
 
 		// initialize chain
 		let last_finalized = env.with_chain(|chain| {
-			chain.push_blocks(GENESIS_HASH, &["A", "B", "C", "D", "E"]);
+			chain.push_blocks(GENESIS_HASH.into(), &["A".to_string(), "B".to_string(), "C".to_string(), "D".to_string(), "E".to_string()]);
 			chain.last_finalized()
 		});
-
+		let voter_env = env.clone();
 		let mut pool = LocalPool::new();
-		pool.spawner().spawn(Voter::new(
-			env.clone(),
-			voters,
-			global_comms,
-			0,
-			Vec::new(),
-			last_finalized,
-			last_finalized,
-		).then(|voter|
-			voter.expect("voter not created").vote().map(|_| ())
-		)).unwrap();
+		pool.spawner().spawn(async move {
+			let mut voter = Voter::new(
+				voter_env,
+				voters.clone(),
+				global_comms,
+				0,
+				Vec::new(),
+				last_finalized.clone(),
+				last_finalized,
+			).await.expect("voter not created");
+			voter.vote().await.unwrap()
+		}).unwrap();
 		pool.spawner().spawn(routing_task.map(|_| ())).unwrap();
 
 		// wait for the best block to finalize.
@@ -1554,7 +1565,7 @@ mod tests {
 
 		// initialize chain
 		let last_finalized = env.with_chain(|chain| {
-			chain.push_blocks(GENESIS_HASH, &["A", "B", "C", "D", "E"]);
+			chain.push_blocks(GENESIS_HASH.into(), &["A".to_string(), "B".to_string(), "C".to_string(), "D".to_string(), "E".to_string()]);
 			chain.last_finalized()
 		});
 
@@ -1564,11 +1575,11 @@ mod tests {
 		// round 1 state on disk: 67 prevotes for "E". 66 precommits for "D". 1 precommit "E".
 		// the round is completable, but the estimate ("E") is not finalized.
 		for id in 0..67 {
-			let prevote = Message::Prevote(Prevote { target_hash: "E", target_number: 6 });
+			let prevote = Message::Prevote(Prevote { target_hash: "E".to_string(), target_number: 6 });
 			let precommit = if id < 66 {
-				Message::Precommit(Precommit { target_hash: "D", target_number: 5 })
+				Message::Precommit(Precommit { target_hash: "D".to_string(), target_number: 5 })
 			} else {
-				Message::Precommit(Precommit { target_hash: "E", target_number: 6 })
+				Message::Precommit(Precommit { target_hash: "E".to_string(), target_number: 6 })
 			};
 
 			last_round_votes.push(SignedMessage {
@@ -1596,7 +1607,7 @@ mod tests {
 		// moves backwards.
 		let sender = Id(67);
 		let (_, round_sink) = network.make_round_comms(1, sender);
-		let last_precommit = Message::Precommit(Precommit { target_hash: "D", target_number: 3 });
+		let last_precommit = Message::Precommit(Precommit { target_hash: "D".to_string(), target_number: 3 });
 		pool.spawner().spawn(
 			stream::iter(iter::once(Ok(last_precommit)))
 				.forward(round_sink)
@@ -1609,7 +1620,7 @@ mod tests {
 			global_comms,
 			1,
 			last_round_votes,
-			last_finalized,
+			last_finalized.clone(),
 			last_finalized,
 		);
 

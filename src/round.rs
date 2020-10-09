@@ -710,68 +710,68 @@ mod tests {
 	#[test]
 	fn estimate_is_valid() {
 		let mut chain = DummyChain::new();
-		chain.push_blocks(GENESIS_HASH, &["A", "B", "C", "D", "E", "F"]);
-		chain.push_blocks("E", &["EA", "EB", "EC", "ED"]);
-		chain.push_blocks("F", &["FA", "FB", "FC"]);
+		chain.push_blocks(GENESIS_HASH.into(), &["A".to_string(), "B".to_string(), "C".to_string(), "D".to_string(), "E".to_string(), "F".to_string()]);
+		chain.push_blocks("E".to_string(), &["EA".to_string(), "EB".to_string(), "EC".to_string(), "ED".to_string()]);
+		chain.push_blocks("F".to_string(), &["FA".to_string(), "FB".to_string(), "FC".to_string()]);
 
 		let mut round = Round::new(RoundParams {
 			round_number: 1,
 			voters: voters(),
-			base: ("C", 4),
+			base: ("C".to_string(), 4),
 		});
 
 		round.import_prevote(
 			&chain,
-			Prevote::new("FC", 10),
+			Prevote::new("FC".to_string(), 10),
 			"Alice",
 			Signature("Alice"),
 		).unwrap();
 
 		round.import_prevote(
 			&chain,
-			Prevote::new("ED", 10),
+			Prevote::new("ED".to_string(), 10),
 			"Bob",
 			Signature("Bob"),
 		).unwrap();
 
-		assert_eq!(round.prevote_ghost, Some(("E", 6)));
-		assert_eq!(round.estimate(), Some(&("E", 6)));
+		assert_eq!(round.prevote_ghost, Some(("E".to_string(), 6)));
+		assert_eq!(round.estimate(), Some(&("E".to_string(), 6)));
 		assert!(!round.completable());
 
 		round.import_prevote(
 			&chain,
-			Prevote::new("F", 7),
+			Prevote::new("F".to_string(), 7),
 			"Eve",
 			Signature("Eve"),
 		).unwrap();
 
-		assert_eq!(round.prevote_ghost, Some(("E", 6)));
-		assert_eq!(round.estimate(), Some(&("E", 6)));
+		assert_eq!(round.prevote_ghost, Some(("E".to_string(), 6)));
+		assert_eq!(round.estimate(), Some(&("E".to_string(), 6)));
 	}
 
 	#[test]
 	fn finalization() {
 		let mut chain = DummyChain::new();
-		chain.push_blocks(GENESIS_HASH, &["A", "B", "C", "D", "E", "F"]);
-		chain.push_blocks("E", &["EA", "EB", "EC", "ED"]);
-		chain.push_blocks("F", &["FA", "FB", "FC"]);
+		chain.push_blocks(GENESIS_HASH.into(), &["A".to_string(), "B".to_string(), "C".to_string(), "D".to_string(), "E".to_string(), "F".to_string()]);
+		chain.push_blocks("E".to_string(), &["EA".to_string(), "EB".to_string(), "EC".to_string(), "ED".to_string()]);
+		chain.push_blocks("F".to_string(), &["FA".to_string(), "FB".to_string(), "FC".to_string()]);
 
 		let mut round = Round::new(RoundParams {
 			round_number: 1,
 			voters: voters(),
-			base: ("C", 4),
+			base: ("C".to_string(), 4),
 		});
 
 		round.import_precommit(
 			&chain,
-			Precommit::new("FC", 10),
+			Precommit::new("FC".to_string(), 10),
 			"Alice",
 			Signature("Alice"),
 		).unwrap();
 
 		round.import_precommit(
 			&chain,
-			Precommit::new("ED", 10),
+			Precommit::new("ED".to_string(), 10),
 			"Bob",
 			Signature("Bob"),
 		).unwrap();
@@ -782,55 +782,55 @@ mod tests {
 		{
 			round.import_prevote(
 				&chain,
-				Prevote::new("FC", 10),
+				Prevote::new("FC".to_string(), 10),
 				"Alice",
 				Signature("Alice"),
 			).unwrap();
 
 			round.import_prevote(
 				&chain,
-				Prevote::new("ED", 10),
+				Prevote::new("ED".to_string(), 10),
 				"Bob",
 				Signature("Bob"),
 			).unwrap();
 
 			round.import_prevote(
 				&chain,
-				Prevote::new("EA", 7),
+				Prevote::new("EA".to_string(), 7),
 				"Eve",
 				Signature("Eve"),
 			).unwrap();
 
-			assert_eq!(round.finalized, Some(("E", 6)));
+			assert_eq!(round.finalized, Some(("E".to_string(), 6)));
 		}
 
 		round.import_precommit(
 			&chain,
-			Precommit::new("EA", 7),
+			Precommit::new("EA".to_string(), 7),
 			"Eve",
 			Signature("Eve"),
 		).unwrap();
 
-		assert_eq!(round.finalized, Some(("EA", 7)));
+		assert_eq!(round.finalized, Some(("EA".to_string(), 7)));
 	}
 
 	#[test]
 	fn equivocate_does_not_double_count() {
 		let mut chain = DummyChain::new();
-		chain.push_blocks(GENESIS_HASH, &["A", "B", "C", "D", "E", "F"]);
-		chain.push_blocks("E", &["EA", "EB", "EC", "ED"]);
-		chain.push_blocks("F", &["FA", "FB", "FC"]);
+		chain.push_blocks(GENESIS_HASH.into(), &["A".to_string(), "B".to_string(), "C".to_string(), "D".to_string(), "E".to_string(), "F".to_string()]);
+		chain.push_blocks("E".to_string(), &["EA".to_string(), "EB".to_string(), "EC".to_string(), "ED".to_string()]);
+		chain.push_blocks("F".to_string(), &["FA".to_string(), "FB".to_string(), "FC".to_string()]);
 
 		let mut round = Round::new(RoundParams {
 			round_number: 1,
 			voters: voters(),
-			base: ("C", 4),
+			base: ("C".to_string(), 4),
 		});
 
 		// first prevote by eve
 		assert!(round.import_prevote(
 			&chain,
-			Prevote::new("FC", 10),
+			Prevote::new("FC".to_string(), 10),
 			"Eve", // 3 on F, E
 			Signature("Eve-1"),
 		).unwrap().equivocation.is_none());
@@ -841,7 +841,7 @@ mod tests {
 		// second prevote by eve: comes with equivocation proof
 		assert!(round.import_prevote(
 			&chain,
-			Prevote::new("ED", 10),
+			Prevote::new("ED".to_string(), 10),
 			"Eve", // still 3 on E
 			Signature("Eve-2"),
 		).unwrap().equivocation.is_some());
@@ -849,7 +849,7 @@ mod tests {
 		// third prevote: returns nothing.
 		assert!(round.import_prevote(
 			&chain,
-			Prevote::new("F", 7),
+			Prevote::new("F".to_string(), 7),
 			"Eve", // still 3 on F and E
 			Signature("Eve-2"),
 		).unwrap().equivocation.is_none());
@@ -860,30 +860,30 @@ mod tests {
 
 		assert!(round.import_prevote(
 			&chain,
-			Prevote::new("FA", 8),
+			Prevote::new("FA".to_string(), 8),
 			"Bob", // add 7 to FA and you get FA.
 			Signature("Bob-1"),
 		).unwrap().equivocation.is_none());
 
-		assert_eq!(round.prevote_ghost, Some(("FA", 8)));
+		assert_eq!(round.prevote_ghost, Some(("FA".to_string(), 8)));
 	}
 
 	#[test]
 	fn historical_votes_works() {
 		let mut chain = DummyChain::new();
-		chain.push_blocks(GENESIS_HASH, &["A", "B", "C", "D", "E", "F"]);
-		chain.push_blocks("E", &["EA", "EB", "EC", "ED"]);
-		chain.push_blocks("F", &["FA", "FB", "FC"]);
+		chain.push_blocks(GENESIS_HASH.into(), &["A".to_string(), "B".to_string(), "C".to_string(), "D".to_string(), "E".to_string(), "F".to_string()]);
+		chain.push_blocks("E".to_string(), &["EA".to_string(), "EB".to_string(), "EC".to_string(), "ED".to_string()]);
+		chain.push_blocks("F".to_string(), &["FA".to_string(), "FB".to_string(), "FC".to_string()]);
 
 		let mut round = Round::new(RoundParams {
 			round_number: 1,
 			voters: voters(),
-			base: ("C", 4),
+			base: ("C".to_string(), 4),
 		});
 
 		round.import_prevote(
 			&chain,
-			Prevote::new("FC", 10),
+			Prevote::new("FC".to_string(), 10),
 			"Alice",
 			Signature("Alice"),
 		).unwrap();
@@ -892,21 +892,21 @@ mod tests {
 
 		round.import_prevote(
 			&chain,
-			Prevote::new("EA", 7),
+			Prevote::new("EA".to_string(), 7),
 			"Eve",
 			Signature("Eve"),
 		).unwrap();
 
 		round.import_precommit(
 			&chain,
-			Precommit::new("EA", 7),
+			Precommit::new("EA".to_string(), 7),
 			"Eve",
 			Signature("Eve"),
 		).unwrap();
 
 		round.import_prevote(
 			&chain,
-			Prevote::new("EC", 10),
+			Prevote::new("EC".to_string(), 10),
 			"Alice",
 			Signature("Alice"),
 		).unwrap();
@@ -917,28 +917,28 @@ mod tests {
 			vec![
 				SignedMessage {
 					message: Message::Prevote(
-						Prevote { target_hash: "FC", target_number: 10 }
+						Prevote { target_hash: "FC".to_string(), target_number: 10 }
 					),
 					signature: Signature("Alice"),
 					id: "Alice"
 				},
 				SignedMessage {
 					message: Message::Prevote(
-						Prevote { target_hash: "EA", target_number: 7 }
+						Prevote { target_hash: "EA".to_string(), target_number: 7 }
 					),
 					signature: Signature("Eve"),
 					id: "Eve"
 				},
 				SignedMessage {
 					message: Message::Precommit(
-						Precommit { target_hash: "EA", target_number: 7 }
+						Precommit { target_hash: "EA".to_string(), target_number: 7 }
 					),
 					signature: Signature("Eve"),
 					id: "Eve"
 				},
 				SignedMessage {
 					message: Message::Prevote(
-						Prevote { target_hash: "EC", target_number: 10 }
+						Prevote { target_hash: "EC".to_string(), target_number: 10 }
 					),
 					signature: Signature("Alice"),
 					id: "Alice"

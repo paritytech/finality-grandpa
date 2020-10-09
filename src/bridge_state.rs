@@ -72,6 +72,8 @@ pub(crate) fn bridge_state<H, N>(initial: RoundState<H, N>) -> (PriorView<H, N>,
 #[cfg(test)]
 mod tests {
 	use std::sync::Barrier;
+	use futures::executor::LocalPool;
+	use futures::task::SpawnExt;
 	use super::*;
 
 	#[test]
@@ -83,24 +85,26 @@ mod tests {
 			completable: false,
 		};
 
+		let mut pool = LocalPool::new();
+
 		let (prior, latter) = bridge_state(initial);
-		let waits_for_finality = async {
-			while !latter.get().await.finalized.is_some() {}
-		};
 
 		let barrier = Arc::new(Barrier::new(2));
 		let barrier_other = barrier.clone();
-		::std::thread::spawn(move || {
+
+		pool.spawner().spawn(async move {
 			barrier_other.wait();
 			prior.update(RoundState {
 				prevote_ghost: Some(("5", 5)),
 				finalized: Some(("1", 1)),
 				estimate: Some(("3", 3)),
 				completable: true,
-			});
-		});
+			}).await;
+		}).unwrap();
 
 		barrier.wait();
-		futures::executor::block_on(waits_for_finality);
+		pool.run_until(async {
+			while !latter.get().await.finalized.is_some() {}
+		});
 	}
 }

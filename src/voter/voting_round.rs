@@ -200,7 +200,7 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 
 		// broadcast finality notifications after attempting to cast votes
 		let post_state = self.votes.state();
-		self.notify(pre_state, post_state);
+		self.notify(pre_state, post_state).await;
 
 		// make sure that the previous round estimate has been finalized
 		let last_round_estimate_finalized = match last_round_state {
@@ -639,10 +639,10 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 	}
 
 	// notify when new blocks are finalized or when the round-estimate is updated
-	fn notify(&mut self, last_state: RoundState<H, N>, new_state: RoundState<H, N>) {
+	async fn notify(&mut self, last_state: RoundState<H, N>, new_state: RoundState<H, N>) {
 		if last_state != new_state {
 			if let Some(ref b) = self.bridged_round_state {
-				b.update(new_state.clone());
+				b.update(new_state.clone()).await;
 			}
 		}
 

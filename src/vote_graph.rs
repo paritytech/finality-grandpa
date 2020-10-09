@@ -567,68 +567,68 @@ mod tests {
 	#[test]
 	fn graph_fork_not_at_node() {
 		let mut chain = DummyChain::new();
-		let mut tracker = VoteGraph::new(GENESIS_HASH, 1, 0u32);
+		let mut tracker = VoteGraph::new(GENESIS_HASH.into(), 1, 0u32);
 
-		chain.push_blocks(GENESIS_HASH, &["A", "B", "C"]);
-		chain.push_blocks("C", &["D1", "E1", "F1"]);
-		chain.push_blocks("C", &["D2", "E2", "F2"]);
+		chain.push_blocks(GENESIS_HASH.into(), &["A".to_string(), "B".to_string(), "C".to_string()]);
+		chain.push_blocks("C".into(), &["D1".to_string(), "E1".to_string(), "F1".to_string()]);
+		chain.push_blocks("C".into(), &["D2".to_string(), "E2".to_string(), "F2".to_string()]);
 
-		tracker.insert("A", 2, 100, &chain).unwrap();
-		tracker.insert("E1", 6, 100, &chain).unwrap();
-		tracker.insert("F2", 7, 100, &chain).unwrap();
+		tracker.insert("A".to_string(), 2, 100, &chain).unwrap();
+		tracker.insert("E1".to_string(), 6, 100, &chain).unwrap();
+		tracker.insert("F2".to_string(), 7, 100, &chain).unwrap();
 
-		assert!(tracker.heads.contains("E1"));
-		assert!(tracker.heads.contains("F2"));
-		assert!(!tracker.heads.contains("A"));
+		assert!(tracker.heads.contains(&"E1".to_string()));
+		assert!(tracker.heads.contains(&"F2".to_string()));
+		assert!(!tracker.heads.contains(&"A".to_string()));
 
-		let a_entry = tracker.entries.get("A").unwrap();
-		assert_eq!(a_entry.descendents, vec!["E1", "F2"]);
+		let a_entry = tracker.entries.get(&"A".to_string()).unwrap();
+		assert_eq!(a_entry.descendents, vec!["E1".to_string(), "F2".to_string()]);
 		assert_eq!(a_entry.cumulative_vote, 300);
 
-		let e_entry = tracker.entries.get("E1").unwrap();
-		assert_eq!(e_entry.ancestor_node().unwrap(), "A");
+		let e_entry = tracker.entries.get(&"E1".to_string()).unwrap();
+		assert_eq!(e_entry.ancestor_node().unwrap(), "A".to_string());
 		assert_eq!(e_entry.cumulative_vote, 100);
 
-		let f_entry = tracker.entries.get("F2").unwrap();
-		assert_eq!(f_entry.ancestor_node().unwrap(), "A");
+		let f_entry = tracker.entries.get(&"F2".to_string()).unwrap();
+		assert_eq!(f_entry.ancestor_node().unwrap(), "A".to_string());
 		assert_eq!(f_entry.cumulative_vote, 100);
 	}
 
 	#[test]
 	fn graph_fork_at_node() {
 		let mut chain = DummyChain::new();
-		let mut tracker1 = VoteGraph::new(GENESIS_HASH, 1, 0u32);
-		let mut tracker2 = VoteGraph::new(GENESIS_HASH, 1, 0u32);
+		let mut tracker1 = VoteGraph::new(GENESIS_HASH.into(), 1, 0u32);
+		let mut tracker2 = VoteGraph::new(GENESIS_HASH.into(), 1, 0u32);
 
-		chain.push_blocks(GENESIS_HASH, &["A", "B", "C"]);
-		chain.push_blocks("C", &["D1", "E1", "F1"]);
-		chain.push_blocks("C", &["D2", "E2", "F2"]);
+		chain.push_blocks(GENESIS_HASH.into(), &["A".to_string(), "B".to_string(), "C".to_string()]);
+		chain.push_blocks("C".into(), &["D1".to_string(), "E1".to_string(), "F1".to_string()]);
+		chain.push_blocks("C".into(), &["D2".to_string(), "E2".to_string(), "F2".to_string()]);
 
-		tracker1.insert("C", 4, 100, &chain).unwrap();
-		tracker1.insert("E1", 6, 100, &chain).unwrap();
-		tracker1.insert("F2", 7, 100, &chain).unwrap();
+		tracker1.insert("C".to_string(), 4, 100, &chain).unwrap();
+		tracker1.insert("E1".to_string(), 6, 100, &chain).unwrap();
+		tracker1.insert("F2".to_string(), 7, 100, &chain).unwrap();
 
-		tracker2.insert("E1", 6, 100, &chain).unwrap();
-		tracker2.insert("F2", 7, 100, &chain).unwrap();
-		tracker2.insert("C", 4, 100, &chain).unwrap();
+		tracker2.insert("E1".to_string(), 6, 100, &chain).unwrap();
+		tracker2.insert("F2".to_string(), 7, 100, &chain).unwrap();
+		tracker2.insert("C".to_string(), 4, 100, &chain).unwrap();
 
 		for tracker in &[&tracker1, &tracker2] {
-			assert!(tracker.heads.contains("E1"));
-			assert!(tracker.heads.contains("F2"));
-			assert!(!tracker.heads.contains("C"));
+			assert!(tracker.heads.contains(&"E1".to_string()));
+			assert!(tracker.heads.contains(&"F2".to_string()));
+			assert!(!tracker.heads.contains(&"C".to_string()));
 
-			let c_entry = tracker.entries.get("C").unwrap();
-			assert!(c_entry.descendents.contains(&"E1"));
-			assert!(c_entry.descendents.contains(&"F2"));
+			let c_entry = tracker.entries.get(&"C".to_string()).unwrap();
+			assert!(c_entry.descendents.contains(&"E1".to_string()));
+			assert!(c_entry.descendents.contains(&"F2".to_string()));
 			assert_eq!(c_entry.ancestor_node().unwrap(), GENESIS_HASH);
 			assert_eq!(c_entry.cumulative_vote, 300);
 
-			let e_entry = tracker.entries.get("E1").unwrap();
-			assert_eq!(e_entry.ancestor_node().unwrap(), "C");
+			let e_entry = tracker.entries.get(&"E1".to_string()).unwrap();
+			assert_eq!(e_entry.ancestor_node().unwrap(), "C".to_string());
 			assert_eq!(e_entry.cumulative_vote, 100);
 
-			let f_entry = tracker.entries.get("F2").unwrap();
-			assert_eq!(f_entry.ancestor_node().unwrap(), "C");
+			let f_entry = tracker.entries.get(&"F2".to_string()).unwrap();
+			assert_eq!(f_entry.ancestor_node().unwrap(), "C".to_string());
 			assert_eq!(f_entry.cumulative_vote, 100);
 		}
 	}
@@ -636,209 +636,209 @@ mod tests {
 	#[test]
 	fn ghost_merge_at_node() {
 		let mut chain = DummyChain::new();
-		let mut tracker = VoteGraph::new(GENESIS_HASH, 1, 0u32);
+		let mut tracker = VoteGraph::new(GENESIS_HASH.into(), 1, 0u32);
 
-		chain.push_blocks(GENESIS_HASH, &["A", "B", "C"]);
-		chain.push_blocks("C", &["D1", "E1", "F1"]);
-		chain.push_blocks("C", &["D2", "E2", "F2"]);
+		chain.push_blocks(GENESIS_HASH.into(), &["A".to_string(), "B".to_string(), "C".to_string()]);
+		chain.push_blocks("C".into(), &["D1".to_string(), "E1".to_string(), "F1".to_string()]);
+		chain.push_blocks("C".into(), &["D2".to_string(), "E2".to_string(), "F2".to_string()]);
 
-		tracker.insert("B", 3, 0, &chain).unwrap();
-		tracker.insert("C", 4, 100, &chain).unwrap();
-		tracker.insert("E1", 6, 100, &chain).unwrap();
-		tracker.insert("F2", 7, 100, &chain).unwrap();
+		tracker.insert("B".to_string(), 3, 0, &chain).unwrap();
+		tracker.insert("C".to_string(), 4, 100, &chain).unwrap();
+		tracker.insert("E1".to_string(), 6, 100, &chain).unwrap();
+		tracker.insert("F2".to_string(), 7, 100, &chain).unwrap();
 
-		assert_eq!(tracker.find_ghost(None, |&x| x >= 250), Some(("C", 4)));
-		assert_eq!(tracker.find_ghost(Some(("C", 4)), |&x| x >= 250), Some(("C", 4)));
-		assert_eq!(tracker.find_ghost(Some(("B", 3)), |&x| x >= 250), Some(("C", 4)));
+		assert_eq!(tracker.find_ghost(None, |&x| x >= 250), Some(("C".to_string(), 4)));
+		assert_eq!(tracker.find_ghost(Some(("C".to_string(), 4)), |&x| x >= 250), Some(("C".to_string(), 4)));
+		assert_eq!(tracker.find_ghost(Some(("B".to_string(), 3)), |&x| x >= 250), Some(("C".to_string(), 4)));
 	}
 
 	#[test]
 	fn ghost_merge_not_at_node_one_side_weighted() {
 		let mut chain = DummyChain::new();
-		let mut tracker = VoteGraph::new(GENESIS_HASH, 1, 0u32);
+		let mut tracker = VoteGraph::new(GENESIS_HASH.into(), 1, 0u32);
 
-		chain.push_blocks(GENESIS_HASH, &["A", "B", "C", "D", "E", "F"]);
-		chain.push_blocks("F", &["G1", "H1", "I1"]);
-		chain.push_blocks("F", &["G2", "H2", "I2"]);
+		chain.push_blocks(GENESIS_HASH.into(), &["A".to_string(), "B".to_string(), "C".to_string(), "D".to_string(), "E".to_string(), "F".to_string()]);
+		chain.push_blocks("F".to_string(), &["G1".to_string(), "H1".to_string(), "I1".to_string()]);
+		chain.push_blocks("F".to_string(), &["G2".to_string(), "H2".to_string(), "I2".to_string()]);
 
-		tracker.insert("B", 3, 0, &chain).unwrap();
-		tracker.insert("G1", 8, 100, &chain).unwrap();
-		tracker.insert("H2", 9, 150, &chain).unwrap();
+		tracker.insert("B".to_string(), 3, 0, &chain).unwrap();
+		tracker.insert("G1".to_string(), 8, 100, &chain).unwrap();
+		tracker.insert("H2".to_string(), 9, 150, &chain).unwrap();
 
-		assert_eq!(tracker.find_ghost(None, |&x| x >= 250), Some(("F", 7)));
-		assert_eq!(tracker.find_ghost(Some(("F", 7)), |&x| x >= 250), Some(("F", 7)));
-		assert_eq!(tracker.find_ghost(Some(("C", 4)), |&x| x >= 250), Some(("F", 7)));
-		assert_eq!(tracker.find_ghost(Some(("B", 3)), |&x| x >= 250), Some(("F", 7)));
+		assert_eq!(tracker.find_ghost(None, |&x| x >= 250), Some(("F".to_string(), 7)));
+		assert_eq!(tracker.find_ghost(Some(("F".to_string(), 7)), |&x| x >= 250), Some(("F".to_string(), 7)));
+		assert_eq!(tracker.find_ghost(Some(("C".to_string(), 4)), |&x| x >= 250), Some(("F".to_string(), 7)));
+		assert_eq!(tracker.find_ghost(Some(("B".to_string(), 3)), |&x| x >= 250), Some(("F".to_string(), 7)));
 	}
 
 	#[test]
 	fn ghost_introduce_branch() {
 		let mut chain = DummyChain::new();
-		let mut tracker = VoteGraph::new(GENESIS_HASH, 1, 0u32);
+		let mut tracker = VoteGraph::new(GENESIS_HASH.into(), 1, 0u32);
 
-		chain.push_blocks(GENESIS_HASH, &["A", "B", "C", "D", "E", "F"]);
-		chain.push_blocks("E", &["EA", "EB", "EC", "ED"]);
-		chain.push_blocks("F", &["FA", "FB", "FC"]);
+		chain.push_blocks(GENESIS_HASH.into(), &["A".to_string(), "B".to_string(), "C".to_string(), "D".to_string(), "E".to_string(), "F".to_string()]);
+		chain.push_blocks("E".to_string(), &["EA".to_string(), "EB".to_string(), "EC".to_string(), "ED".to_string()]);
+		chain.push_blocks("F".to_string(), &["FA".to_string(), "FB".to_string(), "FC".to_string()]);
 
-		tracker.insert("FC", 10, 5, &chain).unwrap();
-		tracker.insert("ED", 10, 7, &chain).unwrap();
+		tracker.insert("FC".to_string(), 10, 5, &chain).unwrap();
+		tracker.insert("ED".to_string(), 10, 7, &chain).unwrap();
 
-		assert_eq!(tracker.find_ghost(None, |&x| x >= 10), Some(("E", 6)));
+		assert_eq!(tracker.find_ghost(None, |&x| x >= 10), Some(("E".to_string(), 6)));
 
-		assert_eq!(tracker.entries.get(GENESIS_HASH).unwrap().descendents, vec!["FC", "ED"]);
+		assert_eq!(tracker.entries.get(GENESIS_HASH.into()).unwrap().descendents, vec!["FC".to_string(), "ED".to_string()]);
 
 		// introduce a branch in the middle.
-		tracker.insert("E", 6, 3, &chain).unwrap();
+		tracker.insert("E".to_string(), 6, 3, &chain).unwrap();
 
-		assert_eq!(tracker.entries.get(GENESIS_HASH).unwrap().descendents, vec!["E"]);
+		assert_eq!(tracker.entries.get(GENESIS_HASH.into()).unwrap().descendents, vec!["E"]);
 		let descendents = &tracker.entries.get("E").unwrap().descendents;
 		assert_eq!(descendents.len(), 2);
-		assert!(descendents.contains(&"ED"));
-		assert!(descendents.contains(&"FC"));
+		assert!(descendents.contains(&"ED".to_string()));
+		assert!(descendents.contains(&"FC".to_string()));
 
-		assert_eq!(tracker.find_ghost(None, |&x| x >= 10), Some(("E", 6)));
-		assert_eq!(tracker.find_ghost(Some(("C", 4)), |&x| x >= 10), Some(("E", 6)));
-		assert_eq!(tracker.find_ghost(Some(("E", 6)), |&x| x >= 10), Some(("E", 6)));
+		assert_eq!(tracker.find_ghost(None, |&x| x >= 10), Some(("E".to_string(), 6)));
+		assert_eq!(tracker.find_ghost(Some(("C".to_string(), 4)), |&x| x >= 10), Some(("E".to_string(), 6)));
+		assert_eq!(tracker.find_ghost(Some(("E".to_string(), 6)), |&x| x >= 10), Some(("E".to_string(), 6)));
 	}
 
 	#[test]
 	fn walk_back_from_block_in_edge_fork_below() {
 		let mut chain = DummyChain::new();
-		let mut tracker = VoteGraph::new(GENESIS_HASH, 1, 0u32);
+		let mut tracker = VoteGraph::new(GENESIS_HASH.into(), 1, 0u32);
 
-		chain.push_blocks(GENESIS_HASH, &["A", "B", "C"]);
-		chain.push_blocks("C", &["D1", "E1", "F1", "G1", "H1", "I1"]);
-		chain.push_blocks("C", &["D2", "E2", "F2", "G2", "H2", "I2"]);
+		chain.push_blocks(GENESIS_HASH.into(), &["A".to_string(), "B".to_string(), "C".to_string()]);
+		chain.push_blocks("C".to_string(), &["D1".to_string(), "E1".to_string(), "F1".to_string(), "G1".to_string(), "H1".to_string(), "I1".to_string()]);
+		chain.push_blocks("C".to_string(), &["D2".to_string(), "E2".to_string(), "F2".to_string(), "G2".to_string(), "H2".to_string(), "I2".to_string()]);
 
-		tracker.insert("B", 3, 10, &chain).unwrap();
-		tracker.insert("F1", 7, 5, &chain).unwrap();
-		tracker.insert("G2", 8, 5, &chain).unwrap();
+		tracker.insert("B".to_string(), 3, 10, &chain).unwrap();
+		tracker.insert("F1".to_string(), 7, 5, &chain).unwrap();
+		tracker.insert("G2".to_string(), 8, 5, &chain).unwrap();
 
-		let test_cases = &[
-			"D1",
-			"D2",
-			"E1",
-			"E2",
-			"F1",
-			"F2",
-			"G2",
+		let test_cases = [
+			"D1".to_string(),
+			"D2".to_string(),
+			"E1".to_string(),
+			"E2".to_string(),
+			"F1".to_string(),
+			"F2".to_string(),
+			"G2".to_string(),
 		];
 
-		for block in test_cases {
-			let number = chain.number(block);
-			assert_eq!(tracker.find_ancestor(block, number, |&x| x > 5).unwrap(), ("C", 4));
+		for block in test_cases.iter() {
+			let number = chain.number(block.clone());
+			assert_eq!(tracker.find_ancestor(block.clone(), number, |&x| x > 5).unwrap(), ("C".to_string(), 4));
 		}
 	}
 
 	#[test]
 	fn walk_back_from_fork_block_node_below() {
 		let mut chain = DummyChain::new();
-		let mut tracker = VoteGraph::new(GENESIS_HASH, 1, 0u32);
+		let mut tracker = VoteGraph::new(GENESIS_HASH.into(), 1, 0u32);
 
-		chain.push_blocks(GENESIS_HASH, &["A", "B", "C", "D"]);
-		chain.push_blocks("D", &["E1", "F1", "G1", "H1", "I1"]);
-		chain.push_blocks("D", &["E2", "F2", "G2", "H2", "I2"]);
+		chain.push_blocks(GENESIS_HASH.into(), &["A".to_string(), "B".to_string(), "C".to_string(), "D".to_string()]);
+		chain.push_blocks("D".to_string(), &["E1".to_string(), "F1".to_string(), "G1".to_string(), "H1".to_string(), "I1".to_string()]);
+		chain.push_blocks("D".to_string(), &["E2".to_string(), "F2".to_string(), "G2".to_string(), "H2".to_string(), "I2".to_string()]);
 
-		tracker.insert("B", 3, 10, &chain).unwrap();
-		tracker.insert("F1", 7, 5, &chain).unwrap();
-		tracker.insert("G2", 8, 5, &chain).unwrap();
+		tracker.insert("B".to_string(), 3, 10, &chain).unwrap();
+		tracker.insert("F1".to_string(), 7, 5, &chain).unwrap();
+		tracker.insert("G2".to_string(), 8, 5, &chain).unwrap();
 
-		assert_eq!(tracker.find_ancestor("G2", 8, |&x| x > 5).unwrap(), ("D", 5));
+		assert_eq!(tracker.find_ancestor("G2".to_string(), 8, |&x| x > 5).unwrap(), ("D".to_string(), 5));
 		let test_cases = &[
-			"E1",
-			"E2",
-			"F1",
-			"F2",
-			"G2",
+			"E1".to_string(),
+			"E2".to_string(),
+			"F1".to_string(),
+			"F2".to_string(),
+			"G2".to_string(),
 		];
 
 		for block in test_cases {
-			let number = chain.number(block);
-			assert_eq!(tracker.find_ancestor(block, number, |&x| x > 5).unwrap(), ("D", 5));
+			let number = chain.number(block.clone());
+			assert_eq!(tracker.find_ancestor(block.clone(), number, |&x| x > 5).unwrap(), ("D".to_string(), 5));
 		}
 	}
 
 	#[test]
 	fn walk_back_at_node() {
 		let mut chain = DummyChain::new();
-		let mut tracker = VoteGraph::new(GENESIS_HASH, 1, 0u32);
+		let mut tracker = VoteGraph::new(GENESIS_HASH.into(), 1, 0u32);
 
-		chain.push_blocks(GENESIS_HASH, &["A", "B", "C"]);
-		chain.push_blocks("C", &["D1", "E1", "F1", "G1", "H1", "I1"]);
-		chain.push_blocks("C", &["D2", "E2", "F2"]);
+		chain.push_blocks(GENESIS_HASH.into(), &["A".to_string(), "B".to_string(), "C".to_string()]);
+		chain.push_blocks("C".to_string(), &["D1".to_string(), "E1".to_string(), "F1".to_string(), "G1".to_string(), "H1".to_string(), "I1".to_string()]);
+		chain.push_blocks("C".to_string(), &["D2".to_string(), "E2".to_string(), "F2".to_string()]);
 
-		tracker.insert("C", 4, 10, &chain).unwrap();
-		tracker.insert("F1", 7, 5, &chain).unwrap();
-		tracker.insert("F2", 7, 5, &chain).unwrap();
-		tracker.insert("I1", 10, 1, &chain).unwrap();
+		tracker.insert("C".to_string(), 4, 10, &chain).unwrap();
+		tracker.insert("F1".to_string(), 7, 5, &chain).unwrap();
+		tracker.insert("F2".to_string(), 7, 5, &chain).unwrap();
+		tracker.insert("I1".to_string(), 10, 1, &chain).unwrap();
 
 		let test_cases = &[
-			"C",
-			"D1",
-			"D2",
-			"E1",
-			"E2",
-			"F1",
-			"F2",
-			"I1",
+			"C".to_string(),
+			"D1".to_string(),
+			"D2".to_string(),
+			"E1".to_string(),
+			"E2".to_string(),
+			"F1".to_string(),
+			"F2".to_string(),
+			"I1".to_string(),
 		];
 
 		for block in test_cases {
-			let number = chain.number(block);
-			assert_eq!(tracker.find_ancestor(block, number, |&x| x >= 20).unwrap(), ("C", 4));
+			let number = chain.number(block.clone());
+			assert_eq!(tracker.find_ancestor(block.clone(), number, |&x| x >= 20).unwrap(), ("C".to_string(), 4));
 		}
 	}
 
 	#[test]
 	fn adjust_base() {
 		let mut chain = DummyChain::new();
-		let mut tracker = VoteGraph::new("E", 6, 0u32);
+		let mut tracker = VoteGraph::new("E".to_string(), 6, 0u32);
 
-		chain.push_blocks(GENESIS_HASH, &["A", "B", "C", "D", "E", "F"]);
-		chain.push_blocks("E", &["EA", "EB", "EC", "ED"]);
-		chain.push_blocks("F", &["FA", "FB", "FC"]);
+		chain.push_blocks(GENESIS_HASH.into(), &["A".to_string(), "B".to_string(), "C".to_string(), "D".to_string(), "E".to_string(), "F".to_string()]);
+		chain.push_blocks("E".to_string(), &["EA".to_string(), "EB".to_string(), "EC".to_string(), "ED".to_string()]);
+		chain.push_blocks("F".to_string(), &["FA".to_string(), "FB".to_string(), "FC".to_string()]);
 
-		tracker.insert("FC", 10, 5, &chain).unwrap();
-		tracker.insert("ED", 10, 7, &chain).unwrap();
+		tracker.insert("FC".to_string(), 10, 5, &chain).unwrap();
+		tracker.insert("ED".to_string(), 10, 7, &chain).unwrap();
 
-		assert_eq!(tracker.base(), ("E", 6));
+		assert_eq!(tracker.base(), ("E".to_string(), 6));
 
-		tracker.adjust_base(&["D", "C", "B", "A"]);
+		tracker.adjust_base(&["D".to_string(), "C".to_string(), "B".to_string(), "A".to_string()]);
 
-		assert_eq!(tracker.base(), ("A", 2));
+		assert_eq!(tracker.base(), ("A".to_string(), 2));
 
-		chain.push_blocks("A", &["3", "4", "5"]);
+		chain.push_blocks("A".to_string(), &["3".to_string(), "4".to_string(), "5".to_string()]);
 
-		tracker.adjust_base(&[GENESIS_HASH]);
-		assert_eq!(tracker.base(), (GENESIS_HASH, 1));
+		tracker.adjust_base(&[GENESIS_HASH.into()]);
+		assert_eq!(tracker.base(), (GENESIS_HASH.into(), 1));
 
-		assert_eq!(tracker.entries.get(GENESIS_HASH).unwrap().cumulative_vote, 12);
+		assert_eq!(tracker.entries.get(GENESIS_HASH.into()).unwrap().cumulative_vote, 12);
 
-		tracker.insert("5", 5, 3, &chain).unwrap();
+		tracker.insert("5".to_string(), 5, 3, &chain).unwrap();
 
-		assert_eq!(tracker.entries.get(GENESIS_HASH).unwrap().cumulative_vote, 15);
+		assert_eq!(tracker.entries.get(GENESIS_HASH.into()).unwrap().cumulative_vote, 15);
 	}
 
 	#[test]
 	fn find_ancestor_is_largest() {
 		let mut chain = DummyChain::new();
-		let mut tracker = VoteGraph::new(GENESIS_HASH, 0, 0);
+		let mut tracker = VoteGraph::new(GENESIS_HASH.into(), 0, 0);
 
-		chain.push_blocks(GENESIS_HASH, &["A"]);
-		chain.push_blocks(GENESIS_HASH, &["B"]);
-		chain.push_blocks("A", &["A1"]);
-		chain.push_blocks("A", &["A2"]);
-		chain.push_blocks("B", &["B1"]);
-		chain.push_blocks("B", &["B2"]);
+		chain.push_blocks(GENESIS_HASH.into(), &["A".to_string()]);
+		chain.push_blocks(GENESIS_HASH.into(), &["B".to_string()]);
+		chain.push_blocks("A".to_string(), &["A1".to_string()]);
+		chain.push_blocks("A".to_string(), &["A2".to_string()]);
+		chain.push_blocks("B".to_string(), &["B1".to_string()]);
+		chain.push_blocks("B".to_string(), &["B2".to_string()]);
 
 		// Inserting the Bs first used to exhibit incorrect behaviour.
-		tracker.insert("B1", 2, 1, &chain).unwrap();
-		tracker.insert("B2", 2, 1, &chain).unwrap();
-		tracker.insert("A1", 2, 1, &chain).unwrap();
-		tracker.insert("A2", 2, 1, &chain).unwrap();
+		tracker.insert("B1".to_string(), 2, 1, &chain).unwrap();
+		tracker.insert("B2".to_string(), 2, 1, &chain).unwrap();
+		tracker.insert("A1".to_string(), 2, 1, &chain).unwrap();
+		tracker.insert("A2".to_string(), 2, 1, &chain).unwrap();
 
-		let actual = tracker.find_ancestor("A", 1, |x| x >= &2).unwrap();
+		let actual = tracker.find_ancestor("A".to_string(), 1, |x| x >= &2).unwrap();
 		// `actual` used to (incorrectly) be (genesis, 0)
-		assert_eq!(actual, ("A", 1));
+		assert_eq!(actual, ("A".to_string(), 1));
 	}
 }

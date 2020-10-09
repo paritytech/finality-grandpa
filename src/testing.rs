@@ -23,43 +23,43 @@ pub mod chain {
 
 	struct BlockRecord {
 		number: u32,
-		parent: &'static str,
+		parent: String,
 	}
 
 	pub struct DummyChain {
-		inner: BTreeMap<&'static str, BlockRecord>,
-		leaves: Vec<&'static str>,
-		finalized: (&'static str, u32),
+		inner: BTreeMap<String, BlockRecord>,
+		leaves: Vec<String>,
+		finalized: (String, u32),
 	}
 
 	impl DummyChain {
 		pub fn new() -> Self {
 			let mut inner = BTreeMap::new();
-			inner.insert(GENESIS_HASH, BlockRecord { number: 1, parent: NULL_HASH });
+			inner.insert(GENESIS_HASH.into(), BlockRecord { number: 1, parent: NULL_HASH.into() });
 
 			DummyChain {
 				inner,
-				leaves: vec![GENESIS_HASH],
-				finalized: (GENESIS_HASH, 1),
+				leaves: vec![GENESIS_HASH.into()],
+				finalized: (GENESIS_HASH.into(), 1),
 			}
 		}
 
-		pub fn push_blocks(&mut self, mut parent: &'static str, blocks: &[&'static str]) {
+		pub fn push_blocks(&mut self, mut parent: String, blocks: &[String]) {
 			if blocks.is_empty() { return }
 
-			let base_number = self.inner.get(parent).unwrap().number + 1;
+			let base_number = self.inner.get(&parent).unwrap().number + 1;
 
 			if let Some(pos) = self.leaves.iter().position(|x| x == &parent) {
 				self.leaves.remove(pos);
 			}
 
 			for (i, descendent) in blocks.iter().enumerate() {
-				self.inner.insert(descendent, BlockRecord {
+				self.inner.insert(descendent.clone(), BlockRecord {
 					number: base_number + i as u32,
 					parent,
 				});
 
-				parent = descendent;
+				parent = descendent.clone();
 			}
 
 			let new_leaf = blocks.last().unwrap();
@@ -69,55 +69,55 @@ pub mod chain {
 				|x| self.inner.get(x).unwrap().number.cmp(&new_leaf_number).reverse(),
 			).unwrap_or_else(|i| i);
 
-			self.leaves.insert(insertion_index, new_leaf);
+			self.leaves.insert(insertion_index, new_leaf.clone());
 		}
 
-		pub fn number(&self, hash: &'static str) -> u32 {
-			self.inner.get(hash).unwrap().number
+		pub fn number(&self, hash: String) -> u32 {
+			self.inner.get(&hash).unwrap().number
 		}
 
-		pub fn last_finalized(&self) -> (&'static str, u32) {
+		pub fn last_finalized(&self) -> (String, u32) {
 			self.finalized.clone()
 		}
 
-		pub fn set_last_finalized(&mut self, last_finalized: (&'static str, u32)) {
+		pub fn set_last_finalized(&mut self, last_finalized: (String, u32)) {
 			self.finalized = last_finalized;
 		}
 	}
 
-	impl Chain<&'static str, u32> for DummyChain {
-		fn ancestry(&self, base: &'static str, mut block: &'static str) -> Result<Vec<&'static str>, Error> {
+	impl Chain<String, u32> for DummyChain {
+		fn ancestry(&self, base: String, mut block: String) -> Result<Vec<String>, Error> {
 			let mut ancestry = Vec::new();
 
 			loop {
-				match self.inner.get(block) {
+				match self.inner.get(&block.clone()) {
 					None => return Err(Error::NotDescendent),
-					Some(record) => { block = record.parent; }
+					Some(record) => { block = record.parent.clone(); }
 				}
 
 				if block == NULL_HASH { return Err(Error::NotDescendent) }
 				if block == base { break }
 
-				ancestry.push(block);
+				ancestry.push(block.clone());
 			}
 
 			Ok(ancestry)
 		}
 
-		fn best_chain_containing(&self, base: &'static str) -> Option<(&'static str, u32)> {
-			let base_number = self.inner.get(base)?.number;
+		fn best_chain_containing(&self, base: String) -> Option<(String, u32)> {
+			let base_number = self.inner.get(&base)?.number;
 
 			for leaf in &self.leaves {
 				// leaves are in descending order.
 				let leaf_number = self.inner.get(leaf).unwrap().number;
 				if leaf_number < base_number { break }
 
-				if leaf == &base {
-					return Some((leaf, leaf_number))
+				if leaf == &base.clone() {
+					return Some((leaf.clone(), leaf_number))
 				}
 
-				if let Ok(_) = self.ancestry(base, leaf) {
-					return Some((leaf, leaf_number));
+				if let Ok(_) = self.ancestry(base.clone(), leaf.clone()) {
+					return Some((leaf.clone(), leaf_number));
 				}
 			}
 
@@ -156,7 +156,7 @@ pub mod environment {
 		chain: Mutex<DummyChain>,
 		local_id: Id,
 		network: Network,
-		listeners: Mutex<Vec<UnboundedSender<(&'static str, u32, Commit<&'static str, u32, Signature, Id>)>>>,
+		listeners: Mutex<Vec<UnboundedSender<(String, u32, Commit<String, u32, Signature, Id>)>>>,
 		last_completed_and_concluded: Mutex<(u64, u64)>,
 	}
 
@@ -177,7 +177,7 @@ pub mod environment {
 		}
 
 		/// Stream of finalized blocks.
-		pub fn finalized_stream(&self) -> UnboundedReceiver<(&'static str, u32, Commit<&'static str, u32, Signature, Id>)> {
+		pub fn finalized_stream(&self) -> UnboundedReceiver<(String, u32, Commit<String, u32, Signature, Id>)> {
 			let (tx, rx) = mpsc::unbounded();
 			self.listeners.lock().push(tx);
 			rx
@@ -189,30 +189,30 @@ pub mod environment {
 		}
 	}
 
-	impl Chain<&'static str, u32> for Environment {
-		fn ancestry(&self, base: &'static str, block: &'static str) -> Result<Vec<&'static str>, Error> {
+	impl Chain<String, u32> for Environment {
+		fn ancestry(&self, base: String, block: String) -> Result<Vec<String>, Error> {
 			self.chain.lock().ancestry(base, block)
 		}
 
-		fn best_chain_containing(&self, base: &'static str) -> Option<(&'static str, u32)> {
+		fn best_chain_containing(&self, base: String) -> Option<(String, u32)> {
 			self.chain.lock().best_chain_containing(base)
 		}
 	}
 
 	#[async_trait]
-	impl crate::voter::Environment<&'static str, u32> for Environment {
+	impl crate::voter::Environment<String, u32> for Environment {
 		type Timer = Box<dyn Future<Output = Result<(), Error>> + Unpin + Send + Sync>;
 		type Id = Id;
 		type Signature = Signature;
 		type In =
 			Box<
-				dyn Stream<Item = Result<SignedMessage<&'static str, u32, Signature, Id>, Error>>
+				dyn Stream<Item = Result<SignedMessage<String, u32, Signature, Id>, Error>>
 					+ Unpin
 					+ Send
 					+ Sync,
 			>;
 		type Out =
-			Pin<Box<dyn Sink<Message<&'static str, u32>, Error = Error> + Send + Sync + 'static>>;
+			Pin<Box<dyn Sink<Message<String, u32>, Error = Error> + Send + Sync + 'static>>;
 		type Error = Error;
 
 		async fn round_data(&self, round: u64) -> RoundData<Self::Id, Self::Timer, Self::In, Self::Out> {
@@ -242,9 +242,9 @@ pub mod environment {
 		fn completed(
 			&self,
 			round: u64,
-			_state: RoundState<&'static str, u32>,
-			_base: (&'static str, u32),
-			_votes: &HistoricalVotes<&'static str, u32, Self::Signature, Self::Id>,
+			_state: RoundState<String, u32>,
+			_base: (String, u32),
+			_votes: &HistoricalVotes<String, u32, Self::Signature, Self::Id>,
 		) -> Result<(), Error> {
 			self.last_completed_and_concluded.lock().0 = round;
 			Ok(())
@@ -253,15 +253,15 @@ pub mod environment {
 		fn concluded(
 			&self,
 			round: u64,
-			_state: RoundState<&'static str, u32>,
-			_base: (&'static str, u32),
-			_votes: &HistoricalVotes<&'static str, u32, Self::Signature, Self::Id>,
+			_state: RoundState<String, u32>,
+			_base: (String, u32),
+			_votes: &HistoricalVotes<String, u32, Self::Signature, Self::Id>,
 		) -> Result<(), Error> {
 			self.last_completed_and_concluded.lock().1 = round;
 			Ok(())
 		}
 
-		fn finalize_block(&self, hash: &'static str, number: u32, _round: u64, commit: Commit<&'static str, u32, Signature, Id>) -> Result<(), Error> {
+		fn finalize_block(&self, hash: String, number: u32, _round: u64, commit: Commit<String, u32, Signature, Id>) -> Result<(), Error> {
 			let mut chain = self.chain.lock();
 
 			let last_finalized = chain.last_finalized();
@@ -270,33 +270,33 @@ pub mod environment {
 			}
 
 			assert!(
-				chain.ancestry(last_finalized.0, hash).is_ok(),
+				chain.ancestry(last_finalized.0, hash.clone()).is_ok(),
 				"Safety violation: reverting finalized block.",
 			);
 
-			chain.set_last_finalized((hash, number));
-			self.listeners.lock().retain(|s| s.unbounded_send((hash, number as _, commit.clone())).is_ok());
+			chain.set_last_finalized((hash.clone(), number));
+			self.listeners.lock().retain(|s| s.unbounded_send((hash.clone(), number as _, commit.clone())).is_ok());
 
 			Ok(())
 		}
 
-		fn proposed(&self, _round: u64, _propose: PrimaryPropose<&'static str, u32>) -> Result<(), Self::Error> {
+		fn proposed(&self, _round: u64, _propose: PrimaryPropose<String, u32>) -> Result<(), Self::Error> {
 			Ok(())
 		}
 
-		fn prevoted(&self, _round: u64, _prevote: Prevote<&'static str, u32>) -> Result<(), Self::Error> {
+		fn prevoted(&self, _round: u64, _prevote: Prevote<String, u32>) -> Result<(), Self::Error> {
 			Ok(())
 		}
 
-		fn precommitted(&self, _round: u64, _precommit: Precommit<&'static str, u32>) -> Result<(), Self::Error> {
+		fn precommitted(&self, _round: u64, _precommit: Precommit<String, u32>) -> Result<(), Self::Error> {
 			Ok(())
 		}
 
-		fn prevote_equivocation(&self, round: u64, equivocation: Equivocation<Id, Prevote<&'static str, u32>, Signature>) {
+		fn prevote_equivocation(&self, round: u64, equivocation: Equivocation<Id, Prevote<String, u32>, Signature>) {
 			panic!("Encountered equivocation in round {}: {:?}", round, equivocation);
 		}
 
-		fn precommit_equivocation(&self, round: u64, equivocation: Equivocation<Id, Precommit<&'static str, u32>, Signature>) {
+		fn precommit_equivocation(&self, round: u64, equivocation: Equivocation<Id, Precommit<String, u32>, Signature>) {
 			panic!("Encountered equivocation in round {}: {:?}", round, equivocation);
 		}
 	}
@@ -373,8 +373,8 @@ pub mod environment {
 		)
 	}
 
-	type RoundNetwork = BroadcastNetwork<SignedMessage<&'static str, u32, Signature, Id>>;
-	type GlobalMessageNetwork = BroadcastNetwork<CommunicationIn<&'static str, u32, Signature, Id>>;
+	type RoundNetwork = BroadcastNetwork<SignedMessage<String, u32, Signature, Id>>;
+	type GlobalMessageNetwork = BroadcastNetwork<CommunicationIn<String, u32, Signature, Id>>;
 
 	/// A test network. Instantiate this with `make_network`,
 	#[derive(Clone)]
@@ -385,8 +385,8 @@ pub mod environment {
 
 	impl Network {
 		pub fn make_round_comms(&self, round_number: u64, node_id: Id) -> (
-			impl Stream<Item=Result<SignedMessage<&'static str, u32, Signature, Id>,Error>>,
-			impl Sink<Message<&'static str, u32>,Error=Error>
+			impl Stream<Item=Result<SignedMessage<String, u32, Signature, Id>,Error>>,
+			impl Sink<Message<String, u32>,Error=Error>
 		) {
 			let mut rounds = self.rounds.lock();
 			rounds.entry(round_number)
@@ -399,8 +399,8 @@ pub mod environment {
 		}
 
 		pub fn make_global_comms(&self) -> (
-			impl Stream<Item=Result<CommunicationIn<&'static str, u32, Signature, Id>,Error>>,
-			impl Sink<CommunicationOut<&'static str, u32, Signature, Id>,Error=Error>
+			impl Stream<Item=Result<CommunicationIn<String, u32, Signature, Id>,Error>>,
+			impl Sink<CommunicationOut<String, u32, Signature, Id>,Error=Error>
 		) {
 			let mut global_messages = self.global_messages.lock();
 			global_messages.add_node(|message| match message {
@@ -409,7 +409,7 @@ pub mod environment {
 		}
 
 		/// Send a message to all nodes.
-		pub fn send_message(&self, message: CommunicationIn<&'static str, u32, Signature, Id>) {
+		pub fn send_message(&self, message: CommunicationIn<String, u32, Signature, Id>) {
 			self.global_messages.lock().send_message(message);
 		}
 	}
