@@ -15,21 +15,18 @@
 //! Bridging round state between rounds.
 
 use crate::round::State as RoundState;
-use futures::task;
 use async_rwlock::{RwLock, RwLockReadGuard};
 use std::sync::Arc;
 
 // round state bridged across rounds.
 struct Bridged<H, N> {
 	inner: RwLock<RoundState<H, N>>,
-	waker: task::AtomicWaker,
 }
 
 impl<H, N> Bridged<H, N> {
 	fn new(inner: RwLock<RoundState<H, N>>) -> Self {
 		Bridged {
 			inner,
-			waker: task::AtomicWaker::new(),
 		}
 	}
 }
@@ -41,7 +38,6 @@ impl<H, N> PriorView<H, N> {
 	/// Push an update to the latter view.
 	pub(crate) async fn update(&self, new: RoundState<H, N>) {
 		*self.0.inner.write().await = new;
-		self.0.waker.wake();
 	}
 }
 
@@ -71,7 +67,7 @@ pub(crate) fn bridge_state<H, N>(initial: RoundState<H, N>) -> (PriorView<H, N>,
 
 #[cfg(test)]
 mod tests {
-	use std::sync::Barrier;
+	use async_std::sync::Barrier;
 	use futures::executor::LocalPool;
 	use futures::task::SpawnExt;
 	use super::*;
@@ -86,14 +82,13 @@ mod tests {
 		};
 
 		let mut pool = LocalPool::new();
-
 		let (prior, latter) = bridge_state(initial);
 
 		let barrier = Arc::new(Barrier::new(2));
 		let barrier_other = barrier.clone();
 
 		pool.spawner().spawn(async move {
-			barrier_other.wait();
+			barrier_other.wait().await;
 			prior.update(RoundState {
 				prevote_ghost: Some(("5", 5)),
 				finalized: Some(("1", 1)),
@@ -102,8 +97,8 @@ mod tests {
 			}).await;
 		}).unwrap();
 
-		barrier.wait();
 		pool.run_until(async {
+			barrier.wait().await;
 			while !latter.get().await.finalized.is_some() {}
 		});
 	}
