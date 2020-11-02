@@ -51,6 +51,9 @@ use voting_round::{VotingRound, State as VotingRoundState};
 mod past_rounds;
 mod voting_round;
 
+type IncomingItem<H, N, E: Environment<H, N> + Send + Sync> = Result<CommunicationIn<H, N, <E as Environment<H, N>>::Signature, <E as Environment<H, N>>::Id>, <E as Environment<H, N>>::Error>;
+type Notification<H, N, E: Environment<H, N> + Send + Sync> = (H, N, u64, Commit<H, N, <E as Environment<H, N>>::Signature, <E as Environment<H, N>>::Id>);
+
 /// Necessary environment for a voter.
 ///
 /// This encapsulates the database and networking layers of the chain.
@@ -459,10 +462,10 @@ pub struct Voter<H, N, E: Environment<H, N> + Send + Sync, GlobalIn, GlobalOut> 
 	env: Arc<E>,
 	voters: VoterSet<E::Id>,
 	inner: Arc<RwLock<InnerVoterState<H, N, E>>>,
-	finalized_notifications: UnboundedReceiver<FinalizedNotification<H, N, E>>,
+	finalized_notifications: Option<UnboundedReceiver<FinalizedNotification<H, N, E>>>,
 	last_finalized_number: N,
-	global_in: GlobalIn,
-	global_out: Buffered<GlobalOut, CommunicationOut<H, N, E::Signature, E::Id>>,
+	global_in: Option<GlobalIn>,
+	global_out: Option<Buffered<GlobalOut, CommunicationOut<H, N, E::Signature, E::Id>>>,
 	// the commit protocol might finalize further than the current round (if we're
 	// behind), we keep track of last finalized in round so we don't violate any
 	// assumptions from round-to-round.
@@ -564,41 +567,45 @@ impl<H, N, E: Environment<H, N> + Send + Sync, GlobalIn, GlobalOut> Voter<H, N, 
 			env,
 			voters,
 			inner,
-			finalized_notifications,
+			finalized_notifications: Some(finalized_notifications),
 			last_finalized_number,
 			last_finalized_in_rounds: last_finalized,
-			global_in,
-			global_out: Buffered::new(global_out),
+			global_in: Some(global_in),
+			global_out: Some(Buffered::new(global_out)),
 		})
 	}
 
-	async fn prune_background_rounds(&mut self) -> Result<(), E::Error> {
+	async fn prune_background_rounds(
+		&mut self,
+		notification: Notification<H, N, E>,
+		global_out: &mut Buffered<GlobalOut, CommunicationOut<H, N, E::Signature, E::Id>>,
+	) -> Result<(), E::Error> {
 		{
 			let mut inner = self.inner.write().await;
 
 			// Do work on all background rounds, broadcasting any commits generated.
 			while let Some(item) = inner.past_rounds.iter().next() {
 				if let Some((number, commit)) = item.poll().await? {
-					self.global_out.push(CommunicationOut::Commit(number, commit));
+					global_out.push(CommunicationOut::Commit(number, commit));
 				}
 			}
 		}
 
-		while let Some(res) = self.finalized_notifications.next().await {
-			let inner = self.inner.clone();
-			let mut inner = inner.write().await;
+		global_out.flush().await?;
 
-			let (f_hash, f_num, round, commit) = res;
+		let inner = self.inner.clone();
+		let mut inner = inner.write().await;
 
-			inner.past_rounds.update_finalized(f_num);
+		let (f_hash, f_num, round, commit) = notification;
 
-			if self.set_last_finalized_number(f_num) {
-				self.env.finalize_block(f_hash.clone(), f_num, round, commit)?;
-			}
+		inner.past_rounds.update_finalized(f_num);
 
-			if f_num > self.last_finalized_in_rounds.1 {
-				self.last_finalized_in_rounds = (f_hash, f_num);
-			}
+		if self.set_last_finalized_number(f_num) {
+			self.env.finalize_block(f_hash.clone(), f_num, round, commit)?;
+		}
+
+		if f_num > self.last_finalized_in_rounds.1 {
+			self.last_finalized_in_rounds = (f_hash, f_num);
 		}
 
 		Ok(())
@@ -612,116 +619,114 @@ impl<H, N, E: Environment<H, N> + Send + Sync, GlobalIn, GlobalOut> Voter<H, N, 
 	///
 	/// Otherwise, we will simply handle the commit and issue a finalization command
 	/// to the environment.
-	async fn process_incoming(&mut self) -> Result<(), E::Error> {
-		while let Some(item) = self.global_in.next().await {
-			match item? {
-				CommunicationIn::Commit(round_number, commit, mut process_commit_outcome) => {
-					trace!(target: "afg", "Got commit for round_number {:?}: target_number: {:?}, target_hash: {:?}",
-						round_number,
-						commit.target_number,
-						commit.target_hash,
-					);
+	async fn process_incoming(&mut self, item: IncomingItem<H, N, E>) -> Result<(), E::Error> {
+		match item? {
+			CommunicationIn::Commit(round_number, commit, mut process_commit_outcome) => {
+				trace!(target: "afg", "Got commit for round_number {:?}: target_number: {:?}, target_hash: {:?}",
+					round_number,
+					commit.target_number,
+					commit.target_hash,
+				);
 
-					let commit: Commit<_, _, _, _> = commit.into();
+				let commit: Commit<_, _, _, _> = commit.into();
 
-					let mut inner = self.inner.write().await;
+				let mut inner = self.inner.write().await;
 
-					// if the commit is for a background round dispatch to round committer.
-					// that returns Some if there wasn't one.
-					if let Some(commit) = inner.past_rounds.import_commit(round_number, commit) {
-						// otherwise validate the commit and signal the finalized block
-						// (if any) to the environment
-						let validation_result = validate_commit(&commit, &self.voters, &*self.env)?;
+				// if the commit is for a background round dispatch to round committer.
+				// that returns Some if there wasn't one.
+				if let Some(commit) = inner.past_rounds.import_commit(round_number, commit) {
+					// otherwise validate the commit and signal the finalized block
+					// (if any) to the environment
+					let validation_result = validate_commit(&commit, &self.voters, &*self.env)?;
 
-						if let Some((finalized_hash, finalized_number)) = validation_result.ghost {
-							// this can't be moved to a function because the compiler
-							// will complain about getting two mutable borrows to self
-							// (due to the call to `self.rounds.get_mut`).
-							let last_finalized_number = &mut self.last_finalized_number;
+					if let Some((finalized_hash, finalized_number)) = validation_result.ghost {
+						// this can't be moved to a function because the compiler
+						// will complain about getting two mutable borrows to self
+						// (due to the call to `self.rounds.get_mut`).
+						let last_finalized_number = &mut self.last_finalized_number;
 
-							// clean up any background rounds
-							inner.past_rounds.update_finalized(finalized_number);
+						// clean up any background rounds
+						inner.past_rounds.update_finalized(finalized_number);
 
-							if finalized_number > *last_finalized_number {
-								*last_finalized_number = finalized_number;
-								self.env.finalize_block(finalized_hash, finalized_number, round_number, commit)?;
-							}
-
-							process_commit_outcome.run(CommitProcessingOutcome::Good(GoodCommit::new()));
-						} else {
-							// Failing validation of a commit is bad.
-							process_commit_outcome.run(
-								CommitProcessingOutcome::Bad(BadCommit::from(validation_result)),
-							);
+						if finalized_number > *last_finalized_number {
+							*last_finalized_number = finalized_number;
+							self.env.finalize_block(finalized_hash, finalized_number, round_number, commit)?;
 						}
-					} else {
-						// Import to backgrounded round is good.
+
 						process_commit_outcome.run(CommitProcessingOutcome::Good(GoodCommit::new()));
+					} else {
+						// Failing validation of a commit is bad.
+						process_commit_outcome.run(
+							CommitProcessingOutcome::Bad(BadCommit::from(validation_result)),
+						);
+					}
+				} else {
+					// Import to backgrounded round is good.
+					process_commit_outcome.run(CommitProcessingOutcome::Good(GoodCommit::new()));
+				}
+			}
+			CommunicationIn::CatchUp(catch_up, mut process_catch_up_outcome) => {
+				trace!(target: "afg", "Got catch-up message for round {}", catch_up.round_number);
+
+				let mut inner = self.inner.write().await;
+
+				let round = if let Some(round) = validate_catch_up(
+					catch_up,
+					&*self.env,
+					&self.voters,
+					inner.best_round.round_number(),
+				) {
+					round
+				} else {
+					process_catch_up_outcome.run(CatchUpProcessingOutcome::Bad(BadCatchUp::new()));
+					return Ok(());
+				};
+
+				let state = round.state();
+
+				// beyond this point, we set this round to the past and
+				// start voting in the next round.
+				let mut just_completed = VotingRound::completed(
+					round,
+					inner.best_round.finalized_sender(),
+					None,
+					self.env.clone(),
+				).await;
+
+				let new_best = VotingRound::new(
+					just_completed.round_number() + 1,
+					self.voters.clone(),
+					self.last_finalized_in_rounds.clone(),
+					Some(just_completed.bridge_state()),
+					inner.best_round.finalized_sender(),
+					self.env.clone(),
+				).await;
+
+				// update last-finalized in rounds _after_ starting new round.
+				// otherwise the base could be too eagerly set forward.
+				if let Some((f_hash, f_num)) = state.finalized.clone() {
+					if f_num > self.last_finalized_in_rounds.1 {
+						self.last_finalized_in_rounds = (f_hash, f_num);
 					}
 				}
-				CommunicationIn::CatchUp(catch_up, mut process_catch_up_outcome) => {
-					trace!(target: "afg", "Got catch-up message for round {}", catch_up.round_number);
 
-					let mut inner = self.inner.write().await;
+				self.env.completed(
+					just_completed.round_number(),
+					just_completed.round_state(),
+					just_completed.dag_base(),
+					just_completed.historical_votes(),
+				)?;
 
-					let round = if let Some(round) = validate_catch_up(
-						catch_up,
-						&*self.env,
-						&self.voters,
-						inner.best_round.round_number(),
-					) {
-						round
-					} else {
-						process_catch_up_outcome.run(CatchUpProcessingOutcome::Bad(BadCatchUp::new()));
-						return Ok(());
-					};
+				inner.past_rounds.push(&*self.env, just_completed);
 
-					let state = round.state();
+				let old_best = std::mem::replace(&mut inner.best_round, new_best);
+				inner.past_rounds.push(
+					&*self.env,
+					old_best,
+				);
 
-					// beyond this point, we set this round to the past and
-					// start voting in the next round.
-					let mut just_completed = VotingRound::completed(
-						round,
-						inner.best_round.finalized_sender(),
-						None,
-						self.env.clone(),
-					).await;
-
-					let new_best = VotingRound::new(
-						just_completed.round_number() + 1,
-						self.voters.clone(),
-						self.last_finalized_in_rounds.clone(),
-						Some(just_completed.bridge_state()),
-						inner.best_round.finalized_sender(),
-						self.env.clone(),
-					).await;
-
-					// update last-finalized in rounds _after_ starting new round.
-					// otherwise the base could be too eagerly set forward.
-					if let Some((f_hash, f_num)) = state.finalized.clone() {
-						if f_num > self.last_finalized_in_rounds.1 {
-							self.last_finalized_in_rounds = (f_hash, f_num);
-						}
-					}
-
-					self.env.completed(
-						just_completed.round_number(),
-						just_completed.round_state(),
-						just_completed.dag_base(),
-						just_completed.historical_votes(),
-					)?;
-
-					inner.past_rounds.push(&*self.env, just_completed);
-
-					let old_best = std::mem::replace(&mut inner.best_round, new_best);
-					inner.past_rounds.push(
-						&*self.env,
-						old_best,
-					);
-
-					process_catch_up_outcome.run(CatchUpProcessingOutcome::Good(GoodCatchUp::new()));
-				},
-			}
+				process_catch_up_outcome.run(CatchUpProcessingOutcome::Good(GoodCatchUp::new()));
+			},
 		}
 
 		Ok(())
@@ -792,11 +797,38 @@ impl<H, N, E: Environment<H, N> + Send + Sync, GlobalIn, GlobalOut> Voter<H, N, 
 	}
 
 	async fn vote(&mut self) -> Result<(), E::Error> {
-		self.process_incoming().await?;
-		self.prune_background_rounds().await?;
-		let _ = self.global_out.flush().await?;
+		let mut global_in = match self.global_in.take() {
+			Some(global_in) => global_in,
+			None => return Ok(()),
+		};
+		let mut global_out= match self.global_out.take() {
+			Some(global_out) => global_out,
+			None => return Ok(()),
+		};
+		let mut finalized_notifications = match self.finalized_notifications.take() {
+			Some(finalized_notifications) => finalized_notifications,
+			None => return Ok(()),
+		};
+		loop {
+			futures::select! {
+				item = global_in.next().fuse() => {
+					match item {
+						Some(item) => self.process_incoming(item).await,
+						None => Ok(()),
+					}?;
+				},
+				res = finalized_notifications.next().fuse() => {
+					match res {
+						Some(res) => self.prune_background_rounds(res, &mut global_out).await,
+						None => Ok(()),
+					}?;
+				},
+				result = self.process_best_round().fuse() => {
+					return result;
+				}
 
-		self.process_best_round().await
+			}
+		}
 	}
 }
 
@@ -1484,7 +1516,7 @@ mod tests {
 			while voter_state.get().await.best_round.0 == 6 {
 				return;
 			}
-			finalized.await;
+			let _ = finalized.await;
 
 			assert_eq!(
 				voter_state.get().await.best_round,
