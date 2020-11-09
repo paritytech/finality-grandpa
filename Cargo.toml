@@ -23,6 +23,7 @@ rand = "0.7.0"
 quickcheck = "0.9"
 parking_lot = "0.9"
 async-std = { version = "1.6.5", features = ["unstable"] }
+env_logger = "0.8"
 
 
 [features]

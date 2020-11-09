@@ -1236,6 +1236,8 @@ mod tests {
 
 	#[test]
 	fn broadcast_commit() {
+		env_logger::init();
+
 		let local_id = Id(5);
 		let voters = VoterSet::new([(local_id, 100)].iter().cloned()).expect("nonempty");
 
