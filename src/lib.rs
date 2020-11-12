@@ -24,6 +24,7 @@
 //!
 //! Equivocation detection and vote-set management is done in the `round` module.
 //! The work for actually casting votes is done in the `voter` module.
+#![recursion_limit="1024"]
 
 #![warn(missing_docs)]
 #![cfg_attr(not(feature = "std"), no_std)]

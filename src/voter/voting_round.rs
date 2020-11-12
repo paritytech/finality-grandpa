@@ -31,6 +31,8 @@ use crate::{
 use crate::voter_set::VoterSet;
 use super::{Environment, Buffered, FinalizedNotification};
 
+type IncomingItem<H, N, E> = Option<std::result::Result<SignedMessage<H, N, <E as Environment<H, N>>::Signature, <E as Environment<H, N>>::Id>, <E as Environment<H, N>>::Error>>;
+
 /// The state of a voting round.
 pub(super) enum State<T> {
 	Start(T, T),
@@ -179,68 +181,84 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 		trace!(target: "afg", "Polling round {}, state = {:?}, step = {:?}", self.votes.number(), self.votes.state(), self.state);
 
 		let pre_state = self.votes.state();
-		self.process_incoming().await?;
 
-		// we only cast votes when we have access to the previous round state.
-		// we might have started this round as a prospect "future" round to
-		// check whether the voter is lagging behind the current round.
-		let last_round_state = match self.last_round_state.as_ref() {
-			Some(s) => Some(s.get().await.clone()),
-			None => None,
-		};
+		futures::select! {
+			item = self.incoming.next().fuse() => {
+				self.process_incoming(item).await?;
+			},
+			default => {
+				// we only cast votes when we have access to the previous round state.
+				// we might have started this round as a prospect "future" round to
+				// check whether the voter is lagging behind the current round.
+				let last_round_state = match self.last_round_state.as_ref() {
+					Some(s) => Some(s.get().await.clone()),
+					None => None,
+				};
 
-		if let Some(ref last_round_state) = last_round_state {
-			self.primary_propose(last_round_state)?;
-			self.prevote(last_round_state).await?;
-			self.precommit(last_round_state).await?;
+				if let Some(ref last_round_state) = last_round_state {
+					self.primary_propose(last_round_state)?;
+					self.prevote(last_round_state).await?;
+					self.precommit(last_round_state).await?;
+				}
+
+				self.outgoing.flush().await?;
+			}
 		}
 
-		self.outgoing.flush().await?;
-		self.process_incoming().await?; // in case we got a new message signed locally.
-
-		// broadcast finality notifications after attempting to cast votes
-		let post_state = self.votes.state();
-		self.notify(pre_state, post_state).await;
-
-		// make sure that the previous round estimate has been finalized
-		let last_round_estimate_finalized = match last_round_state {
-			Some(RoundState {
-				estimate: Some((_, last_round_estimate)),
-				finalized: Some((_, last_round_finalized)),
-				..
-			}) => {
-				// either it was already finalized in the previous round
-				let finalized_in_last_round = last_round_estimate <= last_round_finalized;
-
-				// or it must be finalized in the current round
-				let finalized_in_current_round = self.finalized().map_or(
-					false,
-					|(_, current_round_finalized)| last_round_estimate <= *current_round_finalized,
-				);
-
-				finalized_in_last_round || finalized_in_current_round
+		futures::select! {
+			item = self.incoming.next().fuse() => {
+				self.process_incoming(item).await?; // in case we got a new message signed locally.
 			},
-			None => {
-				// NOTE: when we catch up to a round we complete the round
-				// without any last round state. in this case we already started
-				// a new round after we caught up so this guard is unneeded.
-				true
-			},
-			_ => false,
-		};
+			default => {
+				let last_round_state = match self.last_round_state.as_ref() {
+					Some(s) => Some(s.get().await.clone()),
+					None => None,
+				};
+				// broadcast finality notifications after attempting to cast votes
+				let post_state = self.votes.state();
+				self.notify(pre_state, post_state).await;
+
+				// make sure that the previous round estimate has been finalized
+				let last_round_estimate_finalized = match last_round_state {
+					Some(RoundState {
+						estimate: Some((_, last_round_estimate)),
+						finalized: Some((_, last_round_finalized)),
+						..
+					}) => {
+						// either it was already finalized in the previous round
+						let finalized_in_last_round = last_round_estimate <= last_round_finalized;
+
+						// or it must be finalized in the current round
+						let finalized_in_current_round = self.finalized().map_or(
+							false,
+							|(_, current_round_finalized)| last_round_estimate <= *current_round_finalized,
+						);
+
+						finalized_in_last_round || finalized_in_current_round
+					},
+					None => {
+						// NOTE: when we catch up to a round we complete the round
+						// without any last round state. in this case we already started
+						// a new round after we caught up so this guard is unneeded.
+						true
+					},
+					_ => false,
+				};
 
 
-		// the previous round estimate must be finalized
-		if !last_round_estimate_finalized {
-			trace!(target: "afg", "Round {} completable but estimate not finalized.", self.round_number());
-			self.log_participation(log::Level::Trace);
-			return Ok(());
+				// the previous round estimate must be finalized
+				if !last_round_estimate_finalized {
+					trace!(target: "afg", "Round {} completable but estimate not finalized.", self.round_number());
+					self.log_participation(log::Level::Trace);
+					return Ok(());
+				}
+
+				debug!(target: "afg", "Completed round {}, state = {:?}, step = {:?}",
+					self.votes.number(), self.votes.state(), self.state);
+
+				self.log_participation(log::Level::Debug);
+			}
 		}
-
-		debug!(target: "afg", "Completed round {}, state = {:?}, step = {:?}",
-			self.votes.number(), self.votes.state(), self.state);
-
-		self.log_participation(log::Level::Debug);
 
 		// both exit conditions verified, we can complete this round
 		Ok(())
@@ -404,7 +422,7 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 			number, precommit_weight, threshold, total_weight, n_precommits, n_voters);
 	}
 
-	async fn process_incoming(&mut self) -> Result<(), E::Error> {
+	async fn process_incoming(&mut self, item: IncomingItem<H, N, E>) -> Result<(), E::Error> {
 		while let Some(incoming) = self.incoming.next().await {
 			trace!(target: "afg", "Round {}: Got incoming message", self.round_number());
 			self.handle_vote(incoming?)?;
