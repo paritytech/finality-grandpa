@@ -824,9 +824,14 @@ impl<H, N, E: Environment<H, N> + Send + Sync, GlobalIn, GlobalOut> Voter<H, N, 
 					}?;
 				},
 				result = self.process_best_round().fuse() => {
-					return result;
-				}
-
+					let precommitted = match self.inner.read().await.best_round.state() {
+						Some(&VotingRoundState::Precommitted) => true, // start when we've cast all votes.
+						_ => false,
+					};
+					if precommitted {
+						return result;
+					}
+				},
 			}
 		}
 	}
@@ -1061,7 +1066,7 @@ mod tests {
 		environment::{Environment, Id, Signature},
 	};
 	use crate::weights::{VoteWeight, VoterWeight};
-	use futures::executor::{block_on, LocalPool};
+	use futures::executor::{block_on, LocalPool, ThreadPool};
 	use futures::task::SpawnExt;
 	use futures_timer::Delay;
 	use std::iter;
@@ -1162,7 +1167,7 @@ mod tests {
 		let voters = VoterSet::new((0..num_voters).map(|i| (Id(i), 1))).expect("nonempty");
 
 		let (network, routing_task) = testing::environment::make_network();
-		let mut pool = LocalPool::new();
+		let mut pool = ThreadPool::new().expect("Could not create a thread pool");
 
 		// some voters offline
 		let (finalized_streams, voter_states): (Vec<_>, Vec<_>) = (0..voters_online).map(|i| {
@@ -1187,7 +1192,7 @@ mod tests {
 			)).expect("Voter not created");
 			let voter_state = voter.voter_state();
 
-			pool.spawner().spawn(async move {
+			pool.spawn(async move {
 				voter.vote().await.unwrap()
 			}).unwrap();
 
@@ -1200,8 +1205,10 @@ mod tests {
 			)
 		}).unzip();
 
+		pool.spawn(routing_task.map(|_| ())).unwrap();
+
 		let voter_state = &voter_states[0];
-		pool.run_until(async {
+		block_on(async {
 			for vs in voter_states.iter() {
 				vs.get().await == voter_state.get().await;
 			}
@@ -1216,7 +1223,7 @@ mod tests {
 			precommit_ids: Default::default(),
 		};
 
-		pool.run_until(async {
+		block_on(async {
 			assert_eq!(
 				voter_state.get().await,
 				report::VoterState {
@@ -1226,10 +1233,9 @@ mod tests {
 			);
 		});
 
-		pool.spawner().spawn(routing_task.map(|_| ())).unwrap();
-		pool.run_until(future::join_all(finalized_streams.into_iter()));
+		block_on(future::join_all(finalized_streams.into_iter()));
 
-		pool.run_until(async {
+		block_on(async {
 			assert_eq!(voter_state.get().await.best_round, (2, expected_round_state.clone()));
 		});
 	}
@@ -1504,20 +1510,18 @@ mod tests {
 			assert_eq!(voter_state.get().await.background_rounds.get(&5), None);
 		});
 
-		// spawn the voter in the background
-		pool.spawner().spawn(async move {
-			unsynced_voter.vote().await.unwrap()
-		}).unwrap();
-
-		let finalized = env.finalized_stream().take(1).into_future();
-
 		pool.run_until(async {
+			unsynced_voter.vote().await.unwrap();
+
 			// wait until it's caught up, it should skip to round 6 and send a
 			// finality notification for the block that was finalized by catching
 			// up.
-			while voter_state.get().await.best_round.0 == 6 {
-				return;
+			loop {
+				if voter_state.get().await.best_round.0 == 6 {
+					break;
+				}
 			}
+			let finalized = env.finalized_stream().take(1).into_future();
 			let _ = finalized.await;
 
 			assert_eq!(

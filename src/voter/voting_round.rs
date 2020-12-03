@@ -179,9 +179,6 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 	/// can continue to be polled.
 	pub(super) async fn poll(&mut self) -> Result<(), E::Error> {
 		trace!(target: "afg", "Polling round {}, state = {:?}, step = {:?}", self.votes.number(), self.votes.state(), self.state);
-
-		let pre_state = self.votes.state();
-
 		futures::select! {
 			item = self.incoming.next().fuse() => {
 				self.process_incoming(item).await?;
@@ -196,7 +193,7 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 				};
 
 				if let Some(ref last_round_state) = last_round_state {
-					self.primary_propose(last_round_state)?;
+					self.primary_propose(last_round_state).await?;
 					self.prevote(last_round_state).await?;
 					self.precommit(last_round_state).await?;
 				}
@@ -210,13 +207,20 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 				self.process_incoming(item).await?; // in case we got a new message signed locally.
 			},
 			default => {
+				// broadcast finality notifications after attempting to cast votes
+				let pre_state = self.votes.state();
+				let post_state = self.votes.state();
+				self.notify(pre_state, post_state).await;
+
+				// try again if the current round is not completable
+				if !self.votes.completable() {
+					trace!(target: "afg", "Round {} NOT completable.", self.round_number());
+				}
+
 				let last_round_state = match self.last_round_state.as_ref() {
 					Some(s) => Some(s.get().await.clone()),
 					None => None,
 				};
-				// broadcast finality notifications after attempting to cast votes
-				let post_state = self.votes.state();
-				self.notify(pre_state, post_state).await;
 
 				// make sure that the previous round estimate has been finalized
 				let last_round_estimate_finalized = match last_round_state {
@@ -422,8 +426,8 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 			number, precommit_weight, threshold, total_weight, n_precommits, n_voters);
 	}
 
-	async fn process_incoming(&mut self, item: IncomingItem<H, N, E>) -> Result<(), E::Error> {
-		while let Some(incoming) = self.incoming.next().await {
+	async fn process_incoming(&mut self, incoming: IncomingItem<H, N, E>) -> Result<(), E::Error> {
+		if let Some(incoming) = incoming {
 			trace!(target: "afg", "Round {}: Got incoming message", self.round_number());
 			self.handle_vote(incoming?)?;
 		}
@@ -431,7 +435,7 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 		Ok(())
 	}
 
-	fn primary_propose(&mut self, last_round_state: &RoundState<H, N>) -> Result<(), E::Error> {
+	async fn primary_propose(&mut self, last_round_state: &RoundState<H, N>) -> Result<(), E::Error> {
 		match self.state.take() {
 			Some(State::Start(prevote_timer, precommit_timer)) => {
 				let maybe_estimate = last_round_state.estimate.clone();
