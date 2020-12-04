@@ -177,8 +177,10 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 
 	/// Poll the round. When the round is completable and messages have been flushed, it will return `Poll::Ready` but
 	/// can continue to be polled.
-	pub(super) async fn poll(&mut self) -> Result<(), E::Error> {
+	pub(super) async fn poll(&mut self) -> Result<bool, E::Error> {
 		trace!(target: "afg", "Polling round {}, state = {:?}, step = {:?}", self.votes.number(), self.votes.state(), self.state);
+		let pre_state = self.votes.state();
+
 		futures::select! {
 			item = self.incoming.next().fuse() => {
 				self.process_incoming(item).await?;
@@ -208,13 +210,13 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 			},
 			default => {
 				// broadcast finality notifications after attempting to cast votes
-				let pre_state = self.votes.state();
 				let post_state = self.votes.state();
 				self.notify(pre_state, post_state).await;
 
 				// try again if the current round is not completable
 				if !self.votes.completable() {
 					trace!(target: "afg", "Round {} NOT completable.", self.round_number());
+					return Ok(false);
 				}
 
 				let last_round_state = match self.last_round_state.as_ref() {
@@ -254,18 +256,20 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 				if !last_round_estimate_finalized {
 					trace!(target: "afg", "Round {} completable but estimate not finalized.", self.round_number());
 					self.log_participation(log::Level::Trace);
-					return Ok(());
+					return Ok(false);
 				}
 
 				debug!(target: "afg", "Completed round {}, state = {:?}, step = {:?}",
 					self.votes.number(), self.votes.state(), self.state);
 
 				self.log_participation(log::Level::Debug);
+
+				return Ok(true)
 			}
 		}
 
 		// both exit conditions verified, we can complete this round
-		Ok(())
+		Ok(false)
 	}
 
 	/// Inspect the state of this round.

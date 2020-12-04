@@ -740,14 +740,14 @@ impl<H, N, E: Environment<H, N> + Send + Sync, GlobalIn, GlobalOut> Voter<H, N, 
 			let mut inner = self.inner.write().await;
 
 			let should_start_next = {
-				inner.best_round.poll().await?;
+				let completable = inner.best_round.poll().await?;
 
 				let precommitted = match inner.best_round.state() {
 					Some(&VotingRoundState::Precommitted) => true, // start when we've cast all votes.
 					_ => false,
 				};
 
-				precommitted
+				completable && precommitted
 			};
 
 			if !should_start_next { return Ok(()) }
