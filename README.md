@@ -75,7 +75,8 @@ signals emitted on the underlying blockchain.
 
 ### Fuzzing
 
-To run the fuzzing test harness you need to install either `afl` or `cargo-fuzz`:
+To run the fuzzing test harness you need to install either `afl` or `cargo-fuzz` (you'll need a nightly Rust toolchain
+for this):
 
 ```sh
 cargo install cargo-fuzz
