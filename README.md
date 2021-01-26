@@ -28,7 +28,7 @@ Add this to your Cargo.toml:
 
 ```toml
 [dependencies]
-finality-grandpa = "0.12"
+finality-grandpa = "0.13"
 ```
 
 **Features:**
@@ -72,6 +72,36 @@ should have most of the relevant integration code.
 Most importantly this crate does not deal with authority set changes. It assumes that the set of
 authorities is always the same. Authority set handoffs are handled in Substrate by listening to
 signals emitted on the underlying blockchain.
+
+### Fuzzing
+
+To run the fuzzing test harness you need to install either `afl` or `cargo-fuzz`:
+
+```sh
+cargo install cargo-fuzz
+cargo install afl
+```
+
+#### libfuzzer
+
+```sh
+cargo fuzz run graph
+cargo fuzz run round
+```
+
+#### afl
+
+```sh
+cd fuzz
+cargo afl build --features afl --bin graph_afl
+cargo afl build --features afl --bin round_afl
+
+# create some random input
+mkdir afl_in && dd if=/dev/urandom of=afl_in/seed bs=1024 count=4
+
+cargo afl fuzz -i afl_in -o afl_out target/debug/graph_afl
+cargo afl fuzz -i afl_in -o afl_out target/debug/round_afl
+```
 
 ## Resources
 
