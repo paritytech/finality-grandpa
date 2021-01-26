@@ -156,28 +156,29 @@ where
 
 #[cfg(test)]
 mod tests {
-	use crate::std::vec::Vec;
 	use super::*;
+	use crate::std::vec::Vec;
 	use quickcheck::*;
-	use rand::Rng;
-	use rand::seq::SliceRandom;
 
 	impl Arbitrary for Phase {
-		fn arbitrary<G: Gen>(g: &mut G) -> Self {
-			*[Phase::Prevote, Phase::Precommit].choose(g).unwrap()
+		fn arbitrary(g: &mut Gen) -> Self {
+			*g.choose(&[Phase::Prevote, Phase::Precommit]).unwrap()
 		}
 	}
 
 	impl Arbitrary for Context<usize> {
-		fn arbitrary<G: Gen>(g: &mut G) -> Self {
+		fn arbitrary(g: &mut Gen) -> Self {
 			let mut ctx = Context::new(VoterSet::arbitrary(g));
-			let n = g.gen_range(0, ctx.voters.len().get());
-			let equivocators = (0 ..= n)
-				.map(|_| ctx.voters.nth_mod(g.gen()).1.clone())
+
+			let n = usize::arbitrary(g) % ctx.voters.len().get();
+			let equivocators = (0..=n)
+				.map(|_| ctx.voters.nth_mod(usize::arbitrary(g)).1.clone())
 				.collect::<Vec<_>>();
+
 			for v in equivocators {
 				ctx.equivocated(&v, Phase::arbitrary(g))
 			}
+
 			ctx
 		}
 	}

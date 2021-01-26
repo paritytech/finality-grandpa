@@ -98,6 +98,12 @@ impl Bitfield {
 		test_bit(self.bits[word_off], position % 64)
 	}
 
+	/// Return the current capacity of this bitfield, measured in bits.
+	#[cfg(test)]
+	pub fn capacity(&self) -> usize {
+		self.bits.len() * 64
+	}
+
 	/// Get an iterator over all bits that are set (i.e. 1) at even bit positions.
 	pub fn iter1s_even(&self) -> impl Iterator<Item = Bit1> + '_ {
 		self.iter1s(0, 1)
@@ -201,14 +207,23 @@ pub struct Bit1 {
 #[cfg(test)]
 mod tests {
 	use super::*;
-	use quickcheck::*;
-	use rand::Rng;
 	use crate::std::iter;
+	use quickcheck::*;
 
 	impl Arbitrary for Bitfield {
-		fn arbitrary<G: Gen>(g: &mut G) -> Bitfield {
-			let n = g.gen_range(0, g.size());
-			let b = iter::from_fn(|| Some(g.next_u64())).take(n).collect::<Vec<_>>();
+		fn arbitrary(g: &mut Gen) -> Bitfield {
+			let n = usize::arbitrary(g) % g.size();
+			let mut b = iter::from_fn(|| Some(u64::arbitrary(g)))
+				.take(n)
+				.collect::<Vec<_>>();
+
+			// we need to make sure we don't add empty words at the end of the
+			// bitfield otherwise it would break equality on some of the tests
+			// below.
+			while let Some(0) = b.last() {
+				b.pop();
+			}
+
 			Bitfield::from(b)
 		}
 	}
@@ -216,6 +231,12 @@ mod tests {
 	#[test]
 	fn set_bit() {
 		fn prop(mut a: Bitfield, idx: usize) -> bool {
+			// let's bound the max index at 1000 times the number of bits in the
+			// bitfield. this is needed because otherwise when calling `set_bit`
+			// with a large value we might try to allocate more memory than we
+			// have.
+			let idx = idx.min(a.capacity() * 1000);
+
 			a.set_bit(idx).test_bit(idx)
 		}
 
