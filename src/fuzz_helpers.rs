@@ -407,7 +407,7 @@ pub fn execute_fuzzed_graph(data: &[u8]) {
 
 	/// A vote-node on the graph.
 	#[derive(Default, Clone, Debug)]
-	struct Vote { prevote: u8, precommit: u8 };
+	struct Vote { prevote: u8, precommit: u8 }
 	fn new_prevote() -> Vote {
 		Vote { prevote: 1, precommit: 0 }
 	}
