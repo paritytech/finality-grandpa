@@ -98,12 +98,6 @@ impl Bitfield {
 		test_bit(self.bits[word_off], position % 64)
 	}
 
-	/// Return the current capacity of this bitfield, measured in bits.
-	#[cfg(test)]
-	pub fn capacity(&self) -> usize {
-		self.bits.len() * 64
-	}
-
 	/// Get an iterator over all bits that are set (i.e. 1) at even bit positions.
 	pub fn iter1s_even(&self) -> impl Iterator<Item = Bit1> + '_ {
 		self.iter1s(0, 1)
@@ -231,11 +225,10 @@ mod tests {
 	#[test]
 	fn set_bit() {
 		fn prop(mut a: Bitfield, idx: usize) -> bool {
-			// let's bound the max index at 1000 times the number of bits in the
-			// bitfield. this is needed because otherwise when calling `set_bit`
-			// with a large value we might try to allocate more memory than we
-			// have.
-			let idx = idx.min(a.capacity() * 1000);
+			// let's bound the max bitfield index at 2^24. this is needed because when calling
+			// `set_bit` we will extend the backing vec to accomodate the given bitfield size, this
+			// way we restrict the maximum allocation size to 16MB.
+			let idx = idx.min(1 << 24);
 
 			a.set_bit(idx).test_bit(idx)
 		}
