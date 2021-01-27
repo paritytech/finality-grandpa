@@ -177,19 +177,30 @@ fn threshold(total_weight: VoterWeight) -> VoterWeight {
 
 #[cfg(test)]
 mod tests {
-	use crate::std::iter;
 	use super::*;
+	use crate::std::iter;
 	use quickcheck::*;
-	use rand::{thread_rng, Rng, seq::SliceRandom};
+	use rand::{seq::SliceRandom, thread_rng};
 
 	impl<Id: Arbitrary + Eq + Ord> Arbitrary for VoterSet<Id> {
-		fn arbitrary<G: Gen>(g: &mut G) -> VoterSet<Id> {
-			let mut ids = Vec::<Id>::arbitrary(g);
-			if ids.is_empty() {
-				ids.push(Id::arbitrary(g))
+		fn arbitrary(g: &mut Gen) -> VoterSet<Id> {
+			loop {
+				let mut ids = Vec::<Id>::arbitrary(g);
+				if ids.is_empty() {
+					ids.push(Id::arbitrary(g))
+				}
+
+				let weights = iter::from_fn(|| Some(u32::arbitrary(g) as u64));
+
+				// we might generate an invalid voter set above if:
+				// - all validators have 0 weight
+				// - the total weight is higher than `u64::max_value()`
+				//
+				// the easiest thing to do is to just retry generating another instance.
+				if let Some(set) = VoterSet::new(ids.into_iter().zip(weights)) {
+					break set;
+				}
 			}
-			let weights = iter::from_fn(move || Some(g.gen::<u32>() as u64));
-			VoterSet::new(ids.into_iter().zip(weights)).expect("nonempty")
 		}
 	}
 
@@ -211,7 +222,12 @@ mod tests {
 				let v2 = VoterSet::new(v).expect("nonempty");
 				assert_eq!(v1, v2)
 			} else {
-				assert!(v.iter().all(|(_, w)| w == &0))
+				assert!(
+					// either no authority has a valid weight
+					v.iter().all(|(_, w)| w == &0) ||
+					// or the total weight overflows a u64
+					v.iter().map(|(_, w)| *w as u128).sum::<u128>() > u64::max_value() as u128
+				);
 			}
 		}
 
@@ -221,7 +237,15 @@ mod tests {
 	#[test]
 	fn total_weight() {
 		fn prop(v: Vec<(usize, u64)>) {
-			let expected = VoterWeight::new(v.iter().map(|(_, weight)| *weight).sum());
+			let total_weight = v.iter().map(|(_, weight)| *weight as u128).sum::<u128>();
+
+			// this validator set is invalid
+			if total_weight > u64::max_value() as u128 {
+				return;
+			}
+
+			let expected = VoterWeight::new(total_weight as u64);
+
 			if let Some(v1) = VoterSet::new(v) {
 				assert_eq!(Some(v1.total_weight()), expected)
 			} else {

@@ -12,11 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#[macro_use]
+extern crate afl;
+
 use finality_grandpa::fuzz_helpers;
 
 fn main() {
-	afl::fuzz!(|data: &[u8]| {
+	fuzz!(|data: &[u8]| {
 		fuzz_helpers::execute_fuzzed_graph(data)
 	});
 }
-

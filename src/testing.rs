@@ -232,7 +232,8 @@ pub mod environment {
 			const COMMIT_DELAY_MILLIS: u64 = 100;
 
 			let delay = Duration::from_millis(
-				rand::thread_rng().gen_range(0, COMMIT_DELAY_MILLIS));
+				rand::thread_rng().gen_range(0..COMMIT_DELAY_MILLIS)
+			);
 
 			Box::new(Delay::new(delay).map(Ok))
 		}
