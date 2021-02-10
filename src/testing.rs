@@ -83,10 +83,36 @@ pub mod chain {
 		pub fn set_last_finalized(&mut self, last_finalized: (&'static str, u32)) {
 			self.finalized = last_finalized;
 		}
+
+		pub fn best_chain_containing(&self, base: &'static str) -> Option<(&'static str, u32)> {
+			let base_number = self.inner.get(base)?.number;
+
+			for leaf in &self.leaves {
+				// leaves are in descending order.
+				let leaf_number = self.inner.get(leaf).unwrap().number;
+				if leaf_number < base_number {
+					break;
+				}
+
+				if leaf == &base {
+					return Some((leaf, leaf_number));
+				}
+
+				if let Ok(_) = self.ancestry(base, leaf) {
+					return Some((leaf, leaf_number));
+				}
+			}
+
+			None
+		}
 	}
 
 	impl Chain<&'static str, u32> for DummyChain {
-		fn ancestry(&self, base: &'static str, mut block: &'static str) -> Result<Vec<&'static str>, Error> {
+		fn ancestry(
+			&self,
+			base: &'static str,
+			mut block: &'static str,
+		) -> Result<Vec<&'static str>, Error> {
 			let mut ancestry = Vec::new();
 
 			loop {
@@ -102,26 +128,6 @@ pub mod chain {
 			}
 
 			Ok(ancestry)
-		}
-
-		fn best_chain_containing(&self, base: &'static str) -> Option<(&'static str, u32)> {
-			let base_number = self.inner.get(base)?.number;
-
-			for leaf in &self.leaves {
-				// leaves are in descending order.
-				let leaf_number = self.inner.get(leaf).unwrap().number;
-				if leaf_number < base_number { break }
-
-				if leaf == &base {
-					return Some((leaf, leaf_number))
-				}
-
-				if let Ok(_) = self.ancestry(base, leaf) {
-					return Some((leaf, leaf_number));
-				}
-			}
-
-			None
 		}
 	}
 }
@@ -189,29 +195,35 @@ pub mod environment {
 	}
 
 	impl Chain<&'static str, u32> for Environment {
-		fn ancestry(&self, base: &'static str, block: &'static str) -> Result<Vec<&'static str>, Error> {
+		fn ancestry(
+			&self,
+			base: &'static str,
+			block: &'static str,
+		) -> Result<Vec<&'static str>, Error> {
 			self.chain.lock().ancestry(base, block)
-		}
-
-		fn best_chain_containing(&self, base: &'static str) -> Option<(&'static str, u32)> {
-			self.chain.lock().best_chain_containing(base)
 		}
 	}
 
 	impl crate::voter::Environment<&'static str, u32> for Environment {
 		type Timer = Box<dyn Future<Output = Result<(), Error>> + Unpin + Send + Sync>;
+		type BestChain = Box<
+			dyn Future<Output = Result<Option<(&'static str, u32)>, Error>> + Unpin + Send + Sync,
+		>;
 		type Id = Id;
 		type Signature = Signature;
-		type In =
-			Box<
-				dyn Stream<Item = Result<SignedMessage<&'static str, u32, Signature, Id>, Error>>
-					+ Unpin
-					+ Send
-					+ Sync,
-			>;
+		type In = Box<
+			dyn Stream<Item = Result<SignedMessage<&'static str, u32, Signature, Id>, Error>>
+				+ Unpin
+				+ Send
+				+ Sync,
+		>;
 		type Out =
 			Pin<Box<dyn Sink<Message<&'static str, u32>, Error = Error> + Send + Sync + 'static>>;
 		type Error = Error;
+
+		fn best_chain_containing(&self, base: &'static str) -> Self::BestChain {
+			Box::new(future::ok(self.chain.lock().best_chain_containing(base)))
+		}
 
 		fn round_data(&self, round: u64) -> RoundData<Self::Id, Self::Timer, Self::In, Self::Out> {
 			const GOSSIP_DURATION: Duration = Duration::from_millis(500);

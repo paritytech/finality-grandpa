@@ -56,19 +56,29 @@ mod voting_round;
 ///
 /// This encapsulates the database and networking layers of the chain.
 pub trait Environment<H: Eq, N: BlockNumberOps>: Chain<H, N> {
-	/// Associated timer for the Environment. See also
-	/// [round_commit_data](trait.Environment.html#tymethod.round_commit_timer).
-	type Timer: Future<Output=Result<(),Self::Error>> + Unpin;
+	/// Associated timer type for the environment. See also [`Self::round_data`] and
+	/// [`Self::round_commit_timer`].
+	type Timer: Future<Output = Result<(), Self::Error>> + Unpin;
+	/// Associated future type for the environment used when asynchronously computing the
+	/// best chain to vote on. See also [`Self::best_chain_containing`].
+	type BestChain: Future<Output = Result<Option<(H, N)>, Self::Error>> + Send + Sync + Unpin;
 	/// The associated Id for the Environment.
 	type Id: Ord + Clone + Eq + ::std::fmt::Debug;
 	/// The associated Signature type for the Environment.
 	type Signature: Eq + Clone;
 	/// The input stream used to communicate with the outside world.
-	type In: Stream<Item=Result<SignedMessage<H, N, Self::Signature, Self::Id>, Self::Error>> + Unpin;
+	type In: Stream<Item = Result<SignedMessage<H, N, Self::Signature, Self::Id>, Self::Error>>
+		+ Unpin;
 	/// The output stream used to communicate with the outside world.
-	type Out: Sink<Message<H, N>, Error=Self::Error> + Unpin;
+	type Out: Sink<Message<H, N>, Error = Self::Error> + Unpin;
 	/// The associated Error type.
 	type Error: From<crate::Error> + ::std::error::Error;
+
+	/// Return a future that will resolve to the hash of the best block whose chain
+	/// contains the given block hash, even if that block is `base` itself.
+	///
+	/// If `base` is unknown the future outputs `None`.
+	fn best_chain_containing(&self, base: H) -> Self::BestChain;
 
 	/// Produce data necessary to start a round of voting. This may also be called
 	/// with the round number of the most recently completed round, in which case
