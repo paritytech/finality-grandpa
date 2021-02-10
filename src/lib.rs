@@ -187,15 +187,11 @@ pub trait Chain<H: Eq, N: Copy + BlockNumberOps> {
 	/// If the block is not a descendent of `base`, returns an error.
 	fn ancestry(&self, base: H, block: H) -> Result<Vec<H>, Error>;
 
-	/// Return the hash of the best block whose chain contains the given block hash,
-	/// even if that block is `base` itself.
-	///
-	/// If `base` is unknown, return `None`.
-	fn best_chain_containing(&self, base: H) -> Option<(H, N)>;
-
 	/// Returns true if `block` is a descendent of or equal to the given `base`.
 	fn is_equal_or_descendent_of(&self, base: H, block: H) -> bool {
-		if base == block { return true; }
+		if base == block {
+			return true;
+		}
 
 		// TODO: currently this function always succeeds since the only error
 		// variant is `Error::NotDescendent`, this may change in the future as

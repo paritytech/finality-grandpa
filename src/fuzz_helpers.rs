@@ -130,11 +130,6 @@ impl Chain<Hash, BlockNumber> for FuzzChain {
 
 		Ok(full_ancestry.iter().rev().take_while(|x| **x != base).cloned().collect::<Vec<_>>())
 	}
-
-	fn best_chain_containing(&self, _base: Hash) -> Option<(Hash, BlockNumber)> {
-		// should be unused.
-		unimplemented!()
-	}
 }
 
 struct RandomnessStream<'a> {

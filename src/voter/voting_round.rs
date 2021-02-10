@@ -25,28 +25,31 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
-use crate::round::{Round, State as RoundState};
+use super::{Buffered, Environment, FinalizedNotification};
 use crate::{
-	Commit, Message, Prevote, Precommit, PrimaryPropose, SignedMessage,
-	SignedPrecommit, BlockNumberOps, validate_commit, ImportResult,
-	HistoricalVotes, weights::VoteWeight,
+	round::{Round, State as RoundState},
+	validate_commit,
+	voter_set::VoterSet,
+	weights::VoteWeight,
+	BlockNumberOps, Commit, HistoricalVotes, ImportResult, Message, Precommit, Prevote,
+	PrimaryPropose, SignedMessage, SignedPrecommit,
 };
-use crate::voter_set::VoterSet;
-use super::{Environment, Buffered, FinalizedNotification};
 
 /// The state of a voting round.
-pub(super) enum State<T> {
+pub(super) enum State<T, W> {
 	Start(T, T),
 	Proposed(T, T),
+	Prevoting(T, W),
 	Prevoted(T),
 	Precommitted,
 }
 
-impl<T> std::fmt::Debug for State<T> {
+impl<T, W> std::fmt::Debug for State<T, W> {
 	fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
 		match self {
 			State::Start(..) => write!(f, "Start"),
 			State::Proposed(..) => write!(f, "Proposed"),
+			State::Prevoting(..) => write!(f, "Prevoting"),
 			State::Prevoted(_) => write!(f, "Prevoted"),
 			State::Precommitted => write!(f, "Precommitted"),
 		}
@@ -63,7 +66,7 @@ pub(super) struct VotingRound<H, N, E: Environment<H, N>> where
 	votes: Round<E::Id, H, N, E::Signature>,
 	incoming: E::In,
 	outgoing: Buffered<E::Out, Message<H, N>>,
-	state: Option<State<E::Timer>>, // state machine driving votes.
+	state: Option<State<E::Timer, (H, E::BestChain)>>, // state machine driving votes.
 	bridged_round_state: Option<crate::bridge_state::PriorView<H, N>>, // updates to later round
 	last_round_state: Option<crate::bridge_state::LatterView<H, N>>, // updates from prior round
 	primary_block: Option<(H, N)>, // a block posted by primary as a hint.
@@ -105,7 +108,7 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 	N: Copy + BlockNumberOps + ::std::fmt::Debug,
 {
 	/// Create a new voting round.
-	pub (super) fn new(
+	pub(super) fn new(
 		round_number: u64,
 		voters: VoterSet<E::Id>,
 		base: (H, N),
@@ -251,7 +254,7 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 	}
 
 	/// Inspect the state of this round.
-	pub(super) fn state(&self) -> Option<&State<E::Timer>> {
+	pub(super) fn state(&self) -> Option<&State<E::Timer, (H, E::BestChain)>> {
 		self.state.as_ref()
 	}
 
@@ -459,37 +462,89 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 		Ok(())
 	}
 
-	fn prevote(&mut self, cx: &mut Context, last_round_state: &RoundState<H, N>) -> Result<(), E::Error> {
+	fn prevote(
+		&mut self,
+		cx: &mut Context,
+		last_round_state: &RoundState<H, N>,
+	) -> Result<(), E::Error> {
 		let state = self.state.take();
 
-		let mut handle_prevote = |mut prevote_timer: E::Timer, precommit_timer: E::Timer, proposed| {
+		let start_prevoting = |
+			this: &mut Self,
+			mut prevote_timer: E::Timer,
+			precommit_timer: E::Timer,
+			proposed: bool,
+			cx: &mut Context,
+		| {
 			let should_prevote = match prevote_timer.poll_unpin(cx) {
 				Poll::Ready(Err(e)) => return Err(e),
 				Poll::Ready(Ok(())) => true,
-				Poll::Pending => self.votes.completable(),
+				Poll::Pending => this.votes.completable(),
 			};
 
 			if should_prevote {
-				if self.voting.is_active() {
-					if let Some(prevote) = self.construct_prevote(last_round_state)? {
-						debug!(target: "afg", "Casting prevote for round {}", self.votes.number());
-						self.env.prevoted(self.round_number(), prevote.clone())?;
-						self.votes.set_prevoted_index();
-						self.outgoing.push(Message::Prevote(prevote));
-						self.state = Some(State::Prevoted(precommit_timer));
-					} else {
-						// when we can't construct a prevote, we shouldn't
-						// precommit.
-						self.state = None;
-						self.voting = Voting::No;
-					}
+				if this.voting.is_active() {
+					debug!(target: "afg", "Constructing prevote for round {}", this.votes.number());
+
+					let (base, best_chain) = this.construct_prevote(last_round_state);
+
+					// since we haven't polled the future above yet we need to
+					// manually schedule the current task to be awoken so the
+					// `best_chain` future is then polled below after we switch the
+					// state to `Prevoting`.
+					cx.waker().wake_by_ref();
+
+					this.state = Some(State::Prevoting(precommit_timer, (base, best_chain)));
 				} else {
-					self.state = Some(State::Prevoted(precommit_timer));
+					this.state = Some(State::Prevoted(precommit_timer));
 				}
 			} else if proposed {
-				self.state = Some(State::Proposed(prevote_timer, precommit_timer));
+				this.state = Some(State::Proposed(prevote_timer, precommit_timer));
 			} else {
-				self.state = Some(State::Start(prevote_timer, precommit_timer));
+				this.state = Some(State::Start(prevote_timer, precommit_timer));
+			}
+
+			Ok(())
+		};
+
+		let finish_prevoting = |
+			this: &mut Self,
+			precommit_timer: E::Timer,
+			base: H,
+			mut best_chain: E::BestChain,
+			cx: &mut Context,
+		| {
+			let best_chain = match best_chain.poll_unpin(cx) {
+				Poll::Ready(Err(e)) => return Err(e),
+				Poll::Ready(Ok(best_chain)) => best_chain,
+				Poll::Pending => {
+					this.state = Some(State::Prevoting(precommit_timer, (base, best_chain)));
+					return Ok(());
+				}
+			};
+
+			if let Some(target) = best_chain {
+				let prevote = Prevote {
+					target_hash: target.0,
+					target_number: target.1,
+				};
+
+				debug!(target: "afg", "Casting prevote for round {}", this.votes.number());
+				this.env.prevoted(this.round_number(), prevote.clone())?;
+				this.votes.set_prevoted_index();
+				this.outgoing.push(Message::Prevote(prevote));
+				this.state = Some(State::Prevoted(precommit_timer));
+			} else {
+				// if this block is considered unknown, something has gone wrong.
+				// log and handle, but skip casting a vote.
+				warn!(target: "afg",
+					"Could not cast prevote: previously known block {:?} has disappeared",
+					base,
+				);
+
+				// when we can't construct a prevote, we shouldn't precommit.
+				this.state = None;
+				this.voting = Voting::No;
 			}
 
 			Ok(())
@@ -497,18 +552,27 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 
 		match state {
 			Some(State::Start(prevote_timer, precommit_timer)) => {
-				handle_prevote(prevote_timer, precommit_timer, false)?;
-			},
+				start_prevoting(self, prevote_timer, precommit_timer, false, cx)?;
+			}
 			Some(State::Proposed(prevote_timer, precommit_timer)) => {
-				handle_prevote(prevote_timer, precommit_timer, true)?;
-			},
-			x => { self.state = x; }
+				start_prevoting(self, prevote_timer, precommit_timer, true, cx)?;
+			}
+			Some(State::Prevoting(precommit_timer, (base, best_chain))) => {
+				finish_prevoting(self, precommit_timer, base, best_chain, cx)?;
+			}
+			x => {
+				self.state = x;
+			}
 		}
 
 		Ok(())
 	}
 
-	fn precommit(&mut self, cx: &mut Context, last_round_state: &RoundState<H, N>) -> Result<(), E::Error> {
+	fn precommit(
+		&mut self,
+		cx: &mut Context,
+		last_round_state: &RoundState<H, N>,
+	) -> Result<(), E::Error> {
 		match self.state.take() {
 			Some(State::Prevoted(mut precommit_timer)) => {
 				let last_round_estimate = last_round_state.estimate.clone()
@@ -547,8 +611,10 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 	}
 
 	// construct a prevote message based on local state.
-	fn construct_prevote(&self, last_round_state: &RoundState<H, N>) -> Result<Option<Prevote<H, N>>, E::Error> {
-		let last_round_estimate = last_round_state.estimate.clone()
+	fn construct_prevote(&self, last_round_state: &RoundState<H, N>) -> (H, E::BestChain) {
+		let last_round_estimate = last_round_state
+			.estimate
+			.clone()
 			.expect("Rounds only started when prior round completable; qed");
 
 		let find_descendent_of = match self.primary_block {
@@ -607,22 +673,10 @@ impl<H, N, E: Environment<H, N>> VotingRound<H, N, E> where
 			}
 		};
 
-		let best_chain = self.env.best_chain_containing(find_descendent_of.clone());
-		debug_assert!(best_chain.is_some(), "Previously known block {:?} has disappeared from chain", find_descendent_of);
-
-		let t = if let Some(target) = best_chain {
-			target
-		} else {
-			// If this block is considered unknown, something has gone wrong.
-			// log and handle, but skip casting a vote.
-			warn!(target: "afg", "Could not cast prevote: previously known block {:?} has disappeared", find_descendent_of);
-			return Ok(None);
-		};
-
-		Ok(Some(Prevote {
-			target_hash: t.0,
-			target_number: t.1,
-		}))
+		(
+			find_descendent_of.clone(),
+			self.env.best_chain_containing(find_descendent_of),
+		)
 	}
 
 	// construct a precommit message based on local state.
