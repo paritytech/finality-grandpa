@@ -531,7 +531,7 @@ impl<H, N, V> VoteGraph<H, N, V> where
 		ancestry.push(self.base.clone()); // ancestry doesn't include base.
 
 		let mut ancestor_index = None;
-		for (i, ancestor) in ancestry.iter().chain(std::iter::once(&self.base)).enumerate() {
+		for (i, ancestor) in ancestry.iter().enumerate() {
 			if let Some(entry) = self.entries.get_mut(ancestor) {
 				entry.descendents.push(hash.clone());
 				ancestor_index = Some(i);
