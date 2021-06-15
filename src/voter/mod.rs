@@ -30,7 +30,7 @@ use futures::channel::mpsc::{self, UnboundedReceiver};
 #[cfg(feature = "std")]
 use log::trace;
 
-use parking_lot::RwLock;
+use parking_lot::Mutex;
 
 use std::collections::VecDeque;
 use std::pin::Pin;
@@ -61,9 +61,9 @@ pub trait Environment<H: Eq, N: BlockNumberOps>: Chain<H, N> {
 	type Timer: Future<Output = Result<(), Self::Error>> + Unpin;
 	/// Associated future type for the environment used when asynchronously computing the
 	/// best chain to vote on. See also [`Self::best_chain_containing`].
-	type BestChain: Future<Output = Result<Option<(H, N)>, Self::Error>> + Send + Sync + Unpin;
+	type BestChain: Future<Output = Result<Option<(H, N)>, Self::Error>> + Send + Unpin;
 	/// The associated Id for the Environment.
-	type Id: Ord + Clone + Eq + ::std::fmt::Debug;
+	type Id: Clone + Eq + Ord + Hash + std::fmt::Debug;
 	/// The associated Signature type for the Environment.
 	type Signature: Eq + Clone;
 	/// The input stream used to communicate with the outside world.
@@ -442,7 +442,7 @@ fn instantiate_last_round<H, N, E: Environment<H, N>>(
 
 // The inner state of a voter aggregating the currently running round state
 // (i.e. best and background rounds). This state exists separately since it's
-// useful to wrap in a `Arc<RwLock<_>>` for sharing.
+// useful to wrap in a `Arc<Mutex<_>>` for sharing.
 struct InnerVoterState<H, N, E> where
 	H: Clone + Ord + std::fmt::Debug,
 	N: BlockNumberOps,
@@ -478,7 +478,7 @@ pub struct Voter<H, N, E: Environment<H, N>, GlobalIn, GlobalOut> where
 {
 	env: Arc<E>,
 	voters: VoterSet<E::Id>,
-	inner: Arc<RwLock<InnerVoterState<H, N, E>>>,
+	inner: Arc<Mutex<InnerVoterState<H, N, E>>>,
 	finalized_notifications: UnboundedReceiver<FinalizedNotification<H, N, E>>,
 	last_finalized_number: N,
 	global_in: GlobalIn,
@@ -499,11 +499,11 @@ impl<'a, H: 'a, N, E: 'a, GlobalIn, GlobalOut> Voter<H, N, E, GlobalIn, GlobalOu
 	/// Returns an object allowing to query the voter state.
 	pub fn voter_state(&self) -> Box<dyn VoterState<E::Id> + 'a + Send + Sync>
 	where
-		<E as Environment<H, N>>::Signature: Send + Sync,
-		<E as Environment<H, N>>::Id: Hash + Send + Sync,
-		<E as Environment<H, N>>::Timer: Send + Sync,
-		<E as Environment<H, N>>::Out: Send + Sync,
-		<E as Environment<H, N>>::In: Send + Sync,
+		<E as Environment<H, N>>::Signature: Send,
+		<E as Environment<H, N>>::Id: Send,
+		<E as Environment<H, N>>::Timer: Send,
+		<E as Environment<H, N>>::Out: Send,
+		<E as Environment<H, N>>::In: Send,
 	{
 		Box::new(SharedVoterState(self.inner.clone()))
 	}
@@ -576,7 +576,7 @@ impl<H, N, E: Environment<H, N>, GlobalIn, GlobalOut> Voter<H, N, E, GlobalIn, G
 
 		let (global_in, global_out) = global_comms;
 
-		let inner = Arc::new(RwLock::new(InnerVoterState {
+		let inner = Arc::new(Mutex::new(InnerVoterState {
 			best_round,
 			past_rounds,
 		}));
@@ -595,7 +595,7 @@ impl<H, N, E: Environment<H, N>, GlobalIn, GlobalOut> Voter<H, N, E, GlobalIn, G
 
 	fn prune_background_rounds(&mut self, cx: &mut Context) -> Result<(), E::Error> {
 		{
-			let mut inner = self.inner.write();
+			let mut inner = self.inner.lock();
 
 			// Do work on all background rounds, broadcasting any commits generated.
 			while let Poll::Ready(Some(item)) = Stream::poll_next(Pin::new(&mut inner.past_rounds), cx) {
@@ -606,7 +606,7 @@ impl<H, N, E: Environment<H, N>, GlobalIn, GlobalOut> Voter<H, N, E, GlobalIn, G
 
 		while let Poll::Ready(res) = Stream::poll_next(Pin::new(&mut self.finalized_notifications), cx) {
 			let inner = self.inner.clone();
-			let mut inner = inner.write();
+			let mut inner = inner.lock();
 
 			let (f_hash, f_num, round, commit) =
 				res.expect("one sender always kept alive in self.best_round; qed");
@@ -645,7 +645,7 @@ impl<H, N, E: Environment<H, N>, GlobalIn, GlobalOut> Voter<H, N, E, GlobalIn, G
 
 					let commit: Commit<_, _, _, _> = commit.into();
 
-					let mut inner = self.inner.write();
+					let mut inner = self.inner.lock();
 
 					// if the commit is for a background round dispatch to round committer.
 					// that returns Some if there wasn't one.
@@ -683,7 +683,7 @@ impl<H, N, E: Environment<H, N>, GlobalIn, GlobalOut> Voter<H, N, E, GlobalIn, G
 				CommunicationIn::CatchUp(catch_up, mut process_catch_up_outcome) => {
 					trace!(target: "afg", "Got catch-up message for round {}", catch_up.round_number);
 
-					let mut inner = self.inner.write();
+					let mut inner = self.inner.lock();
 
 					let round = if let Some(round) = validate_catch_up(
 						catch_up,
@@ -753,7 +753,7 @@ impl<H, N, E: Environment<H, N>, GlobalIn, GlobalOut> Voter<H, N, E, GlobalIn, G
 		// If the current `best_round` is completable and we've already precommitted,
 		// we start a new round at `best_round + 1`.
 		{
-			let mut inner = self.inner.write();
+			let mut inner = self.inner.lock();
 
 			let should_start_next = {
 				let completable = match inner.best_round.poll(cx)? {
@@ -784,7 +784,7 @@ impl<H, N, E: Environment<H, N>, GlobalIn, GlobalOut> Voter<H, N, E, GlobalIn, G
 	}
 
 	fn completed_best_round(&mut self) -> Result<(), E::Error> {
-		let mut inner = self.inner.write();
+		let mut inner = self.inner.lock();
 
 		self.env.completed(
 			inner.best_round.round_number(),
@@ -889,7 +889,7 @@ pub mod report {
 	}
 }
 
-struct SharedVoterState<H, N, E>(Arc<RwLock<InnerVoterState<H, N, E>>>) where
+struct SharedVoterState<H, N, E>(Arc<Mutex<InnerVoterState<H, N, E>>>) where
 	H: Clone + Ord + std::fmt::Debug,
 	N: BlockNumberOps,
 	E: Environment<H, N>;
@@ -915,9 +915,9 @@ impl<H, N, E> VoterState<E::Id> for SharedVoterState<H, N, E> where
 			)
 		};
 
-		let lock = self.0.read();
-		let best_round = to_round_state(&lock.best_round);
-		let background_rounds = lock
+		let inner = self.0.lock();
+		let best_round = to_round_state(&inner.best_round);
+		let background_rounds = inner
 			.past_rounds
 			.voting_rounds()
 			.map(to_round_state)

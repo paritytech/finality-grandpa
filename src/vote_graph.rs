@@ -17,10 +17,13 @@
 //! See docs on `VoteGraph` for more information.
 
 use crate::std::{
-	self, collections::{BTreeMap, BTreeSet}, fmt::Debug, ops::AddAssign, vec::Vec,
+	collections::{BTreeMap, BTreeSet},
+	fmt::Debug,
+	ops::AddAssign,
+	vec::Vec,
 };
 
-use super::{Chain, Error, BlockNumberOps};
+use super::{BlockNumberOps, Chain, Error};
 
 #[cfg_attr(any(feature = "std", test), derive(Debug))]
 struct Entry<H, N, V> {
