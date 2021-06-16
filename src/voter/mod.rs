@@ -63,7 +63,7 @@ pub trait Environment<H: Eq, N: BlockNumberOps>: Chain<H, N> {
 	/// best chain to vote on. See also [`Self::best_chain_containing`].
 	type BestChain: Future<Output = Result<Option<(H, N)>, Self::Error>> + Send + Unpin;
 	/// The associated Id for the Environment.
-	type Id: Clone + Eq + Ord + Hash + std::fmt::Debug;
+	type Id: Clone + Eq + Ord + std::fmt::Debug;
 	/// The associated Signature type for the Environment.
 	type Signature: Eq + Clone;
 	/// The input stream used to communicate with the outside world.
@@ -500,7 +500,7 @@ impl<'a, H: 'a, N, E: 'a, GlobalIn, GlobalOut> Voter<H, N, E, GlobalIn, GlobalOu
 	pub fn voter_state(&self) -> Box<dyn VoterState<E::Id> + 'a + Send + Sync>
 	where
 		<E as Environment<H, N>>::Signature: Send,
-		<E as Environment<H, N>>::Id: Send,
+		<E as Environment<H, N>>::Id: Hash + Send,
 		<E as Environment<H, N>>::Timer: Send,
 		<E as Environment<H, N>>::Out: Send,
 		<E as Environment<H, N>>::In: Send,
