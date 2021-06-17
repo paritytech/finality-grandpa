@@ -17,10 +17,13 @@
 //! See docs on `VoteGraph` for more information.
 
 use crate::std::{
-	self, collections::{BTreeMap, BTreeSet}, fmt::Debug, ops::AddAssign, vec::Vec,
+	collections::{BTreeMap, BTreeSet},
+	fmt::Debug,
+	ops::AddAssign,
+	vec::Vec,
 };
 
-use super::{Chain, Error, BlockNumberOps};
+use super::{BlockNumberOps, Chain, Error};
 
 #[cfg_attr(any(feature = "std", test), derive(Debug))]
 struct Entry<H, N, V> {
@@ -531,7 +534,7 @@ impl<H, N, V> VoteGraph<H, N, V> where
 		ancestry.push(self.base.clone()); // ancestry doesn't include base.
 
 		let mut ancestor_index = None;
-		for (i, ancestor) in ancestry.iter().chain(std::iter::once(&self.base)).enumerate() {
+		for (i, ancestor) in ancestry.iter().enumerate() {
 			if let Some(entry) = self.entries.get_mut(ancestor) {
 				entry.descendents.push(hash.clone());
 				ancestor_index = Some(i);

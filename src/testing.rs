@@ -205,20 +205,17 @@ pub mod environment {
 	}
 
 	impl crate::voter::Environment<&'static str, u32> for Environment {
-		type Timer = Box<dyn Future<Output = Result<(), Error>> + Unpin + Send + Sync>;
-		type BestChain = Box<
-			dyn Future<Output = Result<Option<(&'static str, u32)>, Error>> + Unpin + Send + Sync,
-		>;
+		type Timer = Box<dyn Future<Output = Result<(), Error>> + Unpin + Send>;
+		type BestChain =
+			Box<dyn Future<Output = Result<Option<(&'static str, u32)>, Error>> + Unpin + Send>;
 		type Id = Id;
 		type Signature = Signature;
 		type In = Box<
 			dyn Stream<Item = Result<SignedMessage<&'static str, u32, Signature, Id>, Error>>
 				+ Unpin
-				+ Send
-				+ Sync,
+				+ Send,
 		>;
-		type Out =
-			Pin<Box<dyn Sink<Message<&'static str, u32>, Error = Error> + Send + Sync + 'static>>;
+		type Out = Pin<Box<dyn Sink<Message<&'static str, u32>, Error = Error> + Send>>;
 		type Error = Error;
 
 		fn best_chain_containing(&self, base: &'static str) -> Self::BestChain {
