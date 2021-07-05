@@ -24,7 +24,7 @@ rand = "0.8"
 
 [features]
 default = ["std"]
-std = ["parity-scale-codec/std", "num/std", "parking_lot", "log", "futures-timer", "futures/executor"]
+std = ["parity-scale-codec/std", "num/std", "parking_lot", "log", "futures-timer", "futures/executor", "scale-info/std"]
 derive-codec = ["parity-scale-codec", "scale-info"]
 test-helpers = ["fuzz-helpers", "rand", "std"]
 fuzz-helpers = []
