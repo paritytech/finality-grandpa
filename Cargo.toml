@@ -16,7 +16,7 @@ num = { package = "num-traits", version = "0.2", default-features = false }
 parity-scale-codec = { version = "2.0", default-features = false, features = ["derive"], optional = true }
 parking_lot = { version = "0.11", optional = true }
 rand = { version = "0.8", optional = true }
-scale-info = { version = "0.9.0", default-features = false, features = ["derive"], optional = true }
+scale-info = { version = "0.10.0", default-features = false, features = ["derive"], optional = true }
 
 [dev-dependencies]
 quickcheck = "1.0"
