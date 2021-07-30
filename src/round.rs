@@ -159,7 +159,7 @@ impl<Id: Ord + Eq + Clone, Vote: Clone + Eq, Signature: Clone + Eq> VoteTracker<
 /// State of the round.
 #[derive(PartialEq, Clone)]
 #[cfg_attr(any(feature = "std", test), derive(Debug))]
-#[cfg_attr(feature = "derive-codec", derive(Encode, Decode))]
+#[cfg_attr(feature = "derive-codec", derive(Encode, Decode, scale_info::TypeInfo))]
 pub struct State<H, N> {
 	/// The prevote-GHOST block.
 	pub prevote_ghost: Option<(H, N)>,
