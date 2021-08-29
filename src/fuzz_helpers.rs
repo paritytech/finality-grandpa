@@ -14,10 +14,12 @@
 
 //! Fuzzing utilities for the vote graph.
 
-use crate::round::{Round, RoundParams};
-use crate::vote_graph::VoteGraph;
-use crate::voter_set::VoterSet;
-use crate::{Chain, Error, Precommit, Prevote};
+use crate::{
+	round::{Round, RoundParams},
+	vote_graph::VoteGraph,
+	voter_set::VoterSet,
+	Chain, Error, Precommit, Prevote,
+};
 
 #[cfg(not(feature = "std"))]
 use alloc::vec::Vec;
@@ -69,7 +71,7 @@ impl FuzzChain {
 		}
 	}
 
-	fn all_descendents(hash: Hash) -> impl Iterator<Item=Hash> {
+	fn all_descendents(hash: Hash) -> impl Iterator<Item = Hash> {
 		let children = Self::children(hash);
 
 		struct Descendents(Vec<Hash>);
@@ -128,7 +130,12 @@ impl Chain<Hash, BlockNumber> for FuzzChain {
 			_ => panic!("invalid block hash"),
 		};
 
-		Ok(full_ancestry.iter().rev().take_while(|x| **x != base).cloned().collect::<Vec<_>>())
+		Ok(full_ancestry
+			.iter()
+			.rev()
+			.take_while(|x| **x != base)
+			.cloned()
+			.collect::<Vec<_>>())
 	}
 }
 
@@ -140,11 +147,7 @@ struct RandomnessStream<'a> {
 
 impl<'a> RandomnessStream<'a> {
 	fn new(data: &'a [u8]) -> Self {
-		Self {
-			inner: data,
-			pos: 0,
-			half_nibble: false,
-		}
+		Self { inner: data, pos: 0, half_nibble: false }
 	}
 
 	fn read_nibble(&mut self) -> Option<u8> {
@@ -176,16 +179,16 @@ fn voters() -> [Voter; 10] {
 }
 
 const FACTORIAL: [u32; 11] = [
-	1, // 0
-	1, // 1
-	2, // 2
-	6, // 3
-	24, // 4
-	120, // 5
-	720, // 6
-	5040, // 7
-	40320, // 8
-	362880, // 9
+	1,       // 0
+	1,       // 1
+	2,       // 2
+	6,       // 3
+	24,      // 4
+	120,     // 5
+	720,     // 6
+	5040,    // 7
+	40320,   // 8
+	362880,  // 9
 	3628800, // 10
 ];
 
@@ -205,7 +208,9 @@ fn n_choose_r(n: u8, r: u8) -> u8 {
 // to import prevotes from.
 fn kth_combination(k: u8, n: u8, r: u8) -> Vec<u8> {
 	fn r_helper(k: u8, n: u8, r: u8, off: u8, v: &mut Vec<u8>) {
-		if r == 0 { return }
+		if r == 0 {
+			return
+		}
 
 		// the "tail" of the list we have here is all the elements from the offset
 		// to the total number of elements.
@@ -248,16 +253,14 @@ fn voter_combination(v: Voter, k: u8, n: u8, r: u8) -> Vec<Voter> {
 /// Check that an estimate block is monotonically decreasing.
 fn check_estimate((old_hash, old_nr): Block, (new_hash, new_nr): Block) {
 	assert!(
-		old_hash == new_hash ||
-		(new_nr < old_nr && FuzzChain.ancestry(new_hash, old_hash).is_ok())
+		old_hash == new_hash || (new_nr < old_nr && FuzzChain.ancestry(new_hash, old_hash).is_ok())
 	);
 }
 
 /// Check that a prevote ghost block is monotonically increasing.
 fn check_prevote_ghost((old_hash, old_nr): Block, (new_hash, new_nr): Block) {
 	assert!(
-		old_hash == new_hash ||
-		(new_nr > old_nr && FuzzChain.ancestry(old_hash, new_hash).is_ok())
+		old_hash == new_hash || (new_nr > old_nr && FuzzChain.ancestry(old_hash, new_hash).is_ok())
 	);
 }
 
@@ -277,19 +280,25 @@ pub fn execute_fuzzed_vote(data: &[u8]) {
 	let mut stream = RandomnessStream::new(data);
 
 	// Initialise a round for each voter.
-	let mut rounds: Vec<Round<Voter, Hash, BlockNumber, Signature>>
-		= voters().iter().map(|_| Round::new(RoundParams {
-			round_number: 0,
-			voters: VoterSet::new(voters().iter().cloned().map(|v| (v, 1))).expect("nonempty"),
-			base: (0, 0),
-		})).collect();
+	let mut rounds: Vec<Round<Voter, Hash, BlockNumber, Signature>> = voters()
+		.iter()
+		.map(|_| {
+			Round::new(RoundParams {
+				round_number: 0,
+				voters: VoterSet::new(voters().iter().cloned().map(|v| (v, 1))).expect("nonempty"),
+				base: (0, 0),
+			})
+		})
+		.collect();
 
 	// Create a random list of prevotes.
-	let prevotes = voters().iter().filter_map(|_| {
-		rand_block(&mut stream).map(
-			|(target_hash, target_number)|
-				Prevote { target_hash, target_number })
-	}).collect::<Vec<_>>();
+	let prevotes = voters()
+		.iter()
+		.filter_map(|_| {
+			rand_block(&mut stream)
+				.map(|(target_hash, target_number)| Prevote { target_hash, target_number })
+		})
+		.collect::<Vec<_>>();
 
 	if prevotes.len() != n as usize {
 		// fuzzer needs to get us more data.
@@ -315,7 +324,9 @@ pub fn execute_fuzzed_vote(data: &[u8]) {
 		}
 
 		// Determine precommit target for `voter` (i.e. the prevote ghost).
-		let (target_hash, target_number) = round.state().prevote_ghost
+		let (target_hash, target_number) = round
+			.state()
+			.prevote_ghost
 			.expect("after importing threshold votes, ghost exists");
 		let precommit = Precommit { target_hash, target_number };
 		precommits.push(precommit.clone());
@@ -402,7 +413,10 @@ pub fn execute_fuzzed_graph(data: &[u8]) {
 
 	/// A vote-node on the graph.
 	#[derive(Default, Clone, Debug)]
-	struct Vote { prevote: u8, precommit: u8 }
+	struct Vote {
+		prevote: u8,
+		precommit: u8,
+	}
 	fn new_prevote() -> Vote {
 		Vote { prevote: 1, precommit: 0 }
 	}
@@ -459,8 +473,8 @@ pub fn execute_fuzzed_graph(data: &[u8]) {
 			None => return, // Not enough randomness
 			Some((hash, nr)) => match FuzzChain.ancestry(hash, prevote_ghost.0) {
 				Ok(_) => (hash, nr),
-				Err(_) => prevote_ghost
-			}
+				Err(_) => prevote_ghost,
+			},
 		};
 
 		// Add the precommit vote to the graph.
@@ -468,7 +482,8 @@ pub fn execute_fuzzed_graph(data: &[u8]) {
 
 		// The already calculated prevote ghost should not change as a result of
 		// adding precommit weights.
-		let new_prevote_ghost = graph.find_ghost(Some(prevote_ghost.clone()), |v| v.prevote >= T).unwrap();
+		let new_prevote_ghost =
+			graph.find_ghost(Some(prevote_ghost.clone()), |v| v.prevote >= T).unwrap();
 		assert_eq!(new_prevote_ghost, prevote_ghost, "prevote ghost changed");
 
 		// The number of voters who did not yet cast a vote.
@@ -481,11 +496,8 @@ pub fn execute_fuzzed_graph(data: &[u8]) {
 		// vote weight on blocks not >= b and it is thus possible for b to have supermajority.
 		let possible_to_precommit = |v: &Vote| v.precommit + remaining + F >= T;
 
-		let new_estimate = graph.find_ancestor(
-			prevote_ghost.0,
-			prevote_ghost.1,
-			possible_to_precommit,
-		);
+		let new_estimate =
+			graph.find_ancestor(prevote_ghost.0, prevote_ghost.1, possible_to_precommit);
 
 		let newly_completable = new_estimate.map_or(false, |(hash, nr)| {
 			// Every estimate must be on the chain with head prevote ghost.
@@ -494,10 +506,10 @@ pub fn execute_fuzzed_graph(data: &[u8]) {
 				true
 			} else {
 				// Determine completability.
-				graph.find_ghost(
-					Some((hash, nr)),
-					possible_to_precommit,
-				).expect("by definition of estimate") == prevote_ghost
+				graph
+					.find_ghost(Some((hash, nr)), possible_to_precommit)
+					.expect("by definition of estimate") ==
+					prevote_ghost
 			}
 		});
 

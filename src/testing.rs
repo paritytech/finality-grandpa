@@ -15,8 +15,10 @@
 //! Helpers for testing
 
 pub mod chain {
-	use crate::{Chain, Error};
-	use crate::std::{collections::BTreeMap, vec::Vec};
+	use crate::{
+		std::{collections::BTreeMap, vec::Vec},
+		Chain, Error,
+	};
 
 	pub const GENESIS_HASH: &str = "genesis";
 	const NULL_HASH: &str = "NULL";
@@ -37,15 +39,13 @@ pub mod chain {
 			let mut inner = BTreeMap::new();
 			inner.insert(GENESIS_HASH, BlockRecord { number: 1, parent: NULL_HASH });
 
-			DummyChain {
-				inner,
-				leaves: vec![GENESIS_HASH],
-				finalized: (GENESIS_HASH, 1),
-			}
+			DummyChain { inner, leaves: vec![GENESIS_HASH], finalized: (GENESIS_HASH, 1) }
 		}
 
 		pub fn push_blocks(&mut self, mut parent: &'static str, blocks: &[&'static str]) {
-			if blocks.is_empty() { return }
+			if blocks.is_empty() {
+				return
+			}
 
 			let base_number = self.inner.get(parent).unwrap().number + 1;
 
@@ -54,10 +54,8 @@ pub mod chain {
 			}
 
 			for (i, descendent) in blocks.iter().enumerate() {
-				self.inner.insert(descendent, BlockRecord {
-					number: base_number + i as u32,
-					parent,
-				});
+				self.inner
+					.insert(descendent, BlockRecord { number: base_number + i as u32, parent });
 
 				parent = descendent;
 			}
@@ -65,9 +63,12 @@ pub mod chain {
 			let new_leaf = blocks.last().unwrap();
 			let new_leaf_number = self.inner.get(new_leaf).unwrap().number;
 
-			let insertion_index = self.leaves.binary_search_by(
-				|x| self.inner.get(x).unwrap().number.cmp(&new_leaf_number).reverse(),
-			).unwrap_or_else(|i| i);
+			let insertion_index = self
+				.leaves
+				.binary_search_by(|x| {
+					self.inner.get(x).unwrap().number.cmp(&new_leaf_number).reverse()
+				})
+				.unwrap_or_else(|i| i);
 
 			self.leaves.insert(insertion_index, new_leaf);
 		}
@@ -91,15 +92,15 @@ pub mod chain {
 				// leaves are in descending order.
 				let leaf_number = self.inner.get(leaf).unwrap().number;
 				if leaf_number < base_number {
-					break;
+					break
 				}
 
 				if leaf == &base {
-					return Some((leaf, leaf_number));
+					return Some((leaf, leaf_number))
 				}
 
 				if let Ok(_) = self.ancestry(base, leaf) {
-					return Some((leaf, leaf_number));
+					return Some((leaf, leaf_number))
 				}
 			}
 
@@ -118,11 +119,17 @@ pub mod chain {
 			loop {
 				match self.inner.get(block) {
 					None => return Err(Error::NotDescendent),
-					Some(record) => { block = record.parent; }
+					Some(record) => {
+						block = record.parent;
+					},
 				}
 
-				if block == NULL_HASH { return Err(Error::NotDescendent) }
-				if block == base { break }
+				if block == NULL_HASH {
+					return Err(Error::NotDescendent)
+				}
+				if block == base {
+					break
+				}
 
 				ancestry.push(block);
 			}
@@ -135,21 +142,25 @@ pub mod chain {
 #[cfg(feature = "std")]
 pub mod environment {
 	use super::chain::*;
-	use crate::round::State as RoundState;
-	use crate::voter::{Callback, CommunicationIn, CommunicationOut, RoundData};
 	use crate::{
+		round::State as RoundState,
+		voter::{Callback, CommunicationIn, CommunicationOut, RoundData},
 		Chain, Commit, Equivocation, Error, HistoricalVotes, Message, Precommit, Prevote,
 		PrimaryPropose, SignedMessage,
 	};
-	use futures::channel::mpsc::{self, UnboundedReceiver, UnboundedSender};
-	use futures::prelude::*;
+	use futures::{
+		channel::mpsc::{self, UnboundedReceiver, UnboundedSender},
+		prelude::*,
+	};
 	use futures_timer::Delay;
 	use parking_lot::Mutex;
-	use std::collections::HashMap;
-	use std::pin::Pin;
-	use std::sync::Arc;
-	use std::task::{Context, Poll};
-	use std::time::Duration;
+	use std::{
+		collections::HashMap,
+		pin::Pin,
+		sync::Arc,
+		task::{Context, Poll},
+		time::Duration,
+	};
 
 	#[derive(Hash, Debug, Clone, Copy, PartialEq, Eq, Ord, PartialOrd)]
 	pub struct Id(pub u32);
@@ -161,7 +172,9 @@ pub mod environment {
 		chain: Mutex<DummyChain>,
 		local_id: Id,
 		network: Network,
-		listeners: Mutex<Vec<UnboundedSender<(&'static str, u32, Commit<&'static str, u32, Signature, Id>)>>>,
+		listeners: Mutex<
+			Vec<UnboundedSender<(&'static str, u32, Commit<&'static str, u32, Signature, Id>)>>,
+		>,
 		last_completed_and_concluded: Mutex<(u64, u64)>,
 	}
 
@@ -176,13 +189,18 @@ pub mod environment {
 			}
 		}
 
-		pub fn with_chain<F, U>(&self, f: F) -> U where F: FnOnce(&mut DummyChain) -> U {
+		pub fn with_chain<F, U>(&self, f: F) -> U
+		where
+			F: FnOnce(&mut DummyChain) -> U,
+		{
 			let mut chain = self.chain.lock();
 			f(&mut *chain)
 		}
 
 		/// Stream of finalized blocks.
-		pub fn finalized_stream(&self) -> UnboundedReceiver<(&'static str, u32, Commit<&'static str, u32, Signature, Id>)> {
+		pub fn finalized_stream(
+			&self,
+		) -> UnboundedReceiver<(&'static str, u32, Commit<&'static str, u32, Signature, Id>)> {
 			let (tx, rx) = mpsc::unbounded();
 			self.listeners.lock().push(tx);
 			rx
@@ -240,9 +258,7 @@ pub mod environment {
 
 			const COMMIT_DELAY_MILLIS: u64 = 100;
 
-			let delay = Duration::from_millis(
-				rand::thread_rng().gen_range(0..COMMIT_DELAY_MILLIS)
-			);
+			let delay = Duration::from_millis(rand::thread_rng().gen_range(0..COMMIT_DELAY_MILLIS));
 
 			Box::new(Delay::new(delay).map(Ok))
 		}
@@ -269,7 +285,13 @@ pub mod environment {
 			Ok(())
 		}
 
-		fn finalize_block(&self, hash: &'static str, number: u32, _round: u64, commit: Commit<&'static str, u32, Signature, Id>) -> Result<(), Error> {
+		fn finalize_block(
+			&self,
+			hash: &'static str,
+			number: u32,
+			_round: u64,
+			commit: Commit<&'static str, u32, Signature, Id>,
+		) -> Result<(), Error> {
 			let mut chain = self.chain.lock();
 
 			let last_finalized = chain.last_finalized();
@@ -283,28 +305,50 @@ pub mod environment {
 			);
 
 			chain.set_last_finalized((hash, number));
-			self.listeners.lock().retain(|s| s.unbounded_send((hash, number as _, commit.clone())).is_ok());
+			self.listeners
+				.lock()
+				.retain(|s| s.unbounded_send((hash, number as _, commit.clone())).is_ok());
 
 			Ok(())
 		}
 
-		fn proposed(&self, _round: u64, _propose: PrimaryPropose<&'static str, u32>) -> Result<(), Self::Error> {
+		fn proposed(
+			&self,
+			_round: u64,
+			_propose: PrimaryPropose<&'static str, u32>,
+		) -> Result<(), Self::Error> {
 			Ok(())
 		}
 
-		fn prevoted(&self, _round: u64, _prevote: Prevote<&'static str, u32>) -> Result<(), Self::Error> {
+		fn prevoted(
+			&self,
+			_round: u64,
+			_prevote: Prevote<&'static str, u32>,
+		) -> Result<(), Self::Error> {
 			Ok(())
 		}
 
-		fn precommitted(&self, _round: u64, _precommit: Precommit<&'static str, u32>) -> Result<(), Self::Error> {
+		fn precommitted(
+			&self,
+			_round: u64,
+			_precommit: Precommit<&'static str, u32>,
+		) -> Result<(), Self::Error> {
 			Ok(())
 		}
 
-		fn prevote_equivocation(&self, round: u64, equivocation: Equivocation<Id, Prevote<&'static str, u32>, Signature>) {
+		fn prevote_equivocation(
+			&self,
+			round: u64,
+			equivocation: Equivocation<Id, Prevote<&'static str, u32>, Signature>,
+		) {
 			panic!("Encountered equivocation in round {}: {:?}", round, equivocation);
 		}
 
-		fn precommit_equivocation(&self, round: u64, equivocation: Equivocation<Id, Precommit<&'static str, u32>, Signature>) {
+		fn precommit_equivocation(
+			&self,
+			round: u64,
+			equivocation: Equivocation<Id, Precommit<&'static str, u32>, Signature>,
+		) {
 			panic!("Encountered equivocation in round {}: {:?}", round, equivocation);
 		}
 	}
@@ -333,12 +377,14 @@ pub mod environment {
 		}
 
 		// add a node to the network for a round.
-		fn add_node<N, F: Fn(N) -> M>(&mut self, f: F) -> (
-			impl Stream<Item=Result<M,Error>>,
-			impl Sink<N,Error=Error>
-		) {
+		fn add_node<N, F: Fn(N) -> M>(
+			&mut self,
+			f: F,
+		) -> (impl Stream<Item = Result<M, Error>>, impl Sink<N, Error = Error>) {
 			let (tx, rx) = mpsc::unbounded();
-			let messages_out = self.raw_sender.clone()
+			let messages_out = self
+				.raw_sender
+				.clone()
 				.sink_map_err(|e| panic!("Error sending messages: {:?}", e))
 				.with(move |message| future::ready(Ok(f(message))));
 
@@ -363,7 +409,7 @@ pub mod environment {
 						for sender in &self.senders {
 							let _ = sender.unbounded_send(item.clone());
 						}
-					}
+					},
 				}
 			}
 		}
@@ -377,7 +423,7 @@ pub mod environment {
 		let rounds = Arc::new(Mutex::new(HashMap::new()));
 		(
 			Network { global_messages: global_messages.clone(), rounds: rounds.clone() },
-			NetworkRouting { global_messages, rounds }
+			NetworkRouting { global_messages, rounds },
 		)
 	}
 
@@ -392,12 +438,17 @@ pub mod environment {
 	}
 
 	impl Network {
-		pub fn make_round_comms(&self, round_number: u64, node_id: Id) -> (
-			impl Stream<Item=Result<SignedMessage<&'static str, u32, Signature, Id>,Error>>,
-			impl Sink<Message<&'static str, u32>,Error=Error>
+		pub fn make_round_comms(
+			&self,
+			round_number: u64,
+			node_id: Id,
+		) -> (
+			impl Stream<Item = Result<SignedMessage<&'static str, u32, Signature, Id>, Error>>,
+			impl Sink<Message<&'static str, u32>, Error = Error>,
 		) {
 			let mut rounds = self.rounds.lock();
-			rounds.entry(round_number)
+			rounds
+				.entry(round_number)
 				.or_insert_with(RoundNetwork::new)
 				.add_node(move |message| SignedMessage {
 					message,
@@ -406,13 +457,16 @@ pub mod environment {
 				})
 		}
 
-		pub fn make_global_comms(&self) -> (
-			impl Stream<Item=Result<CommunicationIn<&'static str, u32, Signature, Id>,Error>>,
-			impl Sink<CommunicationOut<&'static str, u32, Signature, Id>,Error=Error>
+		pub fn make_global_comms(
+			&self,
+		) -> (
+			impl Stream<Item = Result<CommunicationIn<&'static str, u32, Signature, Id>, Error>>,
+			impl Sink<CommunicationOut<&'static str, u32, Signature, Id>, Error = Error>,
 		) {
 			let mut global_messages = self.global_messages.lock();
 			global_messages.add_node(|message| match message {
-				CommunicationOut::Commit(r, commit) => CommunicationIn::Commit(r, commit.into(), Callback::Blank),
+				CommunicationOut::Commit(r, commit) =>
+					CommunicationIn::Commit(r, commit.into(), Callback::Blank),
 			})
 		}
 

@@ -14,10 +14,12 @@
 
 //! This module lays out the rules for the arithmetic of vote(r) weights.
 
-use crate::std::ops::{Add, Sub};
-use crate::std::cmp::Ordering;
-use crate::std::num::NonZeroU64;
-use crate::std::fmt;
+use crate::std::{
+	cmp::Ordering,
+	fmt,
+	num::NonZeroU64,
+	ops::{Add, Sub},
+};
 
 /// The accumulated weight of any number of voters (possibly none).
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Debug)]

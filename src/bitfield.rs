@@ -17,12 +17,14 @@
 //! retaining information on the type of vote and identity of the
 //! voter within a voter set.
 
-use crate::std::{iter, cmp::Ordering, vec::Vec, ops::BitOr};
+use crate::std::{cmp::Ordering, iter, ops::BitOr, vec::Vec};
 use either::Either;
 
 /// A dynamically sized, write-once (per bit), lazily allocating bitfield.
 #[derive(Eq, PartialEq, Clone, Debug)]
-pub struct Bitfield { bits: Vec<u64> }
+pub struct Bitfield {
+	bits: Vec<u64>,
+}
 
 impl Default for Bitfield {
 	fn default() -> Self {
@@ -133,24 +135,31 @@ impl Bitfield {
 	/// this bitfield with another bitfield, without modifying either
 	/// bitfield, starting at bit position `start` and moving in steps
 	/// of size `2^step` per word.
-	fn iter1s_merged<'a>(&'a self, other: &'a Self, start: usize, step: usize) -> impl Iterator<Item = Bit1> + 'a {
+	fn iter1s_merged<'a>(
+		&'a self,
+		other: &'a Self,
+		start: usize,
+		step: usize,
+	) -> impl Iterator<Item = Bit1> + 'a {
 		match self.bits.len().cmp(&other.bits.len()) {
-			Ordering::Equal =>
-				Either::Left(iter1s(
-					self.bits.iter()
-						.zip(&other.bits)
-						.map(|(a, b)| a | b), start, step)),
-			Ordering::Less =>
-				Either::Right(Either::Left(iter1s(
-					self.bits.iter()
-						.chain(iter::repeat(&0))
-						.zip(&other.bits)
-						.map(|(a, b)| a | b), start, step))),
-			Ordering::Greater =>
-				Either::Right(Either::Right(iter1s(
-					self.bits.iter()
-						.zip(other.bits.iter().chain(iter::repeat(&0)))
-						.map(|(a, b)| a | b), start, step)))
+			Ordering::Equal => Either::Left(iter1s(
+				self.bits.iter().zip(&other.bits).map(|(a, b)| a | b),
+				start,
+				step,
+			)),
+			Ordering::Less => Either::Right(Either::Left(iter1s(
+				self.bits.iter().chain(iter::repeat(&0)).zip(&other.bits).map(|(a, b)| a | b),
+				start,
+				step,
+			))),
+			Ordering::Greater => Either::Right(Either::Right(iter1s(
+				self.bits
+					.iter()
+					.zip(other.bits.iter().chain(iter::repeat(&0)))
+					.map(|(a, b)| a | b),
+				start,
+				step,
+			))),
 		}
 	}
 }
@@ -160,13 +169,13 @@ impl Bitfield {
 /// and moving in steps of size `2^step` per word.
 fn iter1s<'a, I>(iter: I, start: usize, step: usize) -> impl Iterator<Item = Bit1> + 'a
 where
-	I: Iterator<Item = u64> + 'a
+	I: Iterator<Item = u64> + 'a,
 {
 	debug_assert!(start < 64 && step < 7);
 	let steps = (64 >> step) - (start >> step);
 	iter.enumerate().flat_map(move |(i, word)| {
 		let n = if word == 0 { 0 } else { steps };
-		(0 .. n).filter_map(move |j| {
+		(0..n).filter_map(move |j| {
 			let bit_pos = start + (j << step);
 			if test_bit(word, bit_pos) {
 				Some(Bit1 { position: i * 64 + bit_pos })
@@ -185,17 +194,17 @@ fn test_bit(word: u64, position: usize) -> bool {
 impl BitOr<&Bitfield> for Bitfield {
 	type Output = Bitfield;
 
-    fn bitor(mut self, rhs: &Bitfield) -> Self::Output {
+	fn bitor(mut self, rhs: &Bitfield) -> Self::Output {
 		self.merge(&rhs);
 		self
-    }
+	}
 }
 
 /// A bit that is set (i.e. 1) in a `Bitfield`.
 #[derive(PartialEq, Eq, Copy, Clone, Debug, Hash)]
 pub struct Bit1 {
 	/// The position of the bit in the bitfield.
-	pub position: usize
+	pub position: usize,
 }
 
 #[cfg(test)]
@@ -207,9 +216,7 @@ mod tests {
 	impl Arbitrary for Bitfield {
 		fn arbitrary(g: &mut Gen) -> Bitfield {
 			let n = usize::arbitrary(g) % g.size();
-			let mut b = iter::from_fn(|| Some(u64::arbitrary(g)))
-				.take(n)
-				.collect::<Vec<_>>();
+			let mut b = iter::from_fn(|| Some(u64::arbitrary(g))).take(n).collect::<Vec<_>>();
 
 			// we need to make sure we don't add empty words at the end of the
 			// bitfield otherwise it would break equality on some of the tests
@@ -233,7 +240,7 @@ mod tests {
 			a.set_bit(idx).test_bit(idx)
 		}
 
-		quickcheck(prop as fn(_,_) -> _)
+		quickcheck(prop as fn(_, _) -> _)
 	}
 
 	#[test]
@@ -244,7 +251,7 @@ mod tests {
 			c_bits.all(|bit| a.test_bit(bit.position) || b.test_bit(bit.position))
 		}
 
-		quickcheck(prop as fn(_,_) -> _)
+		quickcheck(prop as fn(_, _) -> _)
 	}
 
 	#[test]
@@ -253,7 +260,7 @@ mod tests {
 			a.clone() | &b == b | &a
 		}
 
-		quickcheck(prop as fn(_,_) -> _)
+		quickcheck(prop as fn(_, _) -> _)
 	}
 
 	#[test]
@@ -262,7 +269,7 @@ mod tests {
 			(a.clone() | &b) | &c == a | &(b | &c)
 		}
 
-		quickcheck(prop as fn(_,_,_) -> _)
+		quickcheck(prop as fn(_, _, _) -> _)
 	}
 
 	#[test]
@@ -319,7 +326,7 @@ mod tests {
 			assert_eq!(&c, a.merge(&b));
 		}
 
-		quickcheck(all as fn(_,_));
-		quickcheck(even_odd as fn(_,_));
+		quickcheck(all as fn(_, _));
+		quickcheck(even_odd as fn(_, _));
 	}
 }

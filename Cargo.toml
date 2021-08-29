@@ -13,10 +13,14 @@ futures = { version = "0.3", default-features = false }
 futures-timer = { version = "3.0", optional = true }
 log = { version = "0.4", optional = true }
 num = { package = "num-traits", version = "0.2", default-features = false }
-parity-scale-codec = { version = "2.0", default-features = false, features = ["derive"], optional = true }
+parity-scale-codec = { version = "2.0", default-features = false, optional = true, features = [
+    "derive",
+] }
 parking_lot = { version = "0.11", optional = true }
 rand = { version = "0.8", optional = true }
-scale-info = { version = "0.10.0", default-features = false, features = ["derive"], optional = true }
+scale-info = { version = "0.10.0", default-features = false, optional = true, features = [
+    "derive",
+] }
 
 [dev-dependencies]
 quickcheck = "1.0"
@@ -24,7 +28,15 @@ rand = "0.8"
 
 [features]
 default = ["std"]
-std = ["parity-scale-codec/std", "num/std", "parking_lot", "log", "futures-timer", "futures/executor", "scale-info/std"]
+std = [
+    "parity-scale-codec/std",
+    "num/std",
+    "parking_lot",
+    "log",
+    "futures-timer",
+    "futures/executor",
+    "scale-info/std",
+]
 derive-codec = ["parity-scale-codec", "scale-info"]
 test-helpers = ["fuzz-helpers", "rand", "std"]
 fuzz-helpers = []

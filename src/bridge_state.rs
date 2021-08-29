@@ -17,8 +17,7 @@
 use crate::round::State as RoundState;
 use futures::task;
 use parking_lot::{RwLock, RwLockReadGuard};
-use std::sync::Arc;
-use std::task::Context;
+use std::{sync::Arc, task::Context};
 
 // round state bridged across rounds.
 struct Bridged<H, N> {
@@ -28,10 +27,7 @@ struct Bridged<H, N> {
 
 impl<H, N> Bridged<H, N> {
 	fn new(inner: RwLock<RoundState<H, N>>) -> Self {
-		Bridged {
-			inner,
-			waker: task::AtomicWaker::new(),
-		}
+		Bridged { inner, waker: task::AtomicWaker::new() }
 	}
 }
 
@@ -66,24 +62,18 @@ impl<H, N> LatterView<H, N> {
 /// while waiting for events on an older round.
 pub(crate) fn bridge_state<H, N>(initial: RoundState<H, N>) -> (PriorView<H, N>, LatterView<H, N>) {
 	let inner = Arc::new(Bridged::new(RwLock::new(initial)));
-	(
-		PriorView(inner.clone()), LatterView(inner)
-	)
+	(PriorView(inner.clone()), LatterView(inner))
 }
 
 #[cfg(test)]
 mod tests {
-	use std::{sync::Barrier, task::Poll};
 	use super::*;
+	use std::{sync::Barrier, task::Poll};
 
 	#[test]
 	fn bridging_state() {
-		let initial = RoundState {
-			prevote_ghost: None,
-			finalized: None,
-			estimate: None,
-			completable: false,
-		};
+		let initial =
+			RoundState { prevote_ghost: None, finalized: None, estimate: None, completable: false };
 
 		let (prior, latter) = bridge_state(initial);
 		let waits_for_finality = ::futures::future::poll_fn(move |cx| -> Poll<()> {
