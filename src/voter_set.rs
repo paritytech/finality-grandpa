@@ -34,8 +34,6 @@ use crate::{
 pub struct VoterSet<Id: Eq + Ord> {
 	/// The voters in the set.
 	voters: BTreeMap<Id, VoterInfo>,
-	/// The total order associated with the keys in `voters`.
-	order: Vec<Id>,
 	/// The required weight threshold for supermajority w.r.t. this set.
 	threshold: VoterWeight,
 	/// The total weight of all voters.
@@ -100,7 +98,7 @@ impl<Id: Eq + Ord> VoterSet<Id> {
 
 		let threshold = threshold(total_weight);
 
-		Some(VoterSet { voters, order, total_weight, threshold })
+		Some(VoterSet { voters, total_weight, threshold })
 	}
 
 	/// Get the voter info for the voter with the given ID, if any.
@@ -112,7 +110,7 @@ impl<Id: Eq + Ord> VoterSet<Id> {
 	pub fn len(&self) -> NonZeroUsize {
 		unsafe {
 			// SAFETY: By VoterSet::new()
-			NonZeroUsize::new_unchecked(self.order.len())
+			NonZeroUsize::new_unchecked(self.voters.len())
 		}
 	}
 
@@ -124,14 +122,14 @@ impl<Id: Eq + Ord> VoterSet<Id> {
 	/// Get the nth voter in the set, modulo the size of the set,
 	/// as per the associated total order.
 	pub fn nth_mod(&self, n: usize) -> (&Id, &VoterInfo) {
-		self.nth(n % self.order.len()).expect("set is nonempty and n % len < len; qed")
+		self.nth(n % self.voters.len()).expect("set is nonempty and n % len < len; qed")
 	}
 
 	/// Get the nth voter in the set, if any.
 	///
 	/// Returns `None` if `n >= len`.
 	pub fn nth(&self, n: usize) -> Option<(&Id, &VoterInfo)> {
-		self.order.get(n).and_then(|i| self.voters.get(i).map(|info| (i, info)))
+		self.voters.iter().nth(n)
 	}
 
 	/// Get the threshold vote weight required for supermajority
@@ -148,7 +146,7 @@ impl<Id: Eq + Ord> VoterSet<Id> {
 	/// Get an iterator over the voters in the set, as given by
 	/// the associated total order.
 	pub fn iter(&self) -> impl Iterator<Item = (&Id, &VoterInfo)> {
-		(0..self.order.len()).map(move |n| self.nth_mod(n))
+		self.voters.iter()
 	}
 }
 
@@ -205,15 +203,6 @@ mod tests {
 				}
 			}
 		}
-	}
-
-	#[test]
-	fn consistency() {
-		fn prop(s: VoterSet<usize>) -> bool {
-			s.order.len() == s.voters.len() && s.order.iter().all(|id| s.voters.contains_key(id))
-		}
-
-		quickcheck(prop as fn(_) -> _)
 	}
 
 	#[test]
