@@ -45,7 +45,9 @@ impl<H: Ord + PartialEq + Clone, N: BlockNumberOps, V> Entry<H, N, V> {
 	// Get ancestor block by number. Returns `None` if there is no block
 	// by that number in the direct ancestry.
 	fn ancestor_block(&self, number: N) -> Option<&H> {
-		if number >= self.number { return None }
+		if number >= self.number {
+			return None
+		}
 		let offset = self.number - number - N::one();
 
 		self.ancestors.get(offset.as_())
@@ -78,7 +80,8 @@ pub struct VoteGraph<H: Ord + Eq, N, V> {
 	base_number: N,
 }
 
-impl<H, N, V> VoteGraph<H, N, V> where
+impl<H, N, V> VoteGraph<H, N, V>
+where
 	H: Eq + Clone + Ord + Debug,
 	V: for<'a> AddAssign<&'a V> + Default + Clone + Debug,
 	N: Copy + Debug + BlockNumberOps,
@@ -86,22 +89,20 @@ impl<H, N, V> VoteGraph<H, N, V> where
 	/// Create a new `VoteGraph` with base node as given.
 	pub fn new(base_hash: H, base_number: N, base_node: V) -> Self {
 		let mut entries = BTreeMap::new();
-		entries.insert(base_hash.clone(), Entry {
-			number: base_number,
-			ancestors: Vec::new(),
-			descendents: Vec::new(),
-			cumulative_vote: base_node,
-		});
+		entries.insert(
+			base_hash.clone(),
+			Entry {
+				number: base_number,
+				ancestors: Vec::new(),
+				descendents: Vec::new(),
+				cumulative_vote: base_node,
+			},
+		);
 
 		let mut heads = BTreeSet::new();
 		heads.insert(base_hash.clone());
 
-		VoteGraph {
-			entries,
-			heads,
-			base: base_hash,
-			base_number,
-		}
+		VoteGraph { entries, heads, base: base_hash, base_number }
 	}
 
 	/// Get the base block.
@@ -121,7 +122,9 @@ impl<H, N, V> VoteGraph<H, N, V> where
 		};
 
 		// not a valid ancestry proof. TODO: error?
-		if ancestry_proof.len() > self.base_number.as_() { return }
+		if ancestry_proof.len() > self.base_number.as_() {
+			return
+		}
 
 		// hack because we can't convert usize -> N, only vice-versa.
 		// hopefully LLVM can optimize.
@@ -136,8 +139,8 @@ impl<H, N, V> VoteGraph<H, N, V> where
 		};
 
 		let entry = {
-			let old_entry = self.entries.get_mut(&self.base)
-				.expect("base hash entry always exists; qed");
+			let old_entry =
+				self.entries.get_mut(&self.base).expect("base hash entry always exists; qed");
 
 			old_entry.ancestors.extend(ancestry_proof.iter().cloned());
 
@@ -155,9 +158,15 @@ impl<H, N, V> VoteGraph<H, N, V> where
 	}
 
 	/// Insert a vote with given value into the graph at given hash and number.
-	pub fn insert<C: Chain<H, N>, W>(&mut self, hash: H, number: N, vote: W, chain: &C) -> Result<(), Error>
+	pub fn insert<C: Chain<H, N>, W>(
+		&mut self,
+		hash: H,
+		number: N,
+		vote: W,
+		chain: &C,
+	) -> Result<(), Error>
 	where
-		V: for<'a> AddAssign<&'a W>
+		V: for<'a> AddAssign<&'a W>,
 	{
 		if let Some(containing) = self.find_containing_nodes(hash.clone(), number) {
 			if containing.is_empty() {
@@ -173,13 +182,15 @@ impl<H, N, V> VoteGraph<H, N, V> where
 		// NOTE: below this point, there always exists a node with the given hash and number.
 		let mut inspecting_hash = hash;
 		loop {
-			let active_entry = self.entries.get_mut(&inspecting_hash)
+			let active_entry = self
+				.entries
+				.get_mut(&inspecting_hash)
 				.expect("vote-node and its ancestry always exist after initial phase; qed");
 
 			active_entry.cumulative_vote += &vote;
 
 			match active_entry.ancestor_node() {
-				Some(parent) => { inspecting_hash = parent },
+				Some(parent) => inspecting_hash = parent,
 				None => break,
 			}
 		}
@@ -192,15 +203,21 @@ impl<H, N, V> VoteGraph<H, N, V> where
 	///
 	/// Returns `None` if the given head is not in the graph or no node fulfills the
 	/// given condition.
-	pub fn find_ancestor<'a, F>(&'a self, mut hash: H, mut number: N, condition: F) -> Option<(H, N)>
-		where F: Fn(&V) -> bool
+	pub fn find_ancestor<'a, F>(
+		&'a self,
+		mut hash: H,
+		mut number: N,
+		condition: F,
+	) -> Option<(H, N)>
+	where
+		F: Fn(&V) -> bool,
 	{
 		loop {
 			match self.find_containing_nodes(hash.clone(), number) {
-				None =>	{
+				None => {
 					// The block has a vote-node in the graph.
-					let node = self.entries.get(&hash)
-						.expect("by defn of find_containing_nodes; qed");
+					let node =
+						self.entries.get(&hash).expect("by defn of find_containing_nodes; qed");
 					// If the weight is sufficient, we are done.
 					if condition(&node.cumulative_vote) {
 						return Some((hash, number))
@@ -211,9 +228,9 @@ impl<H, N, V> VoteGraph<H, N, V> where
 						Some(a) => {
 							hash = a.clone();
 							number = node.number - N::one();
-						}
+						},
 					}
-				}
+				},
 				Some(children) => {
 					// If there are no vote-nodes below the block in the graph,
 					// the block is not in the graph at all.
@@ -241,9 +258,9 @@ impl<H, N, V> VoteGraph<H, N, V> where
 						Some(parent) => {
 							hash = parent.clone();
 							number = number - N::one();
-						}
+						},
 					}
-				}
+				},
 			}
 		}
 	}
@@ -252,7 +269,8 @@ impl<H, N, V> VoteGraph<H, N, V> where
 	pub fn cumulative_vote<'a>(&'a self, hash: H, number: N) -> V {
 		let entries = &self.entries;
 		let get_node = |hash: &_| -> &'a _ {
-			entries.get(hash)
+			entries
+				.get(hash)
 				.expect("node either base or referenced by other in graph; qed")
 		};
 
@@ -265,7 +283,7 @@ impl<H, N, V> VoteGraph<H, N, V> where
 				}
 
 				v
-			}
+			},
 		}
 	}
 
@@ -286,7 +304,8 @@ impl<H, N, V> VoteGraph<H, N, V> where
 	{
 		let entries = &self.entries;
 		let get_node = |hash: &_| -> &'a _ {
-			entries.get(hash)
+			entries
+				.get(hash)
 				.expect("node either base or referenced by other in graph; qed")
 		};
 
@@ -295,22 +314,26 @@ impl<H, N, V> VoteGraph<H, N, V> where
 			.and_then(|(hash, number)| match self.find_containing_nodes(hash.clone(), number) {
 				None => Some((hash, false)),
 				Some(ref x) if !x.is_empty() => {
-					let ancestor = get_node(&x[0]).ancestor_node()
+					let ancestor = get_node(&x[0])
+						.ancestor_node()
 						.expect("node containing non-node in history always has ancestor; qed");
 
 					Some((ancestor, true))
-				}
+				},
 				Some(_) => None,
 			})
 			.unwrap_or_else(|| (self.base.clone(), false));
 
 		let mut active_node = get_node(&node_key);
 
-		if !condition(&active_node.cumulative_vote) { return None }
+		if !condition(&active_node.cumulative_vote) {
+			return None
+		}
 
 		// breadth-first search starting from this node.
 		loop {
-			let next_descendent = active_node.descendents
+			let next_descendent = active_node
+				.descendents
 				.iter()
 				.map(|d| (d.clone(), get_node(d)))
 				.filter(|&(_, node)| {
@@ -330,7 +353,7 @@ impl<H, N, V> VoteGraph<H, N, V> where
 					force_constrain = false;
 					node_key = key;
 					active_node = node;
-				}
+				},
 				None => break,
 			}
 		}
@@ -344,7 +367,8 @@ impl<H, N, V> VoteGraph<H, N, V> where
 			active_node,
 			if force_constrain { current_best } else { None },
 			condition,
-		).best()
+		)
+		.best()
 	}
 
 	// given a key, node pair (which must correspond), assuming this node fulfills the condition,
@@ -360,12 +384,16 @@ impl<H, N, V> VoteGraph<H, N, V> where
 	where
 		F: Fn(&V) -> bool,
 	{
-		let mut descendent_nodes: Vec<_> = active_node.descendents.iter()
+		let mut descendent_nodes: Vec<_> = active_node
+			.descendents
+			.iter()
 			.map(|h| self.entries.get(h).expect("descendents always present in node storage; qed"))
-			.filter(|n| if let Some((ref h, num)) = force_constrain {
-				n.in_direct_ancestry(h, num).unwrap_or(false)
-			} else {
-				true
+			.filter(|n| {
+				if let Some((ref h, num)) = force_constrain {
+					n.in_direct_ancestry(h, num).unwrap_or(false)
+				} else {
+					true
+				}
 			})
 			.collect();
 
@@ -389,11 +417,9 @@ impl<H, N, V> VoteGraph<H, N, V> where
 								new_best = Some(d_block.clone());
 								break
 							}
-						}
-						Err(idx) => descendent_blocks.insert(idx, (
-							d_block.clone(),
-							d_node.cumulative_vote.clone()
-						)),
+						},
+						Err(idx) => descendent_blocks
+							.insert(idx, (d_block.clone(), d_node.cumulative_vote.clone())),
 					}
 				}
 			}
@@ -403,20 +429,16 @@ impl<H, N, V> VoteGraph<H, N, V> where
 					best_number = best_number + N::one();
 
 					descendent_blocks.clear();
-					descendent_nodes.retain(
-						|n| n.in_direct_ancestry(&new_best, best_number).unwrap_or(false)
-					);
+					descendent_nodes
+						.retain(|n| n.in_direct_ancestry(&new_best, best_number).unwrap_or(false));
 
 					hashes.push(new_best);
-				}
+				},
 				None => break,
 			}
 		}
 
-		Subchain {
-			hashes,
-			best_number,
-		}
+		Subchain { hashes, best_number }
 	}
 
 	// attempts to find the containing node keys for the given hash and number.
@@ -444,18 +466,21 @@ impl<H, N, V> VoteGraph<H, N, V> where
 				};
 
 				// if node has been checked already, break
-				if !visited.insert(head.clone()) { break }
+				if !visited.insert(head.clone()) {
+					break
+				}
 
 				match active_entry.in_direct_ancestry(&hash, number) {
 					Some(true) => {
 						// set containing node and continue search.
 						containing_keys.push(head.clone());
-					}
-					Some(false) => {}, // nothing in this branch. continue search.
-					None => if let Some(prev) = active_entry.ancestor_node() {
-						head = prev;
-						continue // iterate backwards
 					},
+					Some(false) => {}, // nothing in this branch. continue search.
+					None =>
+						if let Some(prev) = active_entry.ancestor_node() {
+							head = prev;
+							continue // iterate backwards
+						},
 				}
 
 				break
@@ -474,7 +499,9 @@ impl<H, N, V> VoteGraph<H, N, V> where
 	// is already a known entry.
 	fn introduce_branch(&mut self, descendents: Vec<H>, ancestor_hash: H, ancestor_number: N) {
 		let produced_entry = descendents.into_iter().fold(None, |mut maybe_entry, descendent| {
-			let entry = self.entries.get_mut(&descendent)
+			let entry = self
+				.entries
+				.get_mut(&descendent)
 				.expect("this function only invoked with keys of vote-nodes; qed");
 
 			debug_assert!(entry.in_direct_ancestry(&ancestor_hash, ancestor_number).unwrap());
@@ -513,7 +540,9 @@ impl<H, N, V> VoteGraph<H, N, V> where
 
 		if let Some((new_entry, prev_ancestor)) = produced_entry {
 			if let Some(prev_ancestor) = prev_ancestor {
-				let prev_ancestor_node = self.entries.get_mut(&prev_ancestor)
+				let prev_ancestor_node = self
+					.entries
+					.get_mut(&prev_ancestor)
 					.expect("Prior ancestor is referenced from a node; qed");
 
 				prev_ancestor_node.descendents.retain(|h| !new_entry.descendents.contains(h));
@@ -538,22 +567,27 @@ impl<H, N, V> VoteGraph<H, N, V> where
 			if let Some(entry) = self.entries.get_mut(ancestor) {
 				entry.descendents.push(hash.clone());
 				ancestor_index = Some(i);
-				break;
+				break
 			}
 		}
 
-		let ancestor_index = ancestor_index.expect("base is kept; \
-			chain returns ancestry only if the block is a descendent of base; qed");
+		let ancestor_index = ancestor_index.expect(
+			"base is kept; \
+			chain returns ancestry only if the block is a descendent of base; qed",
+		);
 
 		let ancestor_hash = ancestry[ancestor_index].clone();
 		ancestry.truncate(ancestor_index + 1);
 
-		self.entries.insert(hash.clone(), Entry {
-			number,
-			ancestors: ancestry,
-			descendents: Vec::new(),
-			cumulative_vote: V::default(),
-		});
+		self.entries.insert(
+			hash.clone(),
+			Entry {
+				number,
+				ancestors: ancestry,
+				descendents: Vec::new(),
+				cumulative_vote: V::default(),
+			},
+		);
 
 		self.heads.remove(&ancestor_hash);
 		self.heads.insert(hash);
@@ -565,7 +599,7 @@ impl<H, N, V> VoteGraph<H, N, V> where
 #[cfg(test)]
 mod tests {
 	use super::*;
-	use crate::testing::chain::{GENESIS_HASH, DummyChain};
+	use crate::testing::chain::{DummyChain, GENESIS_HASH};
 
 	#[test]
 	fn graph_fork_not_at_node() {
@@ -717,15 +751,7 @@ mod tests {
 		tracker.insert("F1", 7, 5, &chain).unwrap();
 		tracker.insert("G2", 8, 5, &chain).unwrap();
 
-		let test_cases = &[
-			"D1",
-			"D2",
-			"E1",
-			"E2",
-			"F1",
-			"F2",
-			"G2",
-		];
+		let test_cases = &["D1", "D2", "E1", "E2", "F1", "F2", "G2"];
 
 		for block in test_cases {
 			let number = chain.number(block);
@@ -747,13 +773,7 @@ mod tests {
 		tracker.insert("G2", 8, 5, &chain).unwrap();
 
 		assert_eq!(tracker.find_ancestor("G2", 8, |&x| x > 5).unwrap(), ("D", 5));
-		let test_cases = &[
-			"E1",
-			"E2",
-			"F1",
-			"F2",
-			"G2",
-		];
+		let test_cases = &["E1", "E2", "F1", "F2", "G2"];
 
 		for block in test_cases {
 			let number = chain.number(block);
@@ -775,16 +795,7 @@ mod tests {
 		tracker.insert("F2", 7, 5, &chain).unwrap();
 		tracker.insert("I1", 10, 1, &chain).unwrap();
 
-		let test_cases = &[
-			"C",
-			"D1",
-			"D2",
-			"E1",
-			"E2",
-			"F1",
-			"F2",
-			"I1",
-		];
+		let test_cases = &["C", "D1", "D2", "E1", "E2", "F1", "F2", "I1"];
 
 		for block in test_cases {
 			let number = chain.number(block);

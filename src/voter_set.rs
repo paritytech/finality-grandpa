@@ -16,12 +16,14 @@
 //! of voters and their weights in the context of a round of the
 //! protocol.
 
-use crate::std::{
-	collections::{BTreeMap, btree_map::Entry},
-	num::{NonZeroU64, NonZeroUsize},
-	vec::Vec
+use crate::{
+	std::{
+		collections::{btree_map::Entry, BTreeMap},
+		num::{NonZeroU64, NonZeroUsize},
+		vec::Vec,
+	},
+	weights::VoterWeight,
 };
-use crate::weights::VoterWeight;
 
 /// A (non-empty) set of voters and associated weights.
 ///
@@ -53,7 +55,7 @@ impl<Id: Eq + Ord> VoterSet<Id> {
 	pub fn new<I>(weights: I) -> Option<Self>
 	where
 		Id: Ord + Clone,
-		I: IntoIterator<Item = (Id, u64)>
+		I: IntoIterator<Item = (Id, u64)>,
 	{
 		let weights = weights.into_iter();
 
@@ -70,7 +72,7 @@ impl<Id: Eq + Ord> VoterSet<Id> {
 					Entry::Vacant(e) => {
 						e.insert(VoterInfo {
 							position: 0, // The total order is determined afterwards.
-							weight: VoterWeight(w)
+							weight: VoterWeight(w),
 						});
 					},
 					Entry::Occupied(mut e) => {
@@ -78,7 +80,7 @@ impl<Id: Eq + Ord> VoterSet<Id> {
 						let n = v.weight.get() + weight;
 						let w = NonZeroU64::new(n).expect("nonzero + nonzero is nonzero");
 						v.weight = VoterWeight(w);
-					}
+					},
 				}
 			}
 		}
@@ -122,17 +124,14 @@ impl<Id: Eq + Ord> VoterSet<Id> {
 	/// Get the nth voter in the set, modulo the size of the set,
 	/// as per the associated total order.
 	pub fn nth_mod(&self, n: usize) -> (&Id, &VoterInfo) {
-		self.nth(n % self.order.len())
-			.expect("set is nonempty and n % len < len; qed")
+		self.nth(n % self.order.len()).expect("set is nonempty and n % len < len; qed")
 	}
 
 	/// Get the nth voter in the set, if any.
 	///
 	/// Returns `None` if `n >= len`.
 	pub fn nth(&self, n: usize) -> Option<(&Id, &VoterInfo)> {
-		self.order.get(n)
-			.and_then(|i| self.voters.get(i)
-				.map(|info| (i, info)))
+		self.order.get(n).and_then(|i| self.voters.get(i).map(|info| (i, info)))
 	}
 
 	/// Get the threshold vote weight required for supermajority
@@ -149,7 +148,7 @@ impl<Id: Eq + Ord> VoterSet<Id> {
 	/// Get an iterator over the voters in the set, as given by
 	/// the associated total order.
 	pub fn iter(&self) -> impl Iterator<Item = (&Id, &VoterInfo)> {
-		(0 .. self.order.len()).map(move |n| self.nth_mod(n))
+		(0..self.order.len()).map(move |n| self.nth_mod(n))
 	}
 }
 
@@ -163,10 +162,14 @@ pub struct VoterInfo {
 impl VoterInfo {
 	/// Get the position of the voter in the total order associated
 	/// with the `VoterSet` from which the `VoterInfo` was obtained.
-	pub fn position(&self) -> usize { self.position }
+	pub fn position(&self) -> usize {
+		self.position
+	}
 
 	/// Get the weight of the voter.
-	pub fn weight(&self) -> VoterWeight { self.weight }
+	pub fn weight(&self) -> VoterWeight {
+		self.weight
+	}
 }
 
 /// Compute the threshold weight given the total voting weight.
@@ -198,7 +201,7 @@ mod tests {
 				//
 				// the easiest thing to do is to just retry generating another instance.
 				if let Some(set) = VoterSet::new(ids.into_iter().zip(weights)) {
-					break set;
+					break set
 				}
 			}
 		}
@@ -207,8 +210,7 @@ mod tests {
 	#[test]
 	fn consistency() {
 		fn prop(s: VoterSet<usize>) -> bool {
-			s.order.len() == s.voters.len() &&
-			s.order.iter().all(|id| s.voters.contains_key(id))
+			s.order.len() == s.voters.len() && s.order.iter().all(|id| s.voters.contains_key(id))
 		}
 
 		quickcheck(prop as fn(_) -> _)
@@ -241,7 +243,7 @@ mod tests {
 
 			// this validator set is invalid
 			if total_weight > u64::max_value() as u128 {
-				return;
+				return
 			}
 
 			let expected = VoterWeight::new(total_weight as u64);

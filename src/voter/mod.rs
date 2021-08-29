@@ -25,29 +25,31 @@
 //!  votes will not be pushed to the sink. The protocol state machine still
 //!  transitions state as if the votes had been pushed out.
 
-use futures::{prelude::*, ready};
-use futures::channel::mpsc::{self, UnboundedReceiver};
+use futures::{
+	channel::mpsc::{self, UnboundedReceiver},
+	prelude::*,
+	ready,
+};
 #[cfg(feature = "std")]
 use log::trace;
 
 use parking_lot::Mutex;
 
-use std::collections::VecDeque;
-use std::pin::Pin;
-use std::sync::Arc;
-use std::task::{Context, Poll};
-use std::hash::Hash;
-
-use crate::round::State as RoundState;
-use crate::{
-	CatchUp, Chain, Commit, CompactCommit, Equivocation, Message, Prevote, Precommit,
-	PrimaryPropose, SignedMessage, BlockNumberOps, validate_commit, CommitValidationResult,
-	HistoricalVotes,
+use std::{
+	collections::VecDeque,
+	hash::Hash,
+	pin::Pin,
+	sync::Arc,
+	task::{Context, Poll},
 };
-use crate::voter_set::VoterSet;
-use crate::weights::VoteWeight;
+
+use crate::{
+	round::State as RoundState, validate_commit, voter_set::VoterSet, weights::VoteWeight,
+	BlockNumberOps, CatchUp, Chain, Commit, CommitValidationResult, CompactCommit, Equivocation,
+	HistoricalVotes, Message, Precommit, Prevote, PrimaryPropose, SignedMessage,
+};
 use past_rounds::PastRounds;
-use voting_round::{VotingRound, State as VotingRoundState};
+use voting_round::{State as VotingRoundState, VotingRound};
 
 mod past_rounds;
 mod voting_round;
@@ -99,12 +101,7 @@ pub trait Environment<H: Eq, N: BlockNumberOps>: Chain<H, N> {
 	///
 	/// Furthermore, this means that actual logic of creating and verifying
 	/// signatures is flexible and can be maintained outside this crate.
-	fn round_data(&self, round: u64) -> RoundData<
-		Self::Id,
-		Self::Timer,
-		Self::In,
-		Self::Out,
-	>;
+	fn round_data(&self, round: u64) -> RoundData<Self::Id, Self::Timer, Self::In, Self::Out>;
 
 	/// Return a timer that will be used to delay the broadcast of a commit
 	/// message. This delay should not be static to minimize the amount of
@@ -148,12 +145,26 @@ pub trait Environment<H: Eq, N: BlockNumberOps>: Chain<H, N> {
 
 	/// Called when a block should be finalized.
 	// TODO: make this a future that resolves when it's e.g. written to disk?
-	fn finalize_block(&self, hash: H, number: N, round: u64, commit: Commit<H, N, Self::Signature, Self::Id>) -> Result<(), Self::Error>;
+	fn finalize_block(
+		&self,
+		hash: H,
+		number: N,
+		round: u64,
+		commit: Commit<H, N, Self::Signature, Self::Id>,
+	) -> Result<(), Self::Error>;
 
 	/// Note that an equivocation in prevotes has occurred.
-	fn prevote_equivocation(&self, round: u64, equivocation: Equivocation<Self::Id, Prevote<H, N>, Self::Signature>);
+	fn prevote_equivocation(
+		&self,
+		round: u64,
+		equivocation: Equivocation<Self::Id, Prevote<H, N>, Self::Signature>,
+	);
 	/// Note that an equivocation in precommits has occurred.
-	fn precommit_equivocation(&self, round: u64, equivocation: Equivocation<Self::Id, Precommit<H, N>, Self::Signature>);
+	fn precommit_equivocation(
+		&self,
+		round: u64,
+		equivocation: Equivocation<Self::Id, Precommit<H, N>, Self::Signature>,
+	);
 }
 
 /// Communication between nodes that is not round-localized.
@@ -351,10 +362,7 @@ struct Buffered<S, I> {
 
 impl<S: Sink<I> + Unpin, I> Buffered<S, I> {
 	fn new(inner: S) -> Buffered<S, I> {
-		Buffered {
-			buffer: VecDeque::new(),
-			inner
-		}
+		Buffered { buffer: VecDeque::new(), inner }
 	}
 
 	// push an item into the buffered sink.
@@ -372,7 +380,7 @@ impl<S: Sink<I> + Unpin, I> Buffered<S, I> {
 			Poll::Pending => {
 				ready!(Sink::poll_flush(Pin::new(&mut self.inner), cx))?;
 				Poll::Pending
-			}
+			},
 		}
 	}
 
@@ -380,7 +388,9 @@ impl<S: Sink<I> + Unpin, I> Buffered<S, I> {
 		while !self.buffer.is_empty() {
 			ready!(Sink::poll_ready(Pin::new(&mut self.inner), cx))?;
 
-			let item = self.buffer.pop_front()
+			let item = self
+				.buffer
+				.pop_front()
 				.expect("we checked self.buffer.is_empty() just above; qed");
 			Sink::start_send(Pin::new(&mut self.inner), item)?;
 		}
@@ -389,12 +399,8 @@ impl<S: Sink<I> + Unpin, I> Buffered<S, I> {
 	}
 }
 
-type FinalizedNotification<H, N, E> = (
-	H,
-	N,
-	u64,
-	Commit<H, N, <E as Environment<H, N>>::Signature, <E as Environment<H, N>>::Id>,
-);
+type FinalizedNotification<H, N, E> =
+	(H, N, u64, Commit<H, N, <E as Environment<H, N>>::Signature, <E as Environment<H, N>>::Id>);
 
 // Instantiates the given last round, to be backgrounded until its estimate is finalized.
 //
@@ -410,7 +416,8 @@ fn instantiate_last_round<H, N, E: Environment<H, N>>(
 	last_round_base: (H, N),
 	finalized_sender: mpsc::UnboundedSender<FinalizedNotification<H, N, E>>,
 	env: Arc<E>,
-) -> Option<VotingRound<H, N, E>> where
+) -> Option<VotingRound<H, N, E>>
+where
 	H: Clone + Eq + Ord + ::std::fmt::Debug,
 	N: Copy + BlockNumberOps + ::std::fmt::Debug,
 {
@@ -421,12 +428,7 @@ fn instantiate_last_round<H, N, E: Environment<H, N>>(
 	});
 
 	// start as completed so we don't cast votes.
-	let mut last_round = VotingRound::completed(
-		last_round_tracker,
-		finalized_sender,
-		None,
-		env,
-	);
+	let mut last_round = VotingRound::completed(last_round_tracker, finalized_sender, None, env);
 
 	for vote in last_round_votes {
 		// bail if any votes are bad.
@@ -443,7 +445,8 @@ fn instantiate_last_round<H, N, E: Environment<H, N>>(
 // The inner state of a voter aggregating the currently running round state
 // (i.e. best and background rounds). This state exists separately since it's
 // useful to wrap in a `Arc<Mutex<_>>` for sharing.
-struct InnerVoterState<H, N, E> where
+struct InnerVoterState<H, N, E>
+where
 	H: Clone + Ord + std::fmt::Debug,
 	N: BlockNumberOps,
 	E: Environment<H, N>,
@@ -470,11 +473,12 @@ struct InnerVoterState<H, N, E> where
 /// Additionally, we also listen to commit messages from rounds that aren't
 /// currently running, we validate the commit and dispatch a finalization
 /// notification (if any) to the environment.
-pub struct Voter<H, N, E: Environment<H, N>, GlobalIn, GlobalOut> where
+pub struct Voter<H, N, E: Environment<H, N>, GlobalIn, GlobalOut>
+where
 	H: Clone + Eq + Ord + ::std::fmt::Debug,
 	N: Copy + BlockNumberOps + ::std::fmt::Debug,
-	GlobalIn: Stream<Item=Result<CommunicationIn<H, N, E::Signature, E::Id>, E::Error>> + Unpin,
-	GlobalOut: Sink<CommunicationOut<H, N, E::Signature, E::Id>, Error=E::Error> + Unpin,
+	GlobalIn: Stream<Item = Result<CommunicationIn<H, N, E::Signature, E::Id>, E::Error>> + Unpin,
+	GlobalOut: Sink<CommunicationOut<H, N, E::Signature, E::Id>, Error = E::Error> + Unpin,
 {
 	env: Arc<E>,
 	voters: VoterSet<E::Id>,
@@ -489,12 +493,13 @@ pub struct Voter<H, N, E: Environment<H, N>, GlobalIn, GlobalOut> where
 	last_finalized_in_rounds: (H, N),
 }
 
-impl<'a, H: 'a, N, E: 'a, GlobalIn, GlobalOut> Voter<H, N, E, GlobalIn, GlobalOut> where
+impl<'a, H: 'a, N, E: 'a, GlobalIn, GlobalOut> Voter<H, N, E, GlobalIn, GlobalOut>
+where
 	H: Clone + Ord + ::std::fmt::Debug + Sync + Send,
 	N: BlockNumberOps + Sync + Send,
 	E: Environment<H, N> + Sync + Send,
-	GlobalIn: Stream<Item=Result<CommunicationIn<H, N, E::Signature, E::Id>, E::Error>> + Unpin,
-	GlobalOut: Sink<CommunicationOut<H, N, E::Signature, E::Id>, Error=E::Error> + Unpin,
+	GlobalIn: Stream<Item = Result<CommunicationIn<H, N, E::Signature, E::Id>, E::Error>> + Unpin,
+	GlobalOut: Sink<CommunicationOut<H, N, E::Signature, E::Id>, Error = E::Error> + Unpin,
 {
 	/// Returns an object allowing to query the voter state.
 	pub fn voter_state(&self) -> Box<dyn VoterState<E::Id> + 'a + Send + Sync>
@@ -509,11 +514,12 @@ impl<'a, H: 'a, N, E: 'a, GlobalIn, GlobalOut> Voter<H, N, E, GlobalIn, GlobalOu
 	}
 }
 
-impl<H, N, E: Environment<H, N>, GlobalIn, GlobalOut> Voter<H, N, E, GlobalIn, GlobalOut> where
+impl<H, N, E: Environment<H, N>, GlobalIn, GlobalOut> Voter<H, N, E, GlobalIn, GlobalOut>
+where
 	H: Clone + Eq + Ord + ::std::fmt::Debug,
 	N: Copy + BlockNumberOps + ::std::fmt::Debug,
-	GlobalIn: Stream<Item=Result<CommunicationIn<H, N, E::Signature, E::Id>, E::Error>> + Unpin,
-	GlobalOut: Sink<CommunicationOut<H, N, E::Signature, E::Id>, Error=E::Error> + Unpin,
+	GlobalIn: Stream<Item = Result<CommunicationIn<H, N, E::Signature, E::Id>, E::Error>> + Unpin,
+	GlobalOut: Sink<CommunicationOut<H, N, E::Signature, E::Id>, Error = E::Error> + Unpin,
 {
 	/// Create new `Voter` tracker with given round number and base block.
 	///
@@ -542,7 +548,8 @@ impl<H, N, E: Environment<H, N>, GlobalIn, GlobalOut> Voter<H, N, E, GlobalIn, G
 		// keep it in the background so we can push the estimate backwards until finalized
 		// by actually waiting for more messages.
 		let mut past_rounds = PastRounds::new();
-		let mut last_round_state = crate::bridge_state::bridge_state(RoundState::genesis(last_round_base.clone())).1;
+		let mut last_round_state =
+			crate::bridge_state::bridge_state(RoundState::genesis(last_round_base.clone())).1;
 
 		if last_round_number > 0 {
 			let maybe_completed_last_round = instantiate_last_round(
@@ -576,10 +583,7 @@ impl<H, N, E: Environment<H, N>, GlobalIn, GlobalOut> Voter<H, N, E, GlobalIn, G
 
 		let (global_in, global_out) = global_comms;
 
-		let inner = Arc::new(Mutex::new(InnerVoterState {
-			best_round,
-			past_rounds,
-		}));
+		let inner = Arc::new(Mutex::new(InnerVoterState { best_round, past_rounds }));
 
 		Voter {
 			env,
@@ -598,13 +602,17 @@ impl<H, N, E: Environment<H, N>, GlobalIn, GlobalOut> Voter<H, N, E, GlobalIn, G
 			let mut inner = self.inner.lock();
 
 			// Do work on all background rounds, broadcasting any commits generated.
-			while let Poll::Ready(Some(item)) = Stream::poll_next(Pin::new(&mut inner.past_rounds), cx) {
+			while let Poll::Ready(Some(item)) =
+				Stream::poll_next(Pin::new(&mut inner.past_rounds), cx)
+			{
 				let (number, commit) = item?;
 				self.global_out.push(CommunicationOut::Commit(number, commit));
 			}
 		}
 
-		while let Poll::Ready(res) = Stream::poll_next(Pin::new(&mut self.finalized_notifications), cx) {
+		while let Poll::Ready(res) =
+			Stream::poll_next(Pin::new(&mut self.finalized_notifications), cx)
+		{
 			let inner = self.inner.clone();
 			let mut inner = inner.lock();
 
@@ -665,21 +673,28 @@ impl<H, N, E: Environment<H, N>, GlobalIn, GlobalOut> Voter<H, N, E, GlobalIn, G
 
 							if finalized_number > *last_finalized_number {
 								*last_finalized_number = finalized_number;
-								self.env.finalize_block(finalized_hash, finalized_number, round_number, commit)?;
+								self.env.finalize_block(
+									finalized_hash,
+									finalized_number,
+									round_number,
+									commit,
+								)?;
 							}
 
-							process_commit_outcome.run(CommitProcessingOutcome::Good(GoodCommit::new()));
+							process_commit_outcome
+								.run(CommitProcessingOutcome::Good(GoodCommit::new()));
 						} else {
 							// Failing validation of a commit is bad.
-							process_commit_outcome.run(
-								CommitProcessingOutcome::Bad(BadCommit::from(validation_result)),
-							);
+							process_commit_outcome.run(CommitProcessingOutcome::Bad(
+								BadCommit::from(validation_result),
+							));
 						}
 					} else {
 						// Import to backgrounded round is good.
-						process_commit_outcome.run(CommitProcessingOutcome::Good(GoodCommit::new()));
+						process_commit_outcome
+							.run(CommitProcessingOutcome::Good(GoodCommit::new()));
 					}
-				}
+				},
 				CommunicationIn::CatchUp(catch_up, mut process_catch_up_outcome) => {
 					trace!(target: "afg", "Got catch-up message for round {}", catch_up.round_number);
 
@@ -693,8 +708,9 @@ impl<H, N, E: Environment<H, N>, GlobalIn, GlobalOut> Voter<H, N, E, GlobalIn, G
 					) {
 						round
 					} else {
-						process_catch_up_outcome.run(CatchUpProcessingOutcome::Bad(BadCatchUp::new()));
-						return Ok(());
+						process_catch_up_outcome
+							.run(CatchUpProcessingOutcome::Bad(BadCatchUp::new()));
+						return Ok(())
 					};
 
 					let state = round.state();
@@ -735,12 +751,10 @@ impl<H, N, E: Environment<H, N>, GlobalIn, GlobalOut> Voter<H, N, E, GlobalIn, G
 					inner.past_rounds.push(&*self.env, just_completed);
 
 					let old_best = std::mem::replace(&mut inner.best_round, new_best);
-					inner.past_rounds.push(
-						&*self.env,
-						old_best,
-					);
+					inner.past_rounds.push(&*self.env, old_best);
 
-					process_catch_up_outcome.run(CatchUpProcessingOutcome::Good(GoodCatchUp::new()));
+					process_catch_up_outcome
+						.run(CatchUpProcessingOutcome::Good(GoodCatchUp::new()));
 				},
 			}
 		}
@@ -769,7 +783,9 @@ impl<H, N, E: Environment<H, N>, GlobalIn, GlobalOut> Voter<H, N, E, GlobalIn, G
 				completable && precommitted
 			};
 
-			if !should_start_next { return Poll::Pending }
+			if !should_start_next {
+				return Poll::Pending
+			}
 
 			trace!(target: "afg", "Best round at {} has become completable. Starting new best round at {}",
 				inner.best_round.round_number(),
@@ -813,17 +829,18 @@ impl<H, N, E: Environment<H, N>, GlobalIn, GlobalOut> Voter<H, N, E, GlobalIn, G
 		let last_finalized_number = &mut self.last_finalized_number;
 		if finalized_number > *last_finalized_number {
 			*last_finalized_number = finalized_number;
-			return true;
+			return true
 		}
 		false
 	}
 }
 
-impl<H, N, E: Environment<H, N>, GlobalIn, GlobalOut> Future for Voter<H, N, E, GlobalIn, GlobalOut> where
+impl<H, N, E: Environment<H, N>, GlobalIn, GlobalOut> Future for Voter<H, N, E, GlobalIn, GlobalOut>
+where
 	H: Clone + Eq + Ord + ::std::fmt::Debug,
 	N: Copy + BlockNumberOps + ::std::fmt::Debug,
-	GlobalIn: Stream<Item=Result<CommunicationIn<H, N, E::Signature, E::Id>, E::Error>> + Unpin,
-	GlobalOut: Sink<CommunicationOut<H, N, E::Signature, E::Id>, Error=E::Error> + Unpin,
+	GlobalIn: Stream<Item = Result<CommunicationIn<H, N, E::Signature, E::Id>, E::Error>> + Unpin,
+	GlobalOut: Sink<CommunicationOut<H, N, E::Signature, E::Id>, Error = E::Error> + Unpin,
 {
 	type Output = Result<(), E::Error>;
 
@@ -836,11 +853,12 @@ impl<H, N, E: Environment<H, N>, GlobalIn, GlobalOut> Future for Voter<H, N, E, 
 	}
 }
 
-impl<H, N, E: Environment<H, N>, GlobalIn, GlobalOut> Unpin for Voter<H, N, E, GlobalIn, GlobalOut> where
+impl<H, N, E: Environment<H, N>, GlobalIn, GlobalOut> Unpin for Voter<H, N, E, GlobalIn, GlobalOut>
+where
 	H: Clone + Eq + Ord + ::std::fmt::Debug,
 	N: Copy + BlockNumberOps + ::std::fmt::Debug,
-	GlobalIn: Stream<Item=Result<CommunicationIn<H, N, E::Signature, E::Id>, E::Error>> + Unpin,
-	GlobalOut: Sink<CommunicationOut<H, N, E::Signature, E::Id>, Error=E::Error> + Unpin,
+	GlobalIn: Stream<Item = Result<CommunicationIn<H, N, E::Signature, E::Id>, E::Error>> + Unpin,
+	GlobalOut: Sink<CommunicationOut<H, N, E::Signature, E::Id>, Error = E::Error> + Unpin,
 {
 }
 
@@ -854,8 +872,8 @@ pub trait VoterState<Id: Eq + std::hash::Hash> {
 
 /// Contains a number of data transfer objects for reporting data to the outside world.
 pub mod report {
-	use std::collections::{HashMap, HashSet};
 	use crate::weights::{VoteWeight, VoterWeight};
+	use std::collections::{HashMap, HashSet};
 
 	/// Basic data struct for the state of a round.
 	#[derive(PartialEq, Eq, Clone)]
@@ -889,12 +907,14 @@ pub mod report {
 	}
 }
 
-struct SharedVoterState<H, N, E>(Arc<Mutex<InnerVoterState<H, N, E>>>) where
+struct SharedVoterState<H, N, E>(Arc<Mutex<InnerVoterState<H, N, E>>>)
+where
 	H: Clone + Ord + std::fmt::Debug,
 	N: BlockNumberOps,
 	E: Environment<H, N>;
 
-impl<H, N, E> VoterState<E::Id> for SharedVoterState<H, N, E> where
+impl<H, N, E> VoterState<E::Id> for SharedVoterState<H, N, E>
+where
 	H: Clone + Eq + Ord + std::fmt::Debug,
 	N: BlockNumberOps,
 	E: Environment<H, N>,
@@ -911,22 +931,15 @@ impl<H, N, E> VoterState<E::Id> for SharedVoterState<H, N, E> where
 					prevote_ids: voting_round.prevote_ids().collect(),
 					precommit_current_weight: voting_round.precommit_weight(),
 					precommit_ids: voting_round.precommit_ids().collect(),
-				}
+				},
 			)
 		};
 
 		let inner = self.0.lock();
 		let best_round = to_round_state(&inner.best_round);
-		let background_rounds = inner
-			.past_rounds
-			.voting_rounds()
-			.map(to_round_state)
-			.collect();
+		let background_rounds = inner.past_rounds.voting_rounds().map(to_round_state).collect();
 
-		report::VoterState {
-			best_round,
-			background_rounds,
-		}
+		report::VoterState { best_round, background_rounds }
 	}
 }
 
@@ -938,7 +951,8 @@ fn validate_catch_up<H, N, S, I, E>(
 	env: &E,
 	voters: &VoterSet<I>,
 	best_round_number: u64,
-) -> Option<crate::round::Round<I, H, N, S>> where
+) -> Option<crate::round::Round<I, H, N, S>>
+where
 	H: Clone + Eq + Ord + std::fmt::Debug,
 	N: BlockNumberOps + std::fmt::Debug,
 	S: Clone + Eq,
@@ -949,7 +963,7 @@ fn validate_catch_up<H, N, S, I, E>(
 		trace!(target: "afg", "Ignoring because best round number is {}",
 			   best_round_number);
 
-		return None;
+		return None
 	}
 
 	// check threshold support in prevotes and precommits.
@@ -963,7 +977,7 @@ fn validate_catch_up<H, N, S, I, E>(
 					   prevote.id,
 				);
 
-				return None;
+				return None
 			}
 
 			map.entry(prevote.id.clone()).or_insert((false, false)).0 = true;
@@ -976,7 +990,7 @@ fn validate_catch_up<H, N, S, I, E>(
 					   precommit.id,
 				);
 
-				return None;
+				return None
 			}
 
 			map.entry(precommit.id.clone()).or_insert((false, false)).1 = true;
@@ -1005,7 +1019,7 @@ fn validate_catch_up<H, N, S, I, E>(
 				   "Ignoring invalid catch up, missing voter threshold"
 			);
 
-			return None;
+			return None
 		}
 	}
 
@@ -1025,7 +1039,7 @@ fn validate_catch_up<H, N, S, I, E>(
 					   e,
 				);
 
-				return None;
+				return None
 			},
 		}
 	}
@@ -1040,14 +1054,14 @@ fn validate_catch_up<H, N, S, I, E>(
 					   e,
 				);
 
-				return None;
+				return None
 			},
 		}
 	}
 
 	let state = round.state();
 	if !state.completable {
-		return None;
+		return None
 	}
 
 	Some(round)
@@ -1056,19 +1070,18 @@ fn validate_catch_up<H, N, S, I, E>(
 #[cfg(test)]
 mod tests {
 	use super::*;
-	use crate::SignedPrecommit;
-	use crate::testing::{
-		self,
-		chain::GENESIS_HASH,
-		environment::{Environment, Id, Signature},
+	use crate::{
+		testing::{
+			self,
+			chain::GENESIS_HASH,
+			environment::{Environment, Id, Signature},
+		},
+		weights::{VoteWeight, VoterWeight},
+		SignedPrecommit,
 	};
-	use crate::weights::{VoteWeight, VoterWeight};
-	use futures::executor::LocalPool;
-	use futures::task::SpawnExt;
+	use futures::{executor::LocalPool, task::SpawnExt};
 	use futures_timer::Delay;
-	use std::iter;
-	use std::time::Duration;
-	use std::collections::HashSet;
+	use std::{collections::HashSet, iter, time::Duration};
 
 	#[test]
 	fn talking_to_myself() {
@@ -1103,9 +1116,11 @@ mod tests {
 		pool.spawner().spawn(routing_task).unwrap();
 
 		// wait for the best block to finalize.
-		pool.run_until(finalized
-			.take_while(|&(_, n, _)| future::ready(n < 6))
-			.for_each(|_| future::ready(())))
+		pool.run_until(
+			finalized
+				.take_while(|&(_, n, _)| future::ready(n < 6))
+				.for_each(|_| future::ready(())),
+		)
 	}
 
 	#[test]
@@ -1117,34 +1132,36 @@ mod tests {
 		let mut pool = LocalPool::new();
 
 		// 3 voters offline.
-		let finalized_streams = (0..7).map(|i| {
-			let local_id = Id(i);
-			// initialize chain
-			let env = Arc::new(Environment::new(network.clone(), local_id));
-			let last_finalized = env.with_chain(|chain| {
-				chain.push_blocks(GENESIS_HASH, &["A", "B", "C", "D", "E"]);
-				chain.last_finalized()
-			});
+		let finalized_streams = (0..7)
+			.map(|i| {
+				let local_id = Id(i);
+				// initialize chain
+				let env = Arc::new(Environment::new(network.clone(), local_id));
+				let last_finalized = env.with_chain(|chain| {
+					chain.push_blocks(GENESIS_HASH, &["A", "B", "C", "D", "E"]);
+					chain.last_finalized()
+				});
 
-			// run voter in background. scheduling it to shut down at the end.
-			let finalized = env.finalized_stream();
-			let voter = Voter::new(
-				env.clone(),
-				voters.clone(),
-				network.make_global_comms(),
-				0,
-				Vec::new(),
-				last_finalized,
-				last_finalized,
-			);
+				// run voter in background. scheduling it to shut down at the end.
+				let finalized = env.finalized_stream();
+				let voter = Voter::new(
+					env.clone(),
+					voters.clone(),
+					network.make_global_comms(),
+					0,
+					Vec::new(),
+					last_finalized,
+					last_finalized,
+				);
 
-			pool.spawner().spawn(voter.map(|v| v.expect("Error voting"))).unwrap();
+				pool.spawner().spawn(voter.map(|v| v.expect("Error voting"))).unwrap();
 
-			// wait for the best block to be finalized by all honest voters
-			finalized
-				.take_while(|&(_, n, _)| future::ready(n < 6))
-				.for_each(|_| future::ready(()))
-		}).collect::<Vec<_>>();
+				// wait for the best block to be finalized by all honest voters
+				finalized
+					.take_while(|&(_, n, _)| future::ready(n < 6))
+					.for_each(|_| future::ready(()))
+			})
+			.collect::<Vec<_>>();
 
 		pool.spawner().spawn(routing_task.map(|_| ())).unwrap();
 
@@ -1161,38 +1178,40 @@ mod tests {
 		let mut pool = LocalPool::new();
 
 		// some voters offline
-		let (finalized_streams, voter_states): (Vec<_>, Vec<_>) = (0..voters_online).map(|i| {
-			let local_id = Id(i);
-			// initialize chain
-			let env = Arc::new(Environment::new(network.clone(), local_id));
-			let last_finalized = env.with_chain(|chain| {
-				chain.push_blocks(GENESIS_HASH, &["A", "B", "C", "D", "E"]);
-				chain.last_finalized()
-			});
+		let (finalized_streams, voter_states): (Vec<_>, Vec<_>) = (0..voters_online)
+			.map(|i| {
+				let local_id = Id(i);
+				// initialize chain
+				let env = Arc::new(Environment::new(network.clone(), local_id));
+				let last_finalized = env.with_chain(|chain| {
+					chain.push_blocks(GENESIS_HASH, &["A", "B", "C", "D", "E"]);
+					chain.last_finalized()
+				});
 
-			// run voter in background. scheduling it to shut down at the end.
-			let finalized = env.finalized_stream();
-			let voter = Voter::new(
-				env.clone(),
-				voters.clone(),
-				network.make_global_comms(),
-				0,
-				Vec::new(),
-				last_finalized,
-				last_finalized,
-			);
-			let voter_state = voter.voter_state();
+				// run voter in background. scheduling it to shut down at the end.
+				let finalized = env.finalized_stream();
+				let voter = Voter::new(
+					env.clone(),
+					voters.clone(),
+					network.make_global_comms(),
+					0,
+					Vec::new(),
+					last_finalized,
+					last_finalized,
+				);
+				let voter_state = voter.voter_state();
 
-			pool.spawner().spawn(voter.map(|v| v.expect("Error voting"))).unwrap();
+				pool.spawner().spawn(voter.map(|v| v.expect("Error voting"))).unwrap();
 
-			(
-				// wait for the best block to be finalized by all honest voters
-				finalized
-					.take_while(|&(_, n, _)| future::ready(n < 6))
-					.for_each(|_| future::ready(())),
-				voter_state,
-			)
-		}).unzip();
+				(
+					// wait for the best block to be finalized by all honest voters
+					finalized
+						.take_while(|&(_, n, _)| future::ready(n < 6))
+						.for_each(|_| future::ready(())),
+					voter_state,
+				)
+			})
+			.unzip();
 
 		let voter_state = &voter_states[0];
 		voter_states.iter().all(|vs| vs.get() == voter_state.get());
@@ -1260,34 +1279,29 @@ mod tests {
 	fn broadcast_commit_only_if_newer() {
 		let local_id = Id(5);
 		let test_id = Id(42);
-		let voters = VoterSet::new([
-			(local_id, 100),
-			(test_id, 201),
-		].iter().cloned()).expect("nonempty");
+		let voters =
+			VoterSet::new([(local_id, 100), (test_id, 201)].iter().cloned()).expect("nonempty");
 
 		let (network, routing_task) = testing::environment::make_network();
 		let (commits_stream, commits_sink) = network.make_global_comms();
 		let (round_stream, round_sink) = network.make_round_comms(1, test_id);
 
-		let prevote = Message::Prevote(Prevote {
-			target_hash: "E",
-			target_number: 6,
-		});
+		let prevote = Message::Prevote(Prevote { target_hash: "E", target_number: 6 });
 
-		let precommit = Message::Precommit(Precommit {
-			target_hash: "E",
-			target_number: 6,
-		});
+		let precommit = Message::Precommit(Precommit { target_hash: "E", target_number: 6 });
 
-		let commit = (1, Commit {
-			target_hash: "E",
-			target_number: 6,
-			precommits: vec![SignedPrecommit {
-				precommit: Precommit { target_hash: "E", target_number: 6 },
-				signature: Signature(test_id.0),
-				id: test_id
-			}],
-		});
+		let commit = (
+			1,
+			Commit {
+				target_hash: "E",
+				target_number: 6,
+				precommits: vec![SignedPrecommit {
+					precommit: Precommit { target_hash: "E", target_number: 6 },
+					signature: Signature(test_id.0),
+					id: test_id,
+				}],
+			},
+		);
 
 		let global_comms = network.make_global_comms();
 		let env = Arc::new(Environment::new(network, local_id));
@@ -1313,45 +1327,60 @@ mod tests {
 		pool.spawner().spawn(voter.map(|v| v.expect("Error voting: {:?}"))).unwrap();
 		pool.spawner().spawn(routing_task.map(|_| ())).unwrap();
 
-		pool.spawner().spawn(
-			round_stream.into_future()
-				.then(|(value, stream)| { // wait for a prevote
-					assert!(match value {
-						Some(Ok(SignedMessage { message: Message::Prevote(_), id: Id(5), .. })) => true,
-						_ => false,
-					});
-					let votes = vec![prevote, precommit].into_iter().map(Result::Ok);
-					futures::stream::iter(votes).forward(round_sink).map(|_| stream) // send our prevote
-				})
-				.then(|stream| {
-					stream.take_while(|value| match value { // wait for a precommit
-						Ok(SignedMessage { message: Message::Precommit(_), id: Id(5), .. }) => future::ready(false),
-						_ => future::ready(true),
-					}).for_each(|_| future::ready(()))
-				})
-				.then(|_| {
-					// send our commit
-					stream::iter(iter::once(Ok(CommunicationOut::Commit(commit.0, commit.1)))).forward(commits_sink)
-				})
-				.map(|_| ())
-		).unwrap();
+		pool.spawner()
+			.spawn(
+				round_stream
+					.into_future()
+					.then(|(value, stream)| {
+						// wait for a prevote
+						assert!(match value {
+							Some(Ok(SignedMessage {
+								message: Message::Prevote(_),
+								id: Id(5),
+								..
+							})) => true,
+							_ => false,
+						});
+						let votes = vec![prevote, precommit].into_iter().map(Result::Ok);
+						futures::stream::iter(votes).forward(round_sink).map(|_| stream) // send our prevote
+					})
+					.then(|stream| {
+						stream
+							.take_while(|value| match value {
+								// wait for a precommit
+								Ok(SignedMessage {
+									message: Message::Precommit(_),
+									id: Id(5),
+									..
+								}) => future::ready(false),
+								_ => future::ready(true),
+							})
+							.for_each(|_| future::ready(()))
+					})
+					.then(|_| {
+						// send our commit
+						stream::iter(iter::once(Ok(CommunicationOut::Commit(commit.0, commit.1))))
+							.forward(commits_sink)
+					})
+					.map(|_| ()),
+			)
+			.unwrap();
 
 		let res = pool.run_until(
 			// wait for the first commit (ours)
-			commits_stream.into_future()
-				.then(|(_, stream)| {
-					// the second commit should never arrive
-					let await_second = stream.take(1)
-						.for_each(|_| future::ready(()));
-					let delay = Delay::new(Duration::from_millis(500));
-					future::select(await_second, delay)
-				}));
+			commits_stream.into_future().then(|(_, stream)| {
+				// the second commit should never arrive
+				let await_second = stream.take(1).for_each(|_| future::ready(()));
+				let delay = Delay::new(Duration::from_millis(500));
+				future::select(await_second, delay)
+			}),
+		);
 
 		match res {
 			future::Either::Right(((), _work)) => {
 				// the future timed out as expected
-			}
-			_ => panic!("Unexpected result")
+			},
+			_ => panic!("Unexpected result"),
 		}
 	}
 
@@ -1359,10 +1388,8 @@ mod tests {
 	fn import_commit_for_any_round() {
 		let local_id = Id(5);
 		let test_id = Id(42);
-		let voters = VoterSet::new([
-			(local_id, 100),
-			(test_id, 201),
-		].iter().cloned()).expect("nonempty");
+		let voters =
+			VoterSet::new([(local_id, 100), (test_id, 201)].iter().cloned()).expect("nonempty");
 
 		let (network, routing_task) = testing::environment::make_network();
 		let (_, commits_sink) = network.make_global_comms();
@@ -1374,7 +1401,7 @@ mod tests {
 			precommits: vec![SignedPrecommit {
 				precommit: Precommit { target_hash: "E", target_number: 6 },
 				signature: Signature(test_id.0),
-				id: test_id
+				id: test_id,
 			}],
 		};
 
@@ -1403,16 +1430,17 @@ mod tests {
 		pool.spawner().spawn(routing_task.map(|_| ())).unwrap();
 
 		// Send the commit message.
-		pool.spawner().spawn(
-			stream::iter(iter::once(Ok(CommunicationOut::Commit(0, commit.clone()))))
-				.forward(commits_sink)
-				.map(|_| ())).unwrap();
+		pool.spawner()
+			.spawn(
+				stream::iter(iter::once(Ok(CommunicationOut::Commit(0, commit.clone()))))
+					.forward(commits_sink)
+					.map(|_| ()),
+			)
+			.unwrap();
 
 		// Wait for the commit message to be processed.
-		let finalized = pool.run_until(
-			env.finalized_stream()
-				.into_future()
-				.map(move |(msg, _)| msg.unwrap().2));
+		let finalized = pool
+			.run_until(env.finalized_stream().into_future().map(move |(msg, _)| msg.unwrap().2));
 
 		assert_eq!(finalized, commit);
 	}
@@ -1558,9 +1586,11 @@ mod tests {
 		pool.spawner().spawn(routing_task.map(|_| ())).unwrap();
 
 		// wait for the best block to finalize.
-		pool.run_until(env.finalized_stream()
-			.take_while(|&(_, n, _)| future::ready(n < 6))
-			.for_each(|_| future::ready(())))
+		pool.run_until(
+			env.finalized_stream()
+				.take_while(|&(_, n, _)| future::ready(n < 6))
+				.for_each(|_| future::ready(())),
+		)
 	}
 
 	#[test]
@@ -1619,10 +1649,13 @@ mod tests {
 		let sender = Id(67);
 		let (_, round_sink) = network.make_round_comms(1, sender);
 		let last_precommit = Message::Precommit(Precommit { target_hash: "D", target_number: 3 });
-		pool.spawner().spawn(
-			stream::iter(iter::once(Ok(last_precommit)))
-				.forward(round_sink)
-				.map(|r| r.unwrap())).unwrap();
+		pool.spawner()
+			.spawn(
+				stream::iter(iter::once(Ok(last_precommit)))
+					.forward(round_sink)
+					.map(|r| r.unwrap()),
+			)
+			.unwrap();
 
 		// run voter in background. scheduling it to shut down at the end.
 		let voter = Voter::new(
@@ -1635,24 +1668,28 @@ mod tests {
 			last_finalized,
 		);
 
-		pool.spawner().spawn(voter.map_err(|_| panic!("Error voting")).map(|_| ())).unwrap();
+		pool.spawner()
+			.spawn(voter.map_err(|_| panic!("Error voting")).map(|_| ()))
+			.unwrap();
 		pool.spawner().spawn(routing_task.map(|_| ())).unwrap();
 
 		// wait until we see a prevote on round 3 from our local ID,
 		// indicating that the round 3 has started.
 
 		let (round_stream, _) = network.make_round_comms(3, Id(1000));
-		pool.run_until(round_stream
-			.skip_while(move |v| {
-				let v = v.as_ref().unwrap();
-				if let Message::Prevote(_) = v.message {
-					future::ready(v.id != local_id)
-				} else {
-					future::ready(true)
-				}
-			})
-			.into_future()
-			.map(|_| ()));
+		pool.run_until(
+			round_stream
+				.skip_while(move |v| {
+					let v = v.as_ref().unwrap();
+					if let Message::Prevote(_) = v.message {
+						future::ready(v.id != local_id)
+					} else {
+						future::ready(true)
+					}
+				})
+				.into_future()
+				.map(|_| ()),
+		);
 
 		assert_eq!(outer_env.last_completed_and_concluded(), (2, 1));
 	}
