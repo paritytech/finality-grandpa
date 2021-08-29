@@ -20,7 +20,6 @@ use crate::{
 	std::{
 		collections::{btree_map::Entry, BTreeMap},
 		num::{NonZeroU64, NonZeroUsize},
-		vec::Vec,
 	},
 	weights::VoterWeight,
 };
@@ -91,9 +90,8 @@ impl<Id: Eq + Ord> VoterSet<Id> {
 		let total_weight = VoterWeight::new(total_weight).expect("voters nonempty; qed");
 
 		// Establish the total order based on the voter IDs.
-		let order = voters.keys().cloned().collect::<Vec<_>>();
-		for (i, id) in order.iter().enumerate() {
-			voters.get_mut(id).expect("def. of order; qed").position = i;
+		for (i, (_id, voter)) in voters.iter_mut().enumerate() {
+			voter.position = i;
 		}
 
 		let threshold = threshold(total_weight);
