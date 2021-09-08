@@ -18,7 +18,6 @@
 
 use crate::{
 	std::{
-		collections::{btree_map::Entry, BTreeMap},
 		num::{NonZeroU64, NonZeroUsize},
 		vec::Vec,
 	},
@@ -32,10 +31,8 @@ use crate::{
 /// equipped with a total order, given by the ordering of the voter's IDs.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct VoterSet<Id: Eq + Ord> {
-	/// The voters in the set.
-	voters: BTreeMap<Id, VoterInfo>,
-	/// The total order associated with the keys in `voters`.
-	order: Vec<Id>,
+	/// The total ordered voters set
+	voters: Vec<(Id, VoterInfo)>,
 	/// The required weight threshold for supermajority w.r.t. this set.
 	threshold: VoterWeight,
 	/// The total weight of all voters.
@@ -58,9 +55,9 @@ impl<Id: Eq + Ord> VoterSet<Id> {
 		I: IntoIterator<Item = (Id, u64)>,
 	{
 		let weights = weights.into_iter();
+		let mut voters = Vec::with_capacity(weights.size_hint().0);
 
 		// Populate the voter set, thereby calculating the total weight.
-		let mut voters = BTreeMap::new();
 		let mut total_weight = 0u64;
 		for (id, weight) in weights {
 			if let Some(w) = NonZeroU64::new(weight) {
@@ -68,20 +65,8 @@ impl<Id: Eq + Ord> VoterSet<Id> {
 				// for weight overflow (not just in debug mode). The protocol
 				// should never run with such voter sets.
 				total_weight = total_weight.checked_add(weight)?;
-				match voters.entry(id) {
-					Entry::Vacant(e) => {
-						e.insert(VoterInfo {
-							position: 0, // The total order is determined afterwards.
-							weight: VoterWeight(w),
-						});
-					},
-					Entry::Occupied(mut e) => {
-						let v = e.get_mut();
-						let n = v.weight.get() + weight;
-						let w = NonZeroU64::new(n).expect("nonzero + nonzero is nonzero");
-						v.weight = VoterWeight(w);
-					},
-				}
+
+				voters.push((id, VoterInfo { position: 0, weight: VoterWeight(w) }));
 			}
 		}
 
@@ -92,46 +77,70 @@ impl<Id: Eq + Ord> VoterSet<Id> {
 
 		let total_weight = VoterWeight::new(total_weight).expect("voters nonempty; qed");
 
-		// Establish the total order based on the voter IDs.
-		let order = voters.keys().cloned().collect::<Vec<_>>();
-		for (i, id) in order.iter().enumerate() {
-			voters.get_mut(id).expect("def. of order; qed").position = i;
+		// SAFETY: Order of same id doesn't matter as they will be aggregated.
+		// This is like tim-sort: if pre-sorted will be extremely efficient.
+		voters.sort_unstable_by(|(a_id, _), (b_id, _)| a_id.cmp(b_id));
+
+		// voters contains neighboring duplicates. Reduce list so all weight are against one id
+		let mut position = 0;
+		let mut current_weight = 0;
+		for i in 0..voters.len() {
+			let (id, VoterInfo { weight: VoterWeight(weight), .. }) = &voters[i];
+			current_weight += weight.get();
+			debug_assert!(current_weight != 0);
+
+			// if id doesn't match next_id or is last in list:
+			if voters.get(i + 1).filter(|(next_id, _)| id == next_id).is_none() {
+				voters[position] = (
+					id.clone(),
+					VoterInfo {
+						position,
+						weight: VoterWeight::new(current_weight).expect("non-zero"),
+					},
+				);
+				position += 1;
+				current_weight = 0;
+			}
 		}
 
-		let threshold = threshold(total_weight);
+		// Duplicate ids and weights after this position have already been processed.
+		voters.truncate(position);
 
-		Some(VoterSet { voters, order, total_weight, threshold })
+		Some(VoterSet { voters, total_weight, threshold: threshold(total_weight) })
 	}
 
 	/// Get the voter info for the voter with the given ID, if any.
 	pub fn get(&self, id: &Id) -> Option<&VoterInfo> {
-		self.voters.get(id)
+		self.voters
+			.binary_search_by(|(an_id, _)| an_id.cmp(id))
+			.ok()
+			.map(|idx| &self.voters[idx].1)
 	}
 
 	/// Get the size of the set.
 	pub fn len(&self) -> NonZeroUsize {
 		unsafe {
 			// SAFETY: By VoterSet::new()
-			NonZeroUsize::new_unchecked(self.order.len())
+			NonZeroUsize::new_unchecked(self.voters.len())
 		}
 	}
 
 	/// Whether the set contains a voter with the given ID.
 	pub fn contains(&self, id: &Id) -> bool {
-		self.voters.contains_key(id)
+		self.voters.binary_search_by(|(an_id, _)| an_id.cmp(id)).is_ok()
 	}
 
 	/// Get the nth voter in the set, modulo the size of the set,
 	/// as per the associated total order.
 	pub fn nth_mod(&self, n: usize) -> (&Id, &VoterInfo) {
-		self.nth(n % self.order.len()).expect("set is nonempty and n % len < len; qed")
+		self.nth(n % self.voters.len()).expect("set is nonempty and n % len < len; qed")
 	}
 
 	/// Get the nth voter in the set, if any.
 	///
 	/// Returns `None` if `n >= len`.
 	pub fn nth(&self, n: usize) -> Option<(&Id, &VoterInfo)> {
-		self.order.get(n).and_then(|i| self.voters.get(i).map(|info| (i, info)))
+		self.voters.get(n).map(|(id, info)| (id, info))
 	}
 
 	/// Get the threshold vote weight required for supermajority
@@ -148,7 +157,7 @@ impl<Id: Eq + Ord> VoterSet<Id> {
 	/// Get an iterator over the voters in the set, as given by
 	/// the associated total order.
 	pub fn iter(&self) -> impl Iterator<Item = (&Id, &VoterInfo)> {
-		(0..self.order.len()).map(move |n| self.nth_mod(n))
+		self.voters.iter().map(|(id, info)| (id, info))
 	}
 }
 
@@ -205,15 +214,6 @@ mod tests {
 				}
 			}
 		}
-	}
-
-	#[test]
-	fn consistency() {
-		fn prop(s: VoterSet<usize>) -> bool {
-			s.order.len() == s.voters.len() && s.order.iter().all(|id| s.voters.contains_key(id))
-		}
-
-		quickcheck(prop as fn(_) -> _)
 	}
 
 	#[test]
