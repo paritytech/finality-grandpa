@@ -18,6 +18,7 @@
 
 use crate::{
 	std::{
+		collections::{btree_map::Entry, BTreeMap},
 		num::{NonZeroU64, NonZeroUsize},
 		vec::Vec,
 	},
@@ -54,8 +55,7 @@ impl<Id: Eq + Ord> VoterSet<Id> {
 		Id: Ord + Clone,
 		I: IntoIterator<Item = (Id, u64)>,
 	{
-		let weights = weights.into_iter();
-		let mut voters = Vec::with_capacity(weights.size_hint().0);
+		let mut voters = BTreeMap::new();
 
 		// Populate the voter set, thereby calculating the total weight.
 		let mut total_weight = 0u64;
@@ -65,8 +65,20 @@ impl<Id: Eq + Ord> VoterSet<Id> {
 				// for weight overflow (not just in debug mode). The protocol
 				// should never run with such voter sets.
 				total_weight = total_weight.checked_add(weight)?;
-
-				voters.push((id, VoterInfo { position: 0, weight: VoterWeight(w) }));
+				match voters.entry(id) {
+					Entry::Vacant(e) => {
+						e.insert(VoterInfo {
+							position: 0, // The total order is determined afterwards.
+							weight: VoterWeight(w),
+						});
+					},
+					Entry::Occupied(mut e) => {
+						let v = e.get_mut();
+						let n = v.weight.get() + weight;
+						let w = NonZeroU64::new(n).expect("nonzero + nonzero is nonzero");
+						v.weight = VoterWeight(w);
+					},
+				}
 			}
 		}
 
@@ -75,36 +87,15 @@ impl<Id: Eq + Ord> VoterSet<Id> {
 			return None
 		}
 
+		let voters = voters
+			.into_iter()
+			.enumerate()
+			.map(|(position, (id, mut info))| {
+				info.position = position;
+				(id, info)
+			})
+			.collect();
 		let total_weight = VoterWeight::new(total_weight).expect("voters nonempty; qed");
-
-		// SAFETY: Order of same id doesn't matter as they will be aggregated.
-		// This is like tim-sort: if pre-sorted will be extremely efficient.
-		voters.sort_unstable_by(|(a_id, _), (b_id, _)| a_id.cmp(b_id));
-
-		// voters contains neighboring duplicates. Reduce list so all weight are against one id
-		let mut position = 0;
-		let mut current_weight = 0;
-		for i in 0..voters.len() {
-			let (id, VoterInfo { weight: VoterWeight(weight), .. }) = &voters[i];
-			current_weight += weight.get();
-			debug_assert!(current_weight != 0);
-
-			// if id doesn't match next_id or is last in list:
-			if voters.get(i + 1).filter(|(next_id, _)| id == next_id).is_none() {
-				voters[position] = (
-					id.clone(),
-					VoterInfo {
-						position,
-						weight: VoterWeight::new(current_weight).expect("non-zero"),
-					},
-				);
-				position += 1;
-				current_weight = 0;
-			}
-		}
-
-		// Duplicate ids and weights after this position have already been processed.
-		voters.truncate(position);
 
 		Some(VoterSet { voters, total_weight, threshold: threshold(total_weight) })
 	}
@@ -112,7 +103,7 @@ impl<Id: Eq + Ord> VoterSet<Id> {
 	/// Get the voter info for the voter with the given ID, if any.
 	pub fn get(&self, id: &Id) -> Option<&VoterInfo> {
 		self.voters
-			.binary_search_by(|(an_id, _)| an_id.cmp(id))
+			.binary_search_by_key(&id, |(id, _)| id)
 			.ok()
 			.map(|idx| &self.voters[idx].1)
 	}
@@ -127,7 +118,7 @@ impl<Id: Eq + Ord> VoterSet<Id> {
 
 	/// Whether the set contains a voter with the given ID.
 	pub fn contains(&self, id: &Id) -> bool {
-		self.voters.binary_search_by(|(an_id, _)| an_id.cmp(id)).is_ok()
+		self.voters.binary_search_by_key(&id, |(id, _)| id).is_ok()
 	}
 
 	/// Get the nth voter in the set, modulo the size of the set,
