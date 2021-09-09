@@ -32,7 +32,7 @@ use crate::{
 /// equipped with a total order, given by the ordering of the voter's IDs.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct VoterSet<Id: Eq + Ord> {
-	/// The total ordered voters set
+	/// The voters in the voter set, this vec is always sorted by the voter ID.
 	voters: Vec<(Id, VoterInfo)>,
 	/// The required weight threshold for supermajority w.r.t. this set.
 	threshold: VoterWeight,
