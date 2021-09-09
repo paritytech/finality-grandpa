@@ -55,9 +55,8 @@ impl<Id: Eq + Ord> VoterSet<Id> {
 		Id: Ord + Clone,
 		I: IntoIterator<Item = (Id, u64)>,
 	{
-		let mut voters = BTreeMap::new();
-
 		// Populate the voter set, thereby calculating the total weight.
+		let mut voters = BTreeMap::new();
 		let mut total_weight = 0u64;
 		for (id, weight) in weights {
 			if let Some(w) = NonZeroU64::new(weight) {
@@ -95,6 +94,7 @@ impl<Id: Eq + Ord> VoterSet<Id> {
 				(id, info)
 			})
 			.collect();
+
 		let total_weight = VoterWeight::new(total_weight).expect("voters nonempty; qed");
 
 		Some(VoterSet { voters, total_weight, threshold: threshold(total_weight) })
