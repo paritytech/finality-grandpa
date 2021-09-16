@@ -57,6 +57,7 @@ jobs:
   clippy:
     name: Lint
     runs-on: ubuntu-latest
+    continue-on-error: true
     steps:
       - name: Checkout sources
         uses: actions/checkout@v2
@@ -69,7 +70,6 @@ jobs:
           components: clippy
       - name: Run cargo clippy
         uses: actions-rs/cargo@v1
-        continue-on-error: true
         with:
           command: clippy
           args: -- -D warnings
