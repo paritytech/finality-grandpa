@@ -9,7 +9,8 @@ on:
   schedule:
     - cron: '0 0 * * *'
 jobs:
-  cargo-deny:
+  check:
+    name: Check
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v2
