@@ -10,6 +10,12 @@ jobs:
   check-test:
     name: Check and test
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        rust:
+          - stable
+          - beta
+          - nightly
     steps:
       - name: Checkout sources
         uses: actions/checkout@v2
@@ -17,18 +23,21 @@ jobs:
         uses: actions-rs/toolchain@v1
         with:
           profile: minimal
-          toolchain: stable
+          toolchain: ${{ matrix.rust }}
           override: true
       - name: Check
         uses: actions-rs/cargo@v1
+        continue-on-error: ${{ matrix.version == 'nightly' }}
         with:
           command: check
       - name: Test
         uses: actions-rs/cargo@v1
+        continue-on-error: ${{ matrix.version == 'nightly' }}
         with:
           command: test
       - name: Test (no-std)
         uses: actions-rs/cargo@v1
+        continue-on-error: ${{ matrix.version == 'nightly' }}
         with:
           command: test
           args: --no-default-features
