@@ -1,4 +1,4 @@
-# `finality-grandpa`
+# finality-grandpa
 
 [![crates.io link][crates-badge]][crates] [![Build Status](https://github.com/paritytech/finality-grandpa/actions/workflows/rust.yml/badge.svg?branch=master)](https://github.com/paritytech/finality-grandpa/actions/workflows/rust.yml) [![Coverage Status](https://coveralls.io/repos/github/paritytech/finality-grandpa/badge.svg?branch=master)](https://coveralls.io/github/paritytech/finality-grandpa?branch=master)
 
