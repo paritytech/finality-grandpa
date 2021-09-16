@@ -27,17 +27,14 @@ jobs:
           override: true
       - name: Check
         uses: actions-rs/cargo@v1
-        continue-on-error: ${{ matrix.version == 'nightly' }}
         with:
           command: check
       - name: Test
         uses: actions-rs/cargo@v1
-        continue-on-error: ${{ matrix.version == 'nightly' }}
         with:
           command: test
       - name: Test (no-std)
         uses: actions-rs/cargo@v1
-        continue-on-error: ${{ matrix.version == 'nightly' }}
         with:
           command: test
           args: --no-default-features
