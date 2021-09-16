@@ -90,18 +90,12 @@ enum Voting {
 impl Voting {
 	/// Whether the voter should cast round votes (prevotes and precommits.)
 	fn is_active(&self) -> bool {
-		match self {
-			Voting::Yes | Voting::Primary => true,
-			_ => false,
-		}
+		matches!(self, Voting::Yes | Voting::Primary)
 	}
 
 	/// Whether the voter is the primary proposer.
 	fn is_primary(&self) -> bool {
-		match self {
-			Voting::Primary => true,
-			_ => false,
-		}
+		matches!(self, Voting::Primary)
 	}
 }
 
@@ -124,7 +118,7 @@ where
 
 		let votes = Round::new(round_params);
 
-		let voting = if round_data.voter_id.as_ref() == Some(&votes.primary_voter().0) {
+		let voting = if round_data.voter_id.as_ref() == Some(votes.primary_voter().0) {
 			Voting::Primary
 		} else if round_data.voter_id.as_ref().map_or(false, |id| votes.voters().contains(id)) {
 			Voting::Yes
@@ -727,7 +721,7 @@ where
 							.expect("always returns none if something was finalized; this is checked above; qed")
 							.collect(),
 					};
-					let finalized = (f_hash.clone(), f_number, self.votes.number(), commit.clone());
+					let finalized = (f_hash, f_number, self.votes.number(), commit.clone());
 					let _ = self.finalized_sender.unbounded_send(finalized);
 					self.best_finalized = Some(commit);
 				}

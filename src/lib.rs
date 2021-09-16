@@ -446,8 +446,8 @@ where
 	I: Clone + Ord + Eq + std::fmt::Debug,
 	S: Clone + Eq,
 {
-	let mut validation_result = CommitValidationResult::default();
-	validation_result.num_precommits = commit.precommits.len();
+	let mut validation_result =
+		CommitValidationResult { num_precommits: commit.precommits.len(), ..Default::default() };
 
 	// check that all precommits are for blocks higher than the target
 	// commit block, and that they're its descendents
