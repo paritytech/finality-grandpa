@@ -775,10 +775,9 @@ where
 					Poll::Pending => false,
 				};
 
-				let precommitted = match inner.best_round.state() {
-					Some(&VotingRoundState::Precommitted) => true, // start when we've cast all votes.
-					_ => false,
-				};
+				// start when we've cast all votes.
+				let precommitted =
+					matches!(inner.best_round.state(), Some(&VotingRoundState::Precommitted));
 
 				completable && precommitted
 			};
