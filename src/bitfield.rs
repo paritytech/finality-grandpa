@@ -195,7 +195,7 @@ impl BitOr<&Bitfield> for Bitfield {
 	type Output = Bitfield;
 
 	fn bitor(mut self, rhs: &Bitfield) -> Self::Output {
-		self.merge(&rhs);
+		self.merge(rhs);
 		self
 	}
 }

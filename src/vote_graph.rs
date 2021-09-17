@@ -203,12 +203,7 @@ where
 	///
 	/// Returns `None` if the given head is not in the graph or no node fulfills the
 	/// given condition.
-	pub fn find_ancestor<'a, F>(
-		&'a self,
-		mut hash: H,
-		mut number: N,
-		condition: F,
-	) -> Option<(H, N)>
+	pub fn find_ancestor<F>(&self, mut hash: H, mut number: N, condition: F) -> Option<(H, N)>
 	where
 		F: Fn(&V) -> bool,
 	{
@@ -223,7 +218,7 @@ where
 						return Some((hash, number))
 					}
 					// Not enough weight, check the parent block.
-					match node.ancestors.iter().next() {
+					match node.ancestors.get(0) {
 						None => return None,
 						Some(a) => {
 							hash = a.clone();
@@ -242,7 +237,7 @@ where
 					// Check if the accumulated weight on all child vote-nodes is sufficient.
 					let mut v = V::default();
 					for c in &children {
-						let e = self.entries.get(&c).expect("all children in graph; qed");
+						let e = self.entries.get(c).expect("all children in graph; qed");
 						v += &e.cumulative_vote;
 					}
 					if condition(&v) {
@@ -274,7 +269,7 @@ where
 				.expect("node either base or referenced by other in graph; qed")
 		};
 
-		match self.find_containing_nodes(hash.clone(), number.clone()) {
+		match self.find_containing_nodes(hash.clone(), number) {
 			None => get_node(&hash).cumulative_vote.clone(),
 			Some(nodes) => {
 				let mut v = Default::default();
