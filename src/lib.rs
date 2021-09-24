@@ -181,7 +181,10 @@ where
 }
 
 /// Chain context necessary for implementation of the finality gadget.
-pub trait Chain<H: Eq, N: Copy + BlockNumberOps> {
+pub trait Chain<H, N>
+where
+	H: Eq,
+{
 	/// Get the ancestry of a block up to but not including the base hash.
 	/// Should be in reverse order from `block`'s parent.
 	///

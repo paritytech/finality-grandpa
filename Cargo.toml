@@ -8,6 +8,7 @@ repository = "https://github.com/paritytech/finality-grandpa"
 edition = "2018"
 
 [dependencies]
+async-trait = "0.1"
 either = { version = "1.6", default-features = false }
 futures = { version = "0.3", default-features = false, features = [
     "async-await",
