@@ -42,13 +42,13 @@ pub mod voter_set;
 
 mod bitfield;
 #[cfg(feature = "std")]
-mod bridge_state;
 #[cfg(any(test, feature = "fuzz-helpers"))]
 pub mod fuzz_helpers;
 #[cfg(any(test))]
 mod testing;
 mod weights;
 #[cfg(not(feature = "std"))]
+
 mod std {
 	pub use core::{cmp, hash, iter, mem, num, ops};
 
@@ -505,13 +505,13 @@ where
 #[cfg(feature = "std")]
 pub fn process_commit_validation_result<H, N>(
 	validation_result: CommitValidationResult<H, N>,
-	mut callback: voter::Callback<voter::CommitProcessingOutcome>,
+	// mut callback: voter::Callback<voter::CommitProcessingOutcome>,
 ) {
-	if validation_result.ghost.is_some() {
-		callback.run(voter::CommitProcessingOutcome::Good(voter::GoodCommit::new()))
-	} else {
-		callback.run(voter::CommitProcessingOutcome::Bad(voter::BadCommit::from(validation_result)))
-	}
+	// if validation_result.ghost.is_some() {
+	// 	callback.run(voter::CommitProcessingOutcome::Good(voter::GoodCommit::new()))
+	// } else {
+	// 	callback.run(voter::CommitProcessingOutcome::Bad(voter::BadCommit::from(validation_result)))
+	// }
 }
 
 /// Historical votes seen in a round.
