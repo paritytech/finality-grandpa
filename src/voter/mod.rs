@@ -96,3 +96,128 @@ where
 	/// NOTE: this function is not async as we are returning a named future.
 	fn round_commit_timer(&self) -> Self::Timer;
 }
+
+use self::Environment as EnvironmentT;
+
+// type GlobalIn = Stream<Item = Result<CommunicationIn<H, N, E::Signature, E::Id>, E::Error>> + Unpin;
+// type GlobalOut = Sink<CommunicationOut<H, N, E::Signature, E::Id>, Error = E::Error> + Unpin;
+
+struct Voter<Hash, Number, Environment>
+where
+	Hash: Ord,
+	Number: BlockNumberOps,
+	Environment: EnvironmentT<Hash, Number>,
+{
+	environment: Environment,
+	voting_round: VotingRound<Hash, Number, Environment>,
+	background_round: Option<BackgroundRound<Hash, Number, Environment>>,
+}
+
+impl<Hash, Number, Environment> Voter<Hash, Number, Environment>
+where
+	Hash: Clone + Debug + Ord,
+	Number: BlockNumberOps,
+	Environment: EnvironmentT<Hash, Number>,
+{
+	async fn new(
+		environment: Environment,
+		voters: VoterSet<Environment::Id>,
+		// TODO: handle global communication
+		// global_comms: (GlobalIn, GlobalOut),
+		last_round_number: u64,
+		last_round_votes: Vec<SignedMessage<Hash, Number, Environment::Signature, Environment::Id>>,
+		last_round_base: (Hash, Number),
+		best_finalized: (Hash, Number),
+	) -> Voter<Hash, Number, Environment> {
+		// TODO: create last round
+		let last_round_state = RoundState::genesis(last_round_base.clone());
+
+		let (_, previous_round_state_updates) = futures::channel::mpsc::channel(4);
+
+		let voting_round = VotingRound::new(
+			environment.clone(),
+			last_round_number + 1,
+			voters.clone(),
+			// TODO: use finalized from previous round state?
+			best_finalized,
+			last_round_state,
+			previous_round_state_updates,
+		)
+		.await;
+
+		Voter { environment, voting_round, background_round: None }
+	}
+
+	pub async fn run(mut self) -> Result<(), Environment::Error> {
+		let mut background_round = self
+			.background_round
+			.take()
+			.map(|round| round.run().fuse())
+			.unwrap_or(Fuse::terminated());
+
+		let mut voting_round = self.voting_round.run().fuse();
+
+		pin_mut!(background_round, voting_round);
+
+		loop {
+			// FIXME: this only needs to be recreated when creating a new background round
+			let (commit_in, commit_out) = futures::channel::mpsc::channel(4);
+
+			log::trace!("here1");
+			select! {
+				completable_round = voting_round => {
+					log::trace!("here2");
+
+					let completable_round = completable_round?;
+
+					let (previous_round_state_updates_tx, previous_round_state_updates_rx) = futures::channel::mpsc::channel(4);
+
+					let completable_round_number = completable_round.round.number();
+					let completable_round_state = completable_round.round.state();
+					// FIXME: deal with unwrap
+					let completable_round_finalized = completable_round_state.finalized.clone().unwrap();
+					let voters = completable_round.round.voters().clone();
+
+					debug!("completed voting round, finalized: {:?}", completable_round_finalized);
+
+					self.environment.finalize_block(
+						completable_round_finalized.0.clone(),
+						completable_round_finalized.1,
+						completable_round_number,
+						Commit {
+							target_hash: completable_round_finalized.0.clone(),
+							target_number: completable_round_finalized.1,
+							precommits: completable_round.round.finalizing_precommits(&self.environment)
+								.expect("always returns none if something was finalized; this is checked above; qed")
+								.collect(),
+						},
+					).await?;
+
+					let new_background_round = BackgroundRound::new(
+						self.environment.clone(),
+						completable_round.incoming,
+						completable_round.round,
+						previous_round_state_updates_tx,
+						commit_out,
+					).await;
+
+					let new_voting_round = VotingRound::new(
+						self.environment.clone(),
+						completable_round_number + 1,
+						voters.clone(),
+						completable_round_finalized,
+						completable_round_state,
+						previous_round_state_updates_rx,
+					).await;
+
+					background_round.set(new_background_round.run().fuse());
+					voting_round.set(new_voting_round.run().fuse());
+				},
+				_ = background_round => {
+					// concluded
+					debug!("concluded background round");
+				},
+			}
+		}
+	}
+}

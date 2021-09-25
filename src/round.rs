@@ -442,7 +442,7 @@ where
 	///
 	/// Only returns `None` if no block has been finalized in this round.
 	pub fn finalizing_precommits<'a, C: 'a + Chain<H, N>>(
-		&'a mut self,
+		&'a self,
 		chain: &'a C,
 	) -> Option<impl Iterator<Item = crate::SignedPrecommit<H, N, Signature, Id>> + 'a> {
 		struct YieldVotes<'b, V: 'b, S: 'b> {
