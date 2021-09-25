@@ -89,4 +89,10 @@ where
 		&self,
 		round: u64,
 	) -> RoundData<Self::Id, Self::Timer, Self::Incoming, Self::Outgoing>;
+
+	/// Return a timer that will be used to delay the broadcast of a commit
+	/// message. This delay should not be static to minimize the amount of
+	/// commit messages that are sent (e.g. random value in [0, 1] seconds).
+	/// NOTE: this function is not async as we are returning a named future.
+	fn round_commit_timer(&self) -> Self::Timer;
 }
