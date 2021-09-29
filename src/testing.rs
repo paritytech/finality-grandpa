@@ -30,7 +30,7 @@ pub mod chain {
 
 	pub struct DummyChain {
 		inner: BTreeMap<&'static str, BlockRecord>,
-		leaves: Vec<&'static str>,
+		pub leaves: Vec<&'static str>,
 		finalized: (&'static str, u32),
 	}
 
@@ -143,16 +143,16 @@ pub mod chain {
 pub mod environment {
 	use super::chain::*;
 	use crate::{
-		round::State as RoundState,
-		voter::{Callback, CommunicationIn, CommunicationOut, RoundData},
-		Chain, Commit, Equivocation, Error, HistoricalVotes, Message, Precommit, Prevote,
-		PrimaryPropose, SignedMessage,
+		round::State as RoundState, voter::RoundData, Chain, Commit, Equivocation, Error,
+		HistoricalVotes, Message, Precommit, Prevote, PrimaryPropose, SignedMessage,
 	};
+	use async_trait::async_trait;
 	use futures::{
 		channel::mpsc::{self, UnboundedReceiver, UnboundedSender},
 		prelude::*,
 	};
 	use futures_timer::Delay;
+	use log::{debug, warn};
 	use parking_lot::Mutex;
 	use std::{
 		collections::HashMap,
@@ -168,8 +168,13 @@ pub mod environment {
 	#[derive(Debug, Clone, PartialEq, Eq)]
 	pub struct Signature(pub u32);
 
+	#[derive(Clone)]
 	pub struct Environment {
-		chain: Mutex<DummyChain>,
+		inner: Arc<InnerEnvironment>,
+	}
+
+	pub struct InnerEnvironment {
+		chain: Arc<Mutex<DummyChain>>,
 		local_id: Id,
 		network: Network,
 		listeners: Mutex<
@@ -180,20 +185,38 @@ pub mod environment {
 
 	impl Environment {
 		pub fn new(network: Network, local_id: Id) -> Self {
-			Environment {
-				chain: Mutex::new(DummyChain::new()),
+			let inner = InnerEnvironment {
+				chain: Arc::new(Mutex::new(DummyChain::new())),
 				local_id,
 				network,
 				listeners: Mutex::new(Vec::new()),
 				last_completed_and_concluded: Mutex::new((0, 0)),
-			}
+			};
+
+			Environment { inner: Arc::new(inner) }
+		}
+
+		pub fn new_with_chain(
+			network: Network,
+			local_id: Id,
+			chain: Arc<Mutex<DummyChain>>,
+		) -> Self {
+			let inner = InnerEnvironment {
+				chain,
+				local_id,
+				network,
+				listeners: Mutex::new(Vec::new()),
+				last_completed_and_concluded: Mutex::new((0, 0)),
+			};
+
+			Environment { inner: Arc::new(inner) }
 		}
 
 		pub fn with_chain<F, U>(&self, f: F) -> U
 		where
 			F: FnOnce(&mut DummyChain) -> U,
 		{
-			let mut chain = self.chain.lock();
+			let mut chain = self.inner.chain.lock();
 			f(&mut *chain)
 		}
 
@@ -202,13 +225,13 @@ pub mod environment {
 			&self,
 		) -> UnboundedReceiver<(&'static str, u32, Commit<&'static str, u32, Signature, Id>)> {
 			let (tx, rx) = mpsc::unbounded();
-			self.listeners.lock().push(tx);
+			self.inner.listeners.lock().push(tx);
 			rx
 		}
 
 		/// Get the last completed and concluded rounds.
 		pub fn last_completed_and_concluded(&self) -> (u64, u64) {
-			self.last_completed_and_concluded.lock().clone()
+			self.inner.last_completed_and_concluded.lock().clone()
 		}
 	}
 
@@ -218,38 +241,44 @@ pub mod environment {
 			base: &'static str,
 			block: &'static str,
 		) -> Result<Vec<&'static str>, Error> {
-			self.chain.lock().ancestry(base, block)
+			self.inner.chain.lock().ancestry(base, block)
 		}
 	}
 
+	#[async_trait]
 	impl crate::voter::Environment<&'static str, u32> for Environment {
-		type Timer = Box<dyn Future<Output = Result<(), Error>> + Unpin + Send>;
-		type BestChain =
-			Box<dyn Future<Output = Result<Option<(&'static str, u32)>, Error>> + Unpin + Send>;
 		type Id = Id;
 		type Signature = Signature;
-		type In = Box<
-			dyn Stream<Item = Result<SignedMessage<&'static str, u32, Signature, Id>, Error>>
-				+ Unpin
-				+ Send,
-		>;
-		type Out = Pin<Box<dyn Sink<Message<&'static str, u32>, Error = Error> + Send>>;
 		type Error = Error;
+		type Timer = Box<dyn Future<Output = ()> + Unpin>;
+		type Incoming = Box<
+			dyn Stream<Item = Result<SignedMessage<&'static str, u32, Signature, Id>, Error>>
+				+ Unpin,
+		>;
+		type Outgoing = Box<dyn Sink<Message<&'static str, u32>, Error = Error> + Unpin>;
 
-		fn best_chain_containing(&self, base: &'static str) -> Self::BestChain {
-			Box::new(future::ok(self.chain.lock().best_chain_containing(base)))
+		async fn best_chain_containing(
+			&self,
+			base: &'static str,
+		) -> Result<Option<(&'static str, u32)>, Self::Error> {
+			Ok(self.inner.chain.lock().best_chain_containing(base))
 		}
 
-		fn round_data(&self, round: u64) -> RoundData<Self::Id, Self::Timer, Self::In, Self::Out> {
-			const GOSSIP_DURATION: Duration = Duration::from_millis(500);
+		async fn round_data(
+			&self,
+			round: u64,
+		) -> RoundData<Self::Id, Self::Timer, Self::Incoming, Self::Outgoing> {
+			const GOSSIP_DURATION: Duration = Duration::from_millis(100);
 
-			let (incoming, outgoing) = self.network.make_round_comms(round, self.local_id);
+			let (incoming, outgoing) =
+				self.inner.network.make_round_comms(round, self.inner.local_id);
+
 			RoundData {
-				voter_id: Some(self.local_id),
-				prevote_timer: Box::new(Delay::new(GOSSIP_DURATION).map(Ok)),
-				precommit_timer: Box::new(Delay::new(GOSSIP_DURATION + GOSSIP_DURATION).map(Ok)),
+				voter_id: Some(self.inner.local_id),
+				prevote_timer: Box::new(Delay::new(GOSSIP_DURATION)),
+				precommit_timer: Box::new(Delay::new(GOSSIP_DURATION + GOSSIP_DURATION)),
 				incoming: Box::new(incoming),
-				outgoing: Box::pin(outgoing),
+				outgoing: Box::new(outgoing),
 			}
 		}
 
@@ -260,43 +289,48 @@ pub mod environment {
 
 			let delay = Duration::from_millis(rand::thread_rng().gen_range(0..COMMIT_DELAY_MILLIS));
 
-			Box::new(Delay::new(delay).map(Ok))
+			Box::new(Delay::new(delay))
 		}
 
-		fn completed(
-			&self,
-			round: u64,
-			_state: RoundState<&'static str, u32>,
-			_base: (&'static str, u32),
-			_votes: &HistoricalVotes<&'static str, u32, Self::Signature, Self::Id>,
-		) -> Result<(), Error> {
-			self.last_completed_and_concluded.lock().0 = round;
-			Ok(())
-		}
+		// 		fn completed(
+		// 			&self,
+		// 			round: u64,
+		// 			_state: RoundState<&'static str, u32>,
+		// 			_base: (&'static str, u32),
+		// 			_votes: &HistoricalVotes<&'static str, u32, Self::Signature, Self::Id>,
+		// 		) -> Result<(), Error> {
+		// 			self.last_completed_and_concluded.lock().0 = round;
+		// 			Ok(())
+		// 		}
 
-		fn concluded(
-			&self,
-			round: u64,
-			_state: RoundState<&'static str, u32>,
-			_base: (&'static str, u32),
-			_votes: &HistoricalVotes<&'static str, u32, Self::Signature, Self::Id>,
-		) -> Result<(), Error> {
-			self.last_completed_and_concluded.lock().1 = round;
-			Ok(())
-		}
+		// 		fn concluded(
+		// 			&self,
+		// 			round: u64,
+		// 			_state: RoundState<&'static str, u32>,
+		// 			_base: (&'static str, u32),
+		// 			_votes: &HistoricalVotes<&'static str, u32, Self::Signature, Self::Id>,
+		// 		) -> Result<(), Error> {
+		// 			self.last_completed_and_concluded.lock().1 = round;
+		// 			Ok(())
+		// 		}
 
-		fn finalize_block(
+		async fn finalize_block(
 			&self,
 			hash: &'static str,
 			number: u32,
 			_round: u64,
 			commit: Commit<&'static str, u32, Signature, Id>,
 		) -> Result<(), Error> {
-			let mut chain = self.chain.lock();
+			let mut chain = self.inner.chain.lock();
 
 			let last_finalized = chain.last_finalized();
 			if number as u32 <= last_finalized.1 {
-				panic!("Attempted to finalize backwards")
+				warn!("Attempted to finalize backwards");
+				self.inner
+					.listeners
+					.lock()
+					.retain(|s| s.unbounded_send((hash, number as _, commit.clone())).is_ok());
+				return Ok(())
 			}
 
 			assert!(
@@ -305,52 +339,54 @@ pub mod environment {
 			);
 
 			chain.set_last_finalized((hash, number));
-			self.listeners
+
+			self.inner
+				.listeners
 				.lock()
 				.retain(|s| s.unbounded_send((hash, number as _, commit.clone())).is_ok());
 
 			Ok(())
 		}
 
-		fn proposed(
-			&self,
-			_round: u64,
-			_propose: PrimaryPropose<&'static str, u32>,
-		) -> Result<(), Self::Error> {
-			Ok(())
-		}
+		// 		fn proposed(
+		// 			&self,
+		// 			_round: u64,
+		// 			_propose: PrimaryPropose<&'static str, u32>,
+		// 		) -> Result<(), Self::Error> {
+		// 			Ok(())
+		// 		}
 
-		fn prevoted(
-			&self,
-			_round: u64,
-			_prevote: Prevote<&'static str, u32>,
-		) -> Result<(), Self::Error> {
-			Ok(())
-		}
+		// 		fn prevoted(
+		// 			&self,
+		// 			_round: u64,
+		// 			_prevote: Prevote<&'static str, u32>,
+		// 		) -> Result<(), Self::Error> {
+		// 			Ok(())
+		// 		}
 
-		fn precommitted(
-			&self,
-			_round: u64,
-			_precommit: Precommit<&'static str, u32>,
-		) -> Result<(), Self::Error> {
-			Ok(())
-		}
+		// 		fn precommitted(
+		// 			&self,
+		// 			_round: u64,
+		// 			_precommit: Precommit<&'static str, u32>,
+		// 		) -> Result<(), Self::Error> {
+		// 			Ok(())
+		// 		}
 
-		fn prevote_equivocation(
-			&self,
-			round: u64,
-			equivocation: Equivocation<Id, Prevote<&'static str, u32>, Signature>,
-		) {
-			panic!("Encountered equivocation in round {}: {:?}", round, equivocation);
-		}
+		// 		fn prevote_equivocation(
+		// 			&self,
+		// 			round: u64,
+		// 			equivocation: Equivocation<Id, Prevote<&'static str, u32>, Signature>,
+		// 		) {
+		// 			panic!("Encountered equivocation in round {}: {:?}", round, equivocation);
+		// 		}
 
-		fn precommit_equivocation(
-			&self,
-			round: u64,
-			equivocation: Equivocation<Id, Precommit<&'static str, u32>, Signature>,
-		) {
-			panic!("Encountered equivocation in round {}: {:?}", round, equivocation);
-		}
+		// 		fn precommit_equivocation(
+		// 			&self,
+		// 			round: u64,
+		// 			equivocation: Equivocation<Id, Precommit<&'static str, u32>, Signature>,
+		// 		) {
+		// 			panic!("Encountered equivocation in round {}: {:?}", round, equivocation);
+		// 		}
 	}
 
 	// p2p network data for a round.
@@ -361,7 +397,7 @@ pub mod environment {
 		history: Vec<M>,
 	}
 
-	impl<M: Clone> BroadcastNetwork<M> {
+	impl<M: std::fmt::Debug + Clone> BroadcastNetwork<M> {
 		fn new() -> Self {
 			let (tx, rx) = mpsc::unbounded();
 			BroadcastNetwork {
@@ -401,11 +437,13 @@ pub mod environment {
 		// do routing work
 		fn route(&mut self, cx: &mut Context) -> Poll<()> {
 			loop {
+				log::trace!("route");
 				match Stream::poll_next(Pin::new(&mut self.receiver), cx) {
 					Poll::Pending => return Poll::Pending,
 					Poll::Ready(None) => return Poll::Ready(()),
 					Poll::Ready(Some(item)) => {
 						self.history.push(item.clone());
+						log::trace!("pushing: {:?}", item);
 						for sender in &self.senders {
 							let _ = sender.unbounded_send(item.clone());
 						}
@@ -419,22 +457,24 @@ pub mod environment {
 	/// Give the network future to node environments and spawn the routing task
 	/// to run.
 	pub fn make_network() -> (Network, NetworkRouting) {
-		let global_messages = Arc::new(Mutex::new(GlobalMessageNetwork::new()));
+		// let global_messages = Arc::new(Mutex::new(GlobalMessageNetwork::new()));
 		let rounds = Arc::new(Mutex::new(HashMap::new()));
 		(
-			Network { global_messages: global_messages.clone(), rounds: rounds.clone() },
-			NetworkRouting { global_messages, rounds },
+			// Network { global_messages: global_messages.clone(), rounds: rounds.clone() },
+			// NetworkRouting { global_messages, rounds },
+			Network { rounds: rounds.clone() },
+			NetworkRouting { rounds },
 		)
 	}
 
 	type RoundNetwork = BroadcastNetwork<SignedMessage<&'static str, u32, Signature, Id>>;
-	type GlobalMessageNetwork = BroadcastNetwork<CommunicationIn<&'static str, u32, Signature, Id>>;
+	// 	type GlobalMessageNetwork = BroadcastNetwork<CommunicationIn<&'static str, u32, Signature, Id>>;
 
 	/// A test network. Instantiate this with `make_network`,
 	#[derive(Clone)]
 	pub struct Network {
 		rounds: Arc<Mutex<HashMap<u64, RoundNetwork>>>,
-		global_messages: Arc<Mutex<GlobalMessageNetwork>>,
+		// global_messages: Arc<Mutex<GlobalMessageNetwork>>,
 	}
 
 	impl Network {
@@ -446,6 +486,7 @@ pub mod environment {
 			impl Stream<Item = Result<SignedMessage<&'static str, u32, Signature, Id>, Error>>,
 			impl Sink<Message<&'static str, u32>, Error = Error>,
 		) {
+			log::trace!("make_round_comms: {:?}", round_number);
 			let mut rounds = self.rounds.lock();
 			rounds
 				.entry(round_number)
@@ -457,29 +498,30 @@ pub mod environment {
 				})
 		}
 
-		pub fn make_global_comms(
-			&self,
-		) -> (
-			impl Stream<Item = Result<CommunicationIn<&'static str, u32, Signature, Id>, Error>>,
-			impl Sink<CommunicationOut<&'static str, u32, Signature, Id>, Error = Error>,
-		) {
-			let mut global_messages = self.global_messages.lock();
-			global_messages.add_node(|message| match message {
-				CommunicationOut::Commit(r, commit) =>
-					CommunicationIn::Commit(r, commit.into(), Callback::Blank),
-			})
-		}
+		// pub fn make_global_comms(
+		// 	&self,
+		// ) -> (
+		// 	impl Stream<Item = Result<CommunicationIn<&'static str, u32, Signature, Id>, Error>>,
+		// 	impl Sink<CommunicationOut<&'static str, u32, Signature, Id>, Error = Error>,
+		// ) {
+		// 	let mut global_messages = self.global_messages.lock();
+		// 	global_messages.add_node(|message| match message {
+		// 		CommunicationOut::Commit(r, commit) =>
+		// 			CommunicationIn::Commit(r, commit.into(), Callback::Blank),
+		// 	})
+		// }
 
-		/// Send a message to all nodes.
-		pub fn send_message(&self, message: CommunicationIn<&'static str, u32, Signature, Id>) {
-			self.global_messages.lock().send_message(message);
-		}
+		// /// Send a message to all nodes.
+		// pub fn send_message(&self, message: CommunicationIn<&'static str, u32, Signature, Id>) {
+		// 	self.global_messages.lock().send_message(message);
+		// }
 	}
 
 	/// the network routing task.
+	#[derive(Clone)]
 	pub struct NetworkRouting {
 		rounds: Arc<Mutex<HashMap<u64, RoundNetwork>>>,
-		global_messages: Arc<Mutex<GlobalMessageNetwork>>,
+		// global_messages: Arc<Mutex<GlobalMessageNetwork>>,
 	}
 
 	impl Future for NetworkRouting {
@@ -487,13 +529,21 @@ pub mod environment {
 
 		fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<()> {
 			let mut rounds = self.rounds.lock();
-			rounds.retain(|_, round| match round.route(cx) {
-				Poll::Ready(()) => false,
-				Poll::Pending => true,
-			});
+			// rounds.retain(|_, round| match round.route(cx) {
+			// 	Poll::Ready(()) => false,
+			// 	Poll::Pending => true,
+			// });
 
-			let mut global_messages = self.global_messages.lock();
-			let _ = global_messages.route(cx);
+			for (n, round) in rounds.iter_mut() {
+				log::debug!("networking routing poll: {:?}", n);
+				round.route(cx);
+			}
+
+			// FIXME: not being awake
+			cx.waker().wake_by_ref();
+
+			// let mut global_messages = self.global_messages.lock();
+			// let _ = global_messages.route(cx);
 
 			Poll::Pending
 		}
