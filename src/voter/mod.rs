@@ -25,7 +25,7 @@
 //!  votes will not be pushed to the sink. The protocol state machine still
 //!  transitions state as if the votes had been pushed out.
 
-use std::{fmt::Debug, pin::Pin};
+use std::fmt::Debug;
 
 use async_trait::async_trait;
 use futures::{future::Fuse, pin_mut, prelude::*, select};
@@ -102,7 +102,7 @@ use self::Environment as EnvironmentT;
 // type GlobalIn = Stream<Item = Result<CommunicationIn<H, N, E::Signature, E::Id>, E::Error>> + Unpin;
 // type GlobalOut = Sink<CommunicationOut<H, N, E::Signature, E::Id>, Error = E::Error> + Unpin;
 
-struct Voter<Hash, Number, Environment>
+pub struct Voter<Hash, Number, Environment>
 where
 	Hash: Ord,
 	Number: BlockNumberOps,
@@ -119,13 +119,15 @@ where
 	Number: BlockNumberOps,
 	Environment: EnvironmentT<Hash, Number>,
 {
-	async fn new(
+	pub async fn new(
 		environment: Environment,
 		voters: VoterSet<Environment::Id>,
 		// TODO: handle global communication
 		// global_comms: (GlobalIn, GlobalOut),
 		last_round_number: u64,
-		last_round_votes: Vec<SignedMessage<Hash, Number, Environment::Signature, Environment::Id>>,
+		_last_round_votes: Vec<
+			SignedMessage<Hash, Number, Environment::Signature, Environment::Id>,
+		>,
 		last_round_base: (Hash, Number),
 		best_finalized: (Hash, Number),
 	) -> Voter<Hash, Number, Environment> {
@@ -149,19 +151,19 @@ where
 	}
 
 	pub async fn run(mut self) -> Result<(), Environment::Error> {
-		let mut background_round = self
+		let background_round = self
 			.background_round
 			.take()
 			.map(|round| round.run().fuse())
 			.unwrap_or(Fuse::terminated());
 
-		let mut voting_round = self.voting_round.run().fuse();
+		let voting_round = self.voting_round.run().fuse();
 
 		pin_mut!(background_round, voting_round);
 
 		loop {
 			// FIXME: this only needs to be recreated when creating a new background round
-			let (commit_in, commit_out) = futures::channel::mpsc::channel(4);
+			let (_commit_in, commit_out) = futures::channel::mpsc::channel(4);
 
 			log::trace!("here1");
 			select! {

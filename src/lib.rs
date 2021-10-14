@@ -507,7 +507,7 @@ where
 /// good otherwise.
 #[cfg(feature = "std")]
 pub fn process_commit_validation_result<H, N>(
-	validation_result: CommitValidationResult<H, N>,
+	_validation_result: CommitValidationResult<H, N>,
 	// mut callback: voter::Callback<voter::CommitProcessingOutcome>,
 ) {
 	// if validation_result.ghost.is_some() {

@@ -30,12 +30,10 @@ use futures::{
 use log::{debug, trace};
 
 use crate::{
-	round::{Round, RoundParams, State as RoundState},
+	round::{Round, State as RoundState},
 	validate_commit,
 	voter::Environment as EnvironmentT,
-	voter_set::VoterSet,
-	BlockNumberOps, Commit, Error, Message, Precommit, Prevote, PrimaryPropose, SignedMessage,
-	SignedPrecommit,
+	BlockNumberOps, Commit, Message, SignedMessage, SignedPrecommit,
 };
 
 pub struct BackgroundRound<Hash, Number, Environment>
@@ -129,7 +127,7 @@ where
 				let import_result =
 					self.round.import_prevote(&self.environment, prevote, id, signature)?;
 
-				if let Some(equivocation) = import_result.equivocation {
+				if let Some(_equivocation) = import_result.equivocation {
 					// TODO: handle equivocation
 					// self.environment.prevote_equivocation(self.round.number(), equivocation);
 				}
@@ -138,12 +136,12 @@ where
 				let import_result =
 					self.round.import_precommit(&self.environment, precommit, id, signature)?;
 
-				if let Some(equivocation) = import_result.equivocation {
+				if let Some(_equivocation) = import_result.equivocation {
 					// TODO: handle equivocation
 					// self.environment.precommit_equivocation(self.round.number(), equivocation);
 				}
 			},
-			Message::PrimaryPropose(primary) => {
+			Message::PrimaryPropose(_primary) => {
 				debug!("ignoring primary proposal message for background round");
 			},
 		}
@@ -173,7 +171,7 @@ where
 		}
 
 		for SignedPrecommit { precommit, signature, id } in commit.precommits.iter().cloned() {
-			let import_result =
+			let _import_result =
 				self.round.import_precommit(&self.environment, precommit, id, signature)?;
 
 			// TODO: handle equivocations

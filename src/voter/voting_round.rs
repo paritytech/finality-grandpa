@@ -21,7 +21,7 @@ use log::{debug, trace, warn};
 
 use crate::{
 	round::{Round, RoundParams, State as RoundState},
-	voter::{background_round::BackgroundRound, Environment as EnvironmentT},
+	voter::Environment as EnvironmentT,
 	voter_set::VoterSet,
 	BlockNumberOps, Error, Message, Precommit, Prevote, PrimaryPropose, SignedMessage,
 };
@@ -117,8 +117,8 @@ where
 			Voting::No
 		};
 
-		let mut incoming = round_data.incoming.fuse();
-		let mut state =
+		let incoming = round_data.incoming.fuse();
+		let state =
 			State::Start(round_data.prevote_timer.fuse(), round_data.precommit_timer.fuse());
 
 		VotingRound {
@@ -158,7 +158,7 @@ where
 				let import_result =
 					self.round.import_prevote(&self.environment, prevote, id, signature)?;
 
-				if let Some(equivocation) = import_result.equivocation {
+				if let Some(_equivocation) = import_result.equivocation {
 					// TODO: handle equivocation
 					// self.environment.prevote_equivocation(self.round.number(), equivocation);
 				}
@@ -167,7 +167,7 @@ where
 				let import_result =
 					self.round.import_precommit(&self.environment, precommit, id, signature)?;
 
-				if let Some(equivocation) = import_result.equivocation {
+				if let Some(_equivocation) = import_result.equivocation {
 					// TODO: handle equivocation
 					// self.environment.precommit_equivocation(self.round.number(), equivocation);
 				}
