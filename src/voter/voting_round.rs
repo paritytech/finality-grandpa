@@ -99,14 +99,14 @@ where
 {
 	pub async fn new(
 		environment: Environment,
-		round_number: u64,
 		voters: VoterSet<Environment::Id>,
-		base: (Hash, Number),
+		round_number: u64,
+		round_base: (Hash, Number),
 		previous_round_state: RoundState<Hash, Number>,
 		previous_round_state_updates: Receiver<RoundState<Hash, Number>>,
 	) -> VotingRound<Hash, Number, Environment> {
 		let round_data = environment.round_data(round_number).await;
-		let round_params = RoundParams { voters, base, round_number };
+		let round_params = RoundParams { voters, base: round_base, round_number };
 		let round = Round::new(round_params);
 
 		let voting = if round_data.voter_id.as_ref() == Some(round.primary_voter().0) {

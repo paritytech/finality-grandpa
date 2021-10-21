@@ -21,7 +21,7 @@ mod tests {
 			chain::{DummyChain, GENESIS_HASH},
 			environment::{Environment, Id, Signature},
 		},
-		voter::Voter,
+		voter,
 		weights::{VoteWeight, VoterWeight},
 		SignedPrecommit, VoterSet,
 	};
@@ -57,21 +57,13 @@ mod tests {
 
 		// run voter in background. scheduling it to shut down at the end.
 		let finalized = environment.finalized_stream();
-		let voter = futures::executor::block_on(Voter::new(
-			environment.clone(),
-			voters,
-			0,
-			Vec::new(),
-			last_finalized,
-			last_finalized,
-		));
+		let voter =
+			voter::run(environment.clone(), voters, 0, Vec::new(), last_finalized, last_finalized);
 
 		let mut pool = LocalPool::new();
 
 		pool.spawner().spawn_local(routing_task).unwrap();
-		pool.spawner()
-			.spawn_local(voter.run().map(|v| v.expect("Error voting")))
-			.unwrap();
+		pool.spawner().spawn_local(voter.map(|v| v.expect("Error voting"))).unwrap();
 
 		// wait for the best block to finalize.
 		pool.run_until(
@@ -104,7 +96,7 @@ mod tests {
 
 				// run voter in background. scheduling it to shut down at the end.
 				let finalized = env.finalized_stream();
-				let voter = futures::executor::block_on(Voter::new(
+				let voter = voter::run(
 					env.clone(),
 					voters.clone(),
 					// network.make_global_comms(),
@@ -112,11 +104,9 @@ mod tests {
 					Vec::new(),
 					last_finalized,
 					last_finalized,
-				));
+				);
 
-				pool.spawner()
-					.spawn_local(voter.run().map(|v| v.expect("Error voting")))
-					.unwrap();
+				pool.spawner().spawn_local(voter.map(|v| v.expect("Error voting"))).unwrap();
 
 				// wait for the best block to be finalized by all honest voters
 				finalized
@@ -155,7 +145,7 @@ mod tests {
 
 				// run voter in background. scheduling it to shut down at the end.
 				let finalized = env.finalized_stream();
-				let voter = futures::executor::block_on(Voter::new(
+				let voter = voter::run(
 					env.clone(),
 					voters.clone(),
 					// network.make_global_comms(),
@@ -163,11 +153,9 @@ mod tests {
 					Vec::new(),
 					last_finalized,
 					last_finalized,
-				));
+				);
 
-				pool.spawner()
-					.spawn_local(voter.run().map(|v| v.expect("Error voting")))
-					.unwrap();
+				pool.spawner().spawn_local(voter.map(|v| v.expect("Error voting"))).unwrap();
 
 				// wait for the best block to be finalized by all honest voters
 				finalized

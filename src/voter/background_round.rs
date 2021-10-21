@@ -30,10 +30,10 @@ use futures::{
 use log::{debug, trace};
 
 use crate::{
-	round::{Round, State as RoundState},
+	round::{Round, RoundParams, State as RoundState},
 	validate_commit,
 	voter::Environment as EnvironmentT,
-	BlockNumberOps, Commit, Message, SignedMessage, SignedPrecommit,
+	BlockNumberOps, Commit, Message, SignedMessage, SignedPrecommit, VoterSet,
 };
 
 pub struct BackgroundRound<Hash, Number, Environment>
@@ -73,6 +73,39 @@ where
 			commit_incoming,
 			commit_timer,
 			best_commit: None,
+		}
+	}
+
+	pub async fn restore(
+		environment: Environment,
+		voters: VoterSet<Environment::Id>,
+		round_number: u64,
+		round_base: (Hash, Number),
+		round_votes: Vec<SignedMessage<Hash, Number, Environment::Signature, Environment::Id>>,
+		round_state_updates: Sender<RoundState<Hash, Number>>,
+		commit_incoming: Receiver<Commit<Hash, Number, Environment::Signature, Environment::Id>>,
+	) -> Option<BackgroundRound<Hash, Number, Environment>> {
+		let round_data = environment.round_data(round_number).await;
+		let round = Round::new(RoundParams { voters, base: round_base, round_number });
+
+		let mut background_round = BackgroundRound::new(
+			environment,
+			round_data.incoming.fuse(),
+			round,
+			round_state_updates,
+			commit_incoming,
+		)
+		.await;
+
+		for vote in round_votes {
+			// bail if any votes are bad.
+			background_round.handle_incoming_round_message(vote).await.ok()?;
+		}
+
+		if background_round.round.state().completable {
+			Some(background_round)
+		} else {
+			None
 		}
 	}
 
