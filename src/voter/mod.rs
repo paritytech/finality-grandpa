@@ -28,7 +28,11 @@
 use std::fmt::Debug;
 
 use async_trait::async_trait;
-use futures::{future::Fuse, pin_mut, prelude::*, select};
+use futures::{
+	channel::{mpsc, oneshot},
+	future::Fuse,
+	pin_mut, select, Future, FutureExt, Sink, SinkExt, Stream, StreamExt,
+};
 use log::debug;
 
 use crate::{
@@ -37,7 +41,8 @@ use crate::{
 		background_round::BackgroundRound,
 		voting_round::{CompletableRound, VotingRound},
 	},
-	BlockNumberOps, Chain, Commit, Error, Message, SignedMessage, VoterSet,
+	BlockNumberOps, CatchUp, Chain, Commit, CommitValidationResult, CompactCommit, Error, Message,
+	SignedMessage, VoterSet,
 };
 
 use self::Environment as EnvironmentT;
@@ -46,6 +51,102 @@ mod background_round;
 #[cfg(test)]
 mod tests;
 mod voting_round;
+
+/// Communication between nodes that is not round-localized.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum GlobalCommunicationOutgoing<Hash, Number, Signature, Id> {
+	/// A commit message.
+	Commit(u64, Commit<Hash, Number, Signature, Id>),
+}
+
+/// The outcome of processing a commit.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CommitProcessingOutcome {
+	/// It was beneficial to process this commit.
+	Good,
+	/// It wasn't beneficial to process this commit. We wasted resources.
+	Bad {
+		num_precommits: usize,
+		num_duplicated_precommits: usize,
+		num_equivocations: usize,
+		num_invalid_voters: usize,
+	},
+}
+
+impl<Hash, Number> From<CommitValidationResult<Hash, Number>> for CommitProcessingOutcome {
+	fn from(result: CommitValidationResult<Hash, Number>) -> Self {
+		if result.ghost.is_some() {
+			CommitProcessingOutcome::Good
+		} else {
+			CommitProcessingOutcome::Bad {
+				num_precommits: result.num_precommits,
+				num_duplicated_precommits: result.num_duplicated_precommits,
+				num_equivocations: result.num_equivocations,
+				num_invalid_voters: result.num_invalid_voters,
+			}
+		}
+	}
+}
+
+/// The outcome of processing a catch up.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CatchUpProcessingOutcome {
+	/// It was beneficial to process this catch up.
+	Good,
+	/// It wasn't beneficial to process this catch up, it is invalid and we
+	/// wasted resources.
+	Bad,
+	/// The catch up wasn't processed because it is useless, e.g. it is for a
+	/// round lower than we're currently in.
+	Useless,
+}
+
+/// Callback used to pass information about the outcome of importing a given
+/// message (e.g. vote, commit, catch up). Useful to propagate data to the
+/// network after making sure the import is successful.
+pub enum Callback<O> {
+	/// Default value.
+	Blank,
+	/// Callback to execute given a processing outcome.
+	Work(Box<dyn FnMut(O) + Send>),
+}
+
+#[cfg(any(test, feature = "test-helpers"))]
+impl<O> Clone for Callback<O> {
+	fn clone(&self) -> Self {
+		Callback::Blank
+	}
+}
+
+impl<O> Callback<O> {
+	/// Do the work associated with the callback, if any.
+	pub fn run(&mut self, o: O) {
+		match self {
+			Callback::Blank => {},
+			Callback::Work(cb) => cb(o),
+		}
+	}
+}
+
+#[cfg(any(test, feature = "test-helpers"))]
+impl<O> std::fmt::Debug for Callback<O> {
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		match self {
+			Callback::Blank => write!(f, "Callback::Blank"),
+			Callback::Work(_) => write!(f, "Callback::Work"),
+		}
+	}
+}
+
+/// Communication between nodes that is not round-localized.
+#[cfg_attr(any(test, feature = "test-helpers"), derive(Clone, Debug))]
+pub enum GlobalCommunicationIncoming<Hash, Number, Signature, Id> {
+	/// A commit message.
+	/// TODO: replace usage of callback with oneshot sender of processing outcome
+	Commit(u64, CompactCommit<Hash, Number, Signature, Id>, Callback<CommitProcessingOutcome>),
+	/// A catch up message.
+	CatchUp(CatchUp<Hash, Number, Signature, Id>, Callback<CatchUpProcessingOutcome>),
+}
 
 /// Data necessary to participate in a round.
 pub struct RoundData<Id, Timer, Incoming, Outgoing> {
@@ -102,11 +203,10 @@ where
 	fn round_commit_timer(&self) -> Self::Timer;
 }
 
-pub async fn run<Hash, Number, Environment>(
+pub async fn run<Hash, Number, Environment, GlobalIncoming, GlobalOutgoing>(
 	environment: Environment,
 	voters: VoterSet<Environment::Id>,
-	// TODO: handle global communication
-	// global_comms: (GlobalIn, GlobalOut),
+	global_communication: (GlobalIncoming, GlobalOutgoing),
 	last_round_number: u64,
 	last_round_votes: Vec<SignedMessage<Hash, Number, Environment::Signature, Environment::Id>>,
 	last_round_base: (Hash, Number),
@@ -116,10 +216,29 @@ where
 	Hash: Clone + Debug + Ord,
 	Number: BlockNumberOps,
 	Environment: EnvironmentT<Hash, Number>,
+	GlobalIncoming: Stream<
+		Item = Result<
+			GlobalCommunicationIncoming<Hash, Number, Environment::Signature, Environment::Id>,
+			Environment::Error,
+		>,
+	>,
+	GlobalOutgoing: Sink<
+		GlobalCommunicationOutgoing<Hash, Number, Environment::Signature, Environment::Id>,
+		Error = Environment::Error,
+	>,
 {
 	let last_round_state = RoundState::genesis(last_round_base.clone());
-	let (commit_out, commit_in) = futures::channel::mpsc::channel(4);
 	let (previous_round_state_updates_out, previous_round_state_updates_in) =
+		futures::channel::mpsc::channel(4);
+
+	let (global_incoming, global_outgoing) = global_communication;
+	let mut global_incoming = global_incoming.fuse();
+	pin_mut!(global_incoming, global_outgoing);
+
+	let (mut background_round_commits_tx, background_round_commit_incoming) =
+		futures::channel::mpsc::channel(4);
+
+	let (background_round_commit_outgoing, mut background_round_commits_rx) =
 		futures::channel::mpsc::channel(4);
 
 	let background_round = BackgroundRound::restore(
@@ -129,9 +248,12 @@ where
 		last_round_base,
 		last_round_votes,
 		previous_round_state_updates_out,
-		commit_in,
+		background_round_commit_incoming,
+		background_round_commit_outgoing.clone(),
 	)
 	.await;
+
+	let mut best_finalized_number = best_finalized.1.clone();
 
 	let voting_round = VotingRound::new(
 		environment.clone(),
@@ -144,8 +266,11 @@ where
 	)
 	.await;
 
-	let background_round =
-		background_round.map(|round| round.run().fuse()).unwrap_or(Fuse::terminated());
+	let mut current_round_number = voting_round.round_number();
+	// FIXME: run multiple background rounds with futures unordered
+	let background_round = background_round
+		.map(|round| round.run().fuse())
+		.unwrap_or_else(Fuse::terminated);
 	let voting_round = voting_round.run().fuse();
 
 	pin_mut!(background_round, voting_round);
@@ -153,8 +278,17 @@ where
 	loop {
 		select! {
 			completable_round = voting_round => {
-				let (new_voting_round, new_background_round) =
-					handle_completable_round(&environment, completable_round?).await?;
+				let (new_voting_round, (new_background_round, new_background_round_commits)) =
+					handle_completable_round(
+						&environment,
+						&mut best_finalized_number,
+						completable_round?,
+						background_round_commit_outgoing.clone(),
+					)
+					.await?;
+
+				current_round_number = new_voting_round.round_number();
+				background_round_commits_tx = new_background_round_commits;
 
 				// we need to update futures we're polling on this select
 				// loop to point to the new rounds
@@ -164,15 +298,53 @@ where
 			res = background_round => {
 				handle_concluded_round(res).await?;
 			},
+			commit = background_round_commits_rx.select_next_some() => {
+				// FIXME: deal with error
+				let _ = global_outgoing
+					.send(GlobalCommunicationOutgoing::Commit(current_round_number - 1, commit))
+					.await;
+			},
+			global_message = global_incoming.select_next_some() => {
+				match global_message? {
+					GlobalCommunicationIncoming::Commit(commit_round_number, commit, callback) => {
+						handle_incoming_commit_message(
+							&environment,
+							&mut best_finalized_number,
+							current_round_number,
+							commit_round_number,
+							commit.into(),
+							&mut background_round_commits_tx,
+							callback,
+						)
+							.await?;
+					},
+					GlobalCommunicationIncoming::CatchUp(catch_up, _callback) => {
+						handle_incoming_catch_up_message(&environment, catch_up).await?;
+					},
+				}
+			},
 		}
 	}
 }
 
 async fn handle_completable_round<Hash, Number, Environment>(
 	environment: &Environment,
+	best_finalized_number: &mut Number,
 	completable_round: CompletableRound<Hash, Number, Environment>,
+	background_round_commits: mpsc::Sender<
+		Commit<Hash, Number, Environment::Signature, Environment::Id>,
+	>,
 ) -> Result<
-	(VotingRound<Hash, Number, Environment>, BackgroundRound<Hash, Number, Environment>),
+	(
+		VotingRound<Hash, Number, Environment>,
+		(
+			BackgroundRound<Hash, Number, Environment>,
+			mpsc::Sender<(
+				Commit<Hash, Number, Environment::Signature, Environment::Id>,
+				Callback<CommitProcessingOutcome>,
+			)>,
+		),
+	),
 	Environment::Error,
 >
 where
@@ -206,14 +378,16 @@ where
 	let (previous_round_state_updates_out, previous_round_state_updates_in) =
 		futures::channel::mpsc::channel(4);
 
-	let (commit_out, commit_in) = futures::channel::mpsc::channel(4);
+	let (background_round_commits_out, background_round_commits_in) =
+		futures::channel::mpsc::channel(4);
 
 	let background_round = BackgroundRound::new(
 		environment.clone(),
 		completable_round.incoming,
 		completable_round.round,
 		previous_round_state_updates_out,
-		commit_in,
+		background_round_commits_in,
+		background_round_commits,
 	)
 	.await;
 
@@ -227,10 +401,52 @@ where
 	)
 	.await;
 
-	Ok((voting_round, background_round))
+	Ok((voting_round, (background_round, background_round_commits_out)))
 }
 
 async fn handle_concluded_round<Error>(result: Result<(), Error>) -> Result<(), Error> {
 	debug!("concluded background round");
 	result
+}
+
+async fn handle_incoming_commit_message<Hash, Number, Environment>(
+	environment: &Environment,
+	best_finalized_number: &mut Number,
+	current_round_number: u64,
+	commit_round_number: u64,
+	commit: Commit<Hash, Number, Environment::Signature, Environment::Id>,
+	background_round_commits: &mut mpsc::Sender<(
+		Commit<Hash, Number, Environment::Signature, Environment::Id>,
+		Callback<CommitProcessingOutcome>,
+	)>,
+	callback: Callback<CommitProcessingOutcome>,
+) -> Result<(), Environment::Error>
+where
+	Hash: Eq,
+	Environment: EnvironmentT<Hash, Number>,
+{
+	match current_round_number.checked_sub(1) {
+		Some(background_round_number) if background_round_number == commit_round_number => {
+			// FIXME: deal with error due to dropped channel
+			let _ = background_round_commits.send((commit, callback)).await;
+			return Ok(())
+		},
+		_ => {},
+	}
+
+	Ok(())
+}
+
+async fn handle_incoming_catch_up_message<Hash, Number, Environment>(
+	environment: &Environment,
+	catch_up: CatchUp<Hash, Number, Environment::Signature, Environment::Id>,
+) -> Result<
+	Option<(VotingRound<Hash, Number, Environment>, BackgroundRound<Hash, Number, Environment>)>,
+	Environment::Error,
+>
+where
+	Hash: Eq + Ord,
+	Environment: EnvironmentT<Hash, Number>,
+{
+	Ok(None)
 }

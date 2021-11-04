@@ -16,7 +16,7 @@
 
 use std::{fmt::Debug, mem};
 
-use futures::{channel::mpsc::Receiver, future, select, stream, FutureExt, SinkExt, StreamExt};
+use futures::{channel::mpsc, future, select, stream, FutureExt, SinkExt, StreamExt};
 use log::{debug, trace, warn};
 
 use crate::{
@@ -88,7 +88,7 @@ where
 	state: State<future::Fuse<Environment::Timer>>,
 	primary_block: Option<(Hash, Number)>,
 	previous_round_state: RoundState<Hash, Number>,
-	previous_round_state_updates: Receiver<RoundState<Hash, Number>>,
+	previous_round_state_updates: mpsc::Receiver<RoundState<Hash, Number>>,
 }
 
 impl<Hash, Number, Environment> VotingRound<Hash, Number, Environment>
@@ -103,7 +103,7 @@ where
 		round_number: u64,
 		round_base: (Hash, Number),
 		previous_round_state: RoundState<Hash, Number>,
-		previous_round_state_updates: Receiver<RoundState<Hash, Number>>,
+		previous_round_state_updates: mpsc::Receiver<RoundState<Hash, Number>>,
 	) -> VotingRound<Hash, Number, Environment> {
 		let round_data = environment.round_data(round_number).await;
 		let round_params = RoundParams { voters, base: round_base, round_number };
@@ -132,6 +132,10 @@ where
 			previous_round_state,
 			previous_round_state_updates,
 		}
+	}
+
+	pub fn round_number(&self) -> u64 {
+		self.round.number()
 	}
 
 	async fn handle_incoming_message(
@@ -459,6 +463,7 @@ where
 		loop {
 			match mem::replace(&mut self.state, State::Poisoned) {
 				State::Start(mut prevote_timer, precommit_timer) => {
+					// TODO: move this out and simplify state machine. only needs to be tried once
 					let proposed = self.primary_propose().await?;
 
 					let prevote_timer_ready = handle_inputs!(prevote_timer);

@@ -24,7 +24,7 @@
 use std::fmt::Debug;
 
 use futures::{
-	channel::mpsc::{Receiver, Sender},
+	channel::{mpsc, oneshot},
 	future, select, stream, FutureExt, SinkExt, StreamExt,
 };
 use log::{debug, trace};
@@ -32,8 +32,9 @@ use log::{debug, trace};
 use crate::{
 	round::{Round, RoundParams, State as RoundState},
 	validate_commit,
-	voter::Environment as EnvironmentT,
-	BlockNumberOps, Commit, Message, SignedMessage, SignedPrecommit, VoterSet,
+	voter::{Callback, CommitProcessingOutcome, Environment as EnvironmentT},
+	BlockNumberOps, Commit, CommitValidationResult, Message, SignedMessage, SignedPrecommit,
+	VoterSet,
 };
 
 pub struct BackgroundRound<Hash, Number, Environment>
@@ -44,8 +45,12 @@ where
 	environment: Environment,
 	round_incoming: stream::Fuse<Environment::Incoming>,
 	round: Round<Environment::Id, Hash, Number, Environment::Signature>,
-	round_state_updates: Sender<RoundState<Hash, Number>>,
-	commit_incoming: Receiver<Commit<Hash, Number, Environment::Signature, Environment::Id>>,
+	round_state_updates: mpsc::Sender<RoundState<Hash, Number>>,
+	commit_incoming: mpsc::Receiver<(
+		Commit<Hash, Number, Environment::Signature, Environment::Id>,
+		Callback<CommitProcessingOutcome>,
+	)>,
+	commit_outgoing: mpsc::Sender<Commit<Hash, Number, Environment::Signature, Environment::Id>>,
 	commit_timer: future::Fuse<Environment::Timer>,
 	best_commit: Option<Commit<Hash, Number, Environment::Signature, Environment::Id>>,
 }
@@ -60,8 +65,14 @@ where
 		environment: Environment,
 		round_incoming: stream::Fuse<Environment::Incoming>,
 		round: Round<Environment::Id, Hash, Number, Environment::Signature>,
-		round_state_updates: Sender<RoundState<Hash, Number>>,
-		commit_incoming: Receiver<Commit<Hash, Number, Environment::Signature, Environment::Id>>,
+		round_state_updates: mpsc::Sender<RoundState<Hash, Number>>,
+		commit_incoming: mpsc::Receiver<(
+			Commit<Hash, Number, Environment::Signature, Environment::Id>,
+			Callback<CommitProcessingOutcome>,
+		)>,
+		commit_outgoing: mpsc::Sender<
+			Commit<Hash, Number, Environment::Signature, Environment::Id>,
+		>,
 	) -> BackgroundRound<Hash, Number, Environment> {
 		let commit_timer = environment.round_commit_timer().fuse();
 
@@ -71,6 +82,7 @@ where
 			round,
 			round_state_updates,
 			commit_incoming,
+			commit_outgoing,
 			commit_timer,
 			best_commit: None,
 		}
@@ -82,8 +94,14 @@ where
 		round_number: u64,
 		round_base: (Hash, Number),
 		round_votes: Vec<SignedMessage<Hash, Number, Environment::Signature, Environment::Id>>,
-		round_state_updates: Sender<RoundState<Hash, Number>>,
-		commit_incoming: Receiver<Commit<Hash, Number, Environment::Signature, Environment::Id>>,
+		round_state_updates: mpsc::Sender<RoundState<Hash, Number>>,
+		commit_incoming: mpsc::Receiver<(
+			Commit<Hash, Number, Environment::Signature, Environment::Id>,
+			Callback<CommitProcessingOutcome>,
+		)>,
+		commit_outgoing: mpsc::Sender<
+			Commit<Hash, Number, Environment::Signature, Environment::Id>,
+		>,
 	) -> Option<BackgroundRound<Hash, Number, Environment>> {
 		let round_data = environment.round_data(round_number).await;
 		let round = Round::new(RoundParams { voters, base: round_base, round_number });
@@ -94,6 +112,7 @@ where
 			round,
 			round_state_updates,
 			commit_incoming,
+			commit_outgoing,
 		)
 		.await;
 
@@ -110,7 +129,7 @@ where
 	}
 
 	async fn commit(&mut self) -> Result<(), Environment::Error> {
-		let round_finalized = self.round.state().finalized.clone().unwrap();
+		let round_finalized = self.round.state().finalized.unwrap();
 
 		let commit = Commit {
 			target_hash: round_finalized.0.clone(),
@@ -130,6 +149,9 @@ where
 			commit.target_number,
 			commit.target_hash,
 		);
+
+		// FIXME: deal with error due to dropped channel receiver
+		let _ = self.commit_outgoing.send(commit.clone()).await;
 
 		self.best_commit = Some(commit);
 
@@ -191,31 +213,30 @@ where
 	async fn handle_incoming_commit_message(
 		&mut self,
 		commit: Commit<Hash, Number, Environment::Signature, Environment::Id>,
-	) -> Result<bool, Environment::Error> {
+	) -> Result<CommitProcessingOutcome, Environment::Error> {
 		// ignore commits for a block lower than we already finalized
 		if commit.target_number < self.round.finalized().map_or_else(Number::zero, |(_, n)| *n) {
-			return Ok(true)
+			return Ok(CommitProcessingOutcome::Good)
 		}
 
-		let commit_ghost = validate_commit(&commit, self.round.voters(), &self.environment)?.ghost;
+		let commit_validation_result =
+			validate_commit(&commit, self.round.voters(), &self.environment)?;
 
-		if commit_ghost.is_none() {
-			return Ok(false)
+		if commit_validation_result.ghost.is_some() {
+			for SignedPrecommit { precommit, signature, id } in commit.precommits.iter().cloned() {
+				let _import_result =
+					self.round.import_precommit(&self.environment, precommit, id, signature)?;
+
+				// TODO: handle equivocations
+				// if let ImportResult { equivocation: Some(e), .. } = import_result {
+				// 	self.env.precommit_equivocation(self.round_number(), e);
+				// }
+			}
+
+			self.best_commit = Some(commit);
 		}
 
-		for SignedPrecommit { precommit, signature, id } in commit.precommits.iter().cloned() {
-			let _import_result =
-				self.round.import_precommit(&self.environment, precommit, id, signature)?;
-
-			// TODO: handle equivocations
-			// if let ImportResult { equivocation: Some(e), .. } = import_result {
-			// 	self.env.precommit_equivocation(self.round_number(), e);
-			// }
-		}
-
-		self.best_commit = Some(commit);
-
-		Ok(true)
+		Ok(commit_validation_result.into())
 	}
 
 	fn is_concluded(&self) -> bool {
@@ -242,15 +263,14 @@ where
 	}
 
 	pub async fn run(mut self) -> Result<(), Environment::Error> {
+		// FIXME: handle finality notifications
 		loop {
 			select! {
 				round_message = self.round_incoming.select_next_some() => {
 					self.handle_incoming_round_message(round_message?).await?;
 				},
-				commit = self.commit_incoming.select_next_some() => {
-					if !self.handle_incoming_commit_message(commit).await? {
-						debug!("got invalid commit for round: {:?}", self.round.number());
-					}
+				(commit, mut callback) = self.commit_incoming.select_next_some() => {
+					callback.run(self.handle_incoming_commit_message(commit).await?)
 				},
 				_ = &mut self.commit_timer => {
 					self.commit().await?;
