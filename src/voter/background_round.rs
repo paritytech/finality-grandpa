@@ -23,18 +23,14 @@
 
 use std::fmt::Debug;
 
-use futures::{
-	channel::{mpsc, oneshot},
-	future, select, stream, FutureExt, SinkExt, StreamExt,
-};
+use futures::{channel::mpsc, future, select, stream, FutureExt, SinkExt, StreamExt};
 use log::{debug, trace};
 
 use crate::{
 	round::{Round, RoundParams, State as RoundState},
 	validate_commit,
 	voter::{Callback, CommitProcessingOutcome, Environment as EnvironmentT},
-	BlockNumberOps, Commit, CommitValidationResult, Message, SignedMessage, SignedPrecommit,
-	VoterSet,
+	BlockNumberOps, Commit, Message, SignedMessage, SignedPrecommit, VoterSet,
 };
 
 pub struct BackgroundRound<Hash, Number, Environment>

@@ -14,28 +14,20 @@
 
 #[cfg(test)]
 mod tests {
-	use super::*;
 	use crate::{
 		testing::{
 			self,
 			chain::{DummyChain, GENESIS_HASH},
 			environment::{Environment, Id, Signature},
 		},
-		voter,
-		weights::{VoteWeight, VoterWeight},
-		Commit, Message, Precommit, Prevote, SignedMessage, SignedPrecommit, VoterSet,
+		voter, Commit, Message, Precommit, Prevote, SignedMessage, SignedPrecommit, VoterSet,
 	};
 	use futures::{
-		executor::LocalPool,
-		future,
-		future::FutureExt,
-		stream,
-		stream::StreamExt,
-		task::{LocalSpawnExt, SpawnExt},
+		executor::LocalPool, future, future::FutureExt, stream, stream::StreamExt, task::SpawnExt,
 	};
 	use futures_timer::Delay;
 	use parking_lot::Mutex;
-	use std::{collections::HashSet, iter, sync::Arc, time::Duration};
+	use std::{iter, sync::Arc, time::Duration};
 
 	#[test]
 	fn talking_to_myself() {
@@ -148,7 +140,6 @@ mod tests {
 				let local_id = Id(i);
 				// initialize chain
 				let env = Environment::new_with_chain(network.clone(), local_id, chain.clone());
-				let last_finalized = env.with_chain(|chain| chain.last_finalized());
 
 				// run voter in background. scheduling it to shut down at the end.
 				let finalized = env.finalized_stream();

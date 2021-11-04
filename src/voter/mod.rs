@@ -29,9 +29,8 @@ use std::fmt::Debug;
 
 use async_trait::async_trait;
 use futures::{
-	channel::{mpsc, oneshot},
-	future::Fuse,
-	pin_mut, select, Future, FutureExt, Sink, SinkExt, Stream, StreamExt,
+	channel::mpsc, future::Fuse, pin_mut, select, Future, FutureExt, Sink, SinkExt, Stream,
+	StreamExt,
 };
 use log::debug;
 
@@ -172,6 +171,8 @@ where
 	type Id: Clone + Debug + Ord;
 	type Signature: Clone + Eq;
 	type Error: From<Error>;
+	// FIXME: is the unpin really needed?
+	// FIXME: maybe it makes sense to make this a FusedFuture to avoid having to wrap it in Fuse<...>
 	type Timer: Future<Output = ()> + Unpin;
 	type Incoming: Stream<Item = Result<SignedMessage<Hash, Number, Self::Signature, Self::Id>, Self::Error>>
 		+ Unpin;
@@ -232,7 +233,7 @@ where
 		futures::channel::mpsc::channel(4);
 
 	let (global_incoming, global_outgoing) = global_communication;
-	let mut global_incoming = global_incoming.fuse();
+	let global_incoming = global_incoming.fuse();
 	pin_mut!(global_incoming, global_outgoing);
 
 	let (mut background_round_commits_tx, background_round_commit_incoming) =
@@ -329,7 +330,7 @@ where
 
 async fn handle_completable_round<Hash, Number, Environment>(
 	environment: &Environment,
-	best_finalized_number: &mut Number,
+	_best_finalized_number: &mut Number,
 	completable_round: CompletableRound<Hash, Number, Environment>,
 	background_round_commits: mpsc::Sender<
 		Commit<Hash, Number, Environment::Signature, Environment::Id>,
@@ -410,8 +411,8 @@ async fn handle_concluded_round<Error>(result: Result<(), Error>) -> Result<(), 
 }
 
 async fn handle_incoming_commit_message<Hash, Number, Environment>(
-	environment: &Environment,
-	best_finalized_number: &mut Number,
+	_environment: &Environment,
+	_best_finalized_number: &mut Number,
 	current_round_number: u64,
 	commit_round_number: u64,
 	commit: Commit<Hash, Number, Environment::Signature, Environment::Id>,
@@ -438,8 +439,8 @@ where
 }
 
 async fn handle_incoming_catch_up_message<Hash, Number, Environment>(
-	environment: &Environment,
-	catch_up: CatchUp<Hash, Number, Environment::Signature, Environment::Id>,
+	_environment: &Environment,
+	_catch_up: CatchUp<Hash, Number, Environment::Signature, Environment::Id>,
 ) -> Result<
 	Option<(VotingRound<Hash, Number, Environment>, BackgroundRound<Hash, Number, Environment>)>,
 	Environment::Error,

@@ -143,10 +143,8 @@ pub mod chain {
 pub mod environment {
 	use super::chain::*;
 	use crate::{
-		round::State as RoundState,
 		voter::{Callback, GlobalCommunicationIncoming, GlobalCommunicationOutgoing, RoundData},
-		Chain, Commit, Equivocation, Error, HistoricalVotes, Message, Precommit, Prevote,
-		PrimaryPropose, SignedMessage,
+		Chain, Commit, Error, Message, SignedMessage,
 	};
 	use async_trait::async_trait;
 	use futures::{
@@ -154,7 +152,7 @@ pub mod environment {
 		prelude::*,
 	};
 	use futures_timer::Delay;
-	use log::{debug, warn};
+	use log::warn;
 	use parking_lot::Mutex;
 	use std::{
 		collections::HashMap,
