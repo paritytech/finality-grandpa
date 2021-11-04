@@ -143,8 +143,10 @@ pub mod chain {
 pub mod environment {
 	use super::chain::*;
 	use crate::{
-		round::State as RoundState, voter::RoundData, Chain, Commit, Equivocation, Error,
-		HistoricalVotes, Message, Precommit, Prevote, PrimaryPropose, SignedMessage,
+		round::State as RoundState,
+		voter::{Callback, GlobalCommunicationIncoming, GlobalCommunicationOutgoing, RoundData},
+		Chain, Commit, Equivocation, Error, HistoricalVotes, Message, Precommit, Prevote,
+		PrimaryPropose, SignedMessage,
 	};
 	use async_trait::async_trait;
 	use futures::{
@@ -250,12 +252,15 @@ pub mod environment {
 		type Id = Id;
 		type Signature = Signature;
 		type Error = Error;
-		type Timer = Box<dyn Future<Output = ()> + Unpin>;
+		type Timer = Box<dyn Future<Output = ()> + Send + Sync + Unpin>;
 		type Incoming = Box<
 			dyn Stream<Item = Result<SignedMessage<&'static str, u32, Signature, Id>, Error>>
+				+ Send
+				+ Sync
 				+ Unpin,
 		>;
-		type Outgoing = Box<dyn Sink<Message<&'static str, u32>, Error = Error> + Unpin>;
+		type Outgoing =
+			Box<dyn Sink<Message<&'static str, u32>, Error = Error> + Send + Sync + Unpin>;
 
 		async fn best_chain_containing(
 			&self,
@@ -437,7 +442,6 @@ pub mod environment {
 		// do routing work
 		fn route(&mut self, cx: &mut Context) -> Poll<()> {
 			loop {
-				log::trace!("route");
 				match Stream::poll_next(Pin::new(&mut self.receiver), cx) {
 					Poll::Pending => return Poll::Pending,
 					Poll::Ready(None) => return Poll::Ready(()),
@@ -457,24 +461,23 @@ pub mod environment {
 	/// Give the network future to node environments and spawn the routing task
 	/// to run.
 	pub fn make_network() -> (Network, NetworkRouting) {
-		// let global_messages = Arc::new(Mutex::new(GlobalMessageNetwork::new()));
+		let global_messages = Arc::new(Mutex::new(GlobalMessageNetwork::new()));
 		let rounds = Arc::new(Mutex::new(HashMap::new()));
 		(
-			// Network { global_messages: global_messages.clone(), rounds: rounds.clone() },
-			// NetworkRouting { global_messages, rounds },
-			Network { rounds: rounds.clone() },
-			NetworkRouting { rounds },
+			Network { global_messages: global_messages.clone(), rounds: rounds.clone() },
+			NetworkRouting { global_messages, rounds },
 		)
 	}
 
 	type RoundNetwork = BroadcastNetwork<SignedMessage<&'static str, u32, Signature, Id>>;
-	// 	type GlobalMessageNetwork = BroadcastNetwork<CommunicationIn<&'static str, u32, Signature, Id>>;
+	type GlobalMessageNetwork =
+		BroadcastNetwork<GlobalCommunicationIncoming<&'static str, u32, Signature, Id>>;
 
 	/// A test network. Instantiate this with `make_network`,
 	#[derive(Clone)]
 	pub struct Network {
 		rounds: Arc<Mutex<HashMap<u64, RoundNetwork>>>,
-		// global_messages: Arc<Mutex<GlobalMessageNetwork>>,
+		global_messages: Arc<Mutex<GlobalMessageNetwork>>,
 	}
 
 	impl Network {
@@ -498,30 +501,35 @@ pub mod environment {
 				})
 		}
 
-		// pub fn make_global_comms(
-		// 	&self,
-		// ) -> (
-		// 	impl Stream<Item = Result<CommunicationIn<&'static str, u32, Signature, Id>, Error>>,
-		// 	impl Sink<CommunicationOut<&'static str, u32, Signature, Id>, Error = Error>,
-		// ) {
-		// 	let mut global_messages = self.global_messages.lock();
-		// 	global_messages.add_node(|message| match message {
-		// 		CommunicationOut::Commit(r, commit) =>
-		// 			CommunicationIn::Commit(r, commit.into(), Callback::Blank),
-		// 	})
-		// }
+		pub fn make_global_comms(
+			&self,
+		) -> (
+			impl Stream<
+				Item = Result<GlobalCommunicationIncoming<&'static str, u32, Signature, Id>, Error>,
+			>,
+			impl Sink<GlobalCommunicationOutgoing<&'static str, u32, Signature, Id>, Error = Error>,
+		) {
+			let mut global_messages = self.global_messages.lock();
+			global_messages.add_node(|message| match message {
+				GlobalCommunicationOutgoing::Commit(r, commit) =>
+					GlobalCommunicationIncoming::Commit(r, commit.into(), Callback::Blank),
+			})
+		}
 
-		// /// Send a message to all nodes.
-		// pub fn send_message(&self, message: CommunicationIn<&'static str, u32, Signature, Id>) {
-		// 	self.global_messages.lock().send_message(message);
-		// }
+		/// Send a message to all nodes.
+		pub fn send_message(
+			&self,
+			message: GlobalCommunicationIncoming<&'static str, u32, Signature, Id>,
+		) {
+			self.global_messages.lock().send_message(message);
+		}
 	}
 
 	/// the network routing task.
 	#[derive(Clone)]
 	pub struct NetworkRouting {
 		rounds: Arc<Mutex<HashMap<u64, RoundNetwork>>>,
-		// global_messages: Arc<Mutex<GlobalMessageNetwork>>,
+		global_messages: Arc<Mutex<GlobalMessageNetwork>>,
 	}
 
 	impl Future for NetworkRouting {
@@ -529,21 +537,16 @@ pub mod environment {
 
 		fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<()> {
 			let mut rounds = self.rounds.lock();
-			// rounds.retain(|_, round| match round.route(cx) {
-			// 	Poll::Ready(()) => false,
-			// 	Poll::Pending => true,
-			// });
+			rounds.retain(|_, round| match round.route(cx) {
+				Poll::Ready(()) => false,
+				Poll::Pending => true,
+			});
 
-			for (n, round) in rounds.iter_mut() {
-				log::debug!("networking routing poll: {:?}", n);
-				round.route(cx);
-			}
+			let mut global_messages = self.global_messages.lock();
+			let _ = global_messages.route(cx);
 
 			// FIXME: not being awake
 			cx.waker().wake_by_ref();
-
-			// let mut global_messages = self.global_messages.lock();
-			// let _ = global_messages.route(cx);
 
 			Poll::Pending
 		}

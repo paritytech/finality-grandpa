@@ -23,12 +23,13 @@ mod tests {
 		},
 		voter,
 		weights::{VoteWeight, VoterWeight},
-		SignedPrecommit, VoterSet,
+		Commit, Message, Precommit, Prevote, SignedMessage, SignedPrecommit, VoterSet,
 	};
 	use futures::{
 		executor::LocalPool,
 		future,
 		future::FutureExt,
+		stream,
 		stream::StreamExt,
 		task::{LocalSpawnExt, SpawnExt},
 	};
@@ -45,8 +46,7 @@ mod tests {
 
 		let (network, routing_task) = testing::environment::make_network();
 
-		// FIXME
-		// let global_comms = network.make_global_comms();
+		let global_comms = network.make_global_comms();
 		let environment = Environment::new(network, local_id);
 
 		// initialize chain
@@ -57,13 +57,20 @@ mod tests {
 
 		// run voter in background. scheduling it to shut down at the end.
 		let finalized = environment.finalized_stream();
-		let voter =
-			voter::run(environment.clone(), voters, 0, Vec::new(), last_finalized, last_finalized);
+		let voter = voter::run(
+			environment.clone(),
+			voters.clone(),
+			global_comms,
+			0,
+			Vec::new(),
+			last_finalized,
+			last_finalized,
+		);
 
 		let mut pool = LocalPool::new();
 
-		pool.spawner().spawn_local(routing_task).unwrap();
-		pool.spawner().spawn_local(voter.map(|v| v.expect("Error voting"))).unwrap();
+		pool.spawner().spawn(routing_task).unwrap();
+		pool.spawner().spawn(voter.map(|v| v.expect("Error voting"))).unwrap();
 
 		// wait for the best block to finalize.
 		pool.run_until(
@@ -99,14 +106,14 @@ mod tests {
 				let voter = voter::run(
 					env.clone(),
 					voters.clone(),
-					// network.make_global_comms(),
+					network.make_global_comms(),
 					0,
 					Vec::new(),
 					last_finalized,
 					last_finalized,
 				);
 
-				pool.spawner().spawn_local(voter.map(|v| v.expect("Error voting"))).unwrap();
+				pool.spawner().spawn(voter.map(|v| v.expect("Error voting"))).unwrap();
 
 				// wait for the best block to be finalized by all honest voters
 				finalized
@@ -115,7 +122,7 @@ mod tests {
 			})
 			.collect::<Vec<_>>();
 
-		pool.spawner().spawn_local(routing_task.map(|_| ())).unwrap();
+		pool.spawner().spawn(routing_task.map(|_| ())).unwrap();
 
 		pool.run_until(future::join_all(finalized_streams.into_iter()));
 	}
@@ -148,14 +155,14 @@ mod tests {
 				let voter = voter::run(
 					env.clone(),
 					voters.clone(),
-					// network.make_global_comms(),
+					network.make_global_comms(),
 					0,
 					Vec::new(),
 					last_finalized,
 					last_finalized,
 				);
 
-				pool.spawner().spawn_local(voter.map(|v| v.expect("Error voting"))).unwrap();
+				pool.spawner().spawn(voter.map(|v| v.expect("Error voting"))).unwrap();
 
 				// wait for the best block to be finalized by all honest voters
 				finalized
@@ -168,15 +175,15 @@ mod tests {
 		let mut parent = "E";
 		let grow_chain = async move {
 			for i in 0..10 {
-				Delay::new(Duration::from_secs(1)).await;
+				Delay::new(Duration::from_millis(100)).await;
 				let mut chain = chain.lock();
 				chain.push_blocks(parent, &[hashes[i]]);
 				parent = hashes[i];
 			}
 		};
 
-		pool.spawner().spawn_local(routing_task.map(|_| ())).unwrap();
-		pool.spawner().spawn_local(grow_chain).unwrap();
+		pool.spawner().spawn(routing_task.map(|_| ())).unwrap();
+		pool.spawner().spawn(grow_chain).unwrap();
 
 		pool.run_until(future::join_all(finalized_streams.into_iter()));
 	}
@@ -252,211 +259,216 @@ mod tests {
 	// 	assert_eq!(voter_state.get().best_round, (2, expected_round_state.clone()));
 	// }
 
-	// #[test]
-	// fn broadcast_commit() {
-	// 	let local_id = Id(5);
-	// 	let voters = VoterSet::new([(local_id, 100)].iter().cloned()).expect("nonempty");
+	#[test]
+	fn broadcast_commit() {
+		let local_id = Id(5);
+		let voters = VoterSet::new([(local_id, 100)].iter().cloned()).expect("nonempty");
 
-	// 	let (network, routing_task) = testing::environment::make_network();
-	// 	let (commits, _) = network.make_global_comms();
+		let (network, routing_task) = testing::environment::make_network();
+		let (commits, _) = network.make_global_comms();
 
-	// 	let global_comms = network.make_global_comms();
-	// 	let env = Arc::new(Environment::new(network, local_id));
+		let global_comms = network.make_global_comms();
+		let env = Environment::new(network, local_id);
 
-	// 	// initialize chain
-	// 	let last_finalized = env.with_chain(|chain| {
-	// 		chain.push_blocks(GENESIS_HASH, &["A", "B", "C", "D", "E"]);
-	// 		chain.last_finalized()
-	// 	});
+		// initialize chain
+		let last_finalized = env.with_chain(|chain| {
+			chain.push_blocks(GENESIS_HASH, &["A", "B", "C", "D", "E"]);
+			chain.last_finalized()
+		});
 
-	// 	// run voter in background. scheduling it to shut down at the end.
-	// 	let voter = Voter::new(
-	// 		env.clone(),
-	// 		voters.clone(),
-	// 		global_comms,
-	// 		0,
-	// 		Vec::new(),
-	// 		last_finalized,
-	// 		last_finalized,
-	// 	);
+		// run voter in background. scheduling it to shut down at the end.
+		let voter = voter::run(
+			env.clone(),
+			voters.clone(),
+			global_comms,
+			0,
+			Vec::new(),
+			last_finalized,
+			last_finalized,
+		);
 
-	// 	let mut pool = LocalPool::new();
-	// 	pool.spawner().spawn(voter.map(|v| v.expect("Error voting"))).unwrap();
-	// 	pool.spawner().spawn(routing_task).unwrap();
+		let mut pool = LocalPool::new();
+		pool.spawner().spawn(voter.map(|v| v.expect("Error voting"))).unwrap();
+		pool.spawner().spawn(routing_task).unwrap();
 
-	// 	// wait for the node to broadcast a commit message
-	// 	pool.run_until(commits.take(1).for_each(|_| future::ready(())))
-	// }
+		// wait for the node to broadcast a commit message
+		pool.run_until(commits.take(1).for_each(|_| future::ready(())))
+	}
 
-	// #[test]
-	// fn broadcast_commit_only_if_newer() {
-	// 	let local_id = Id(5);
-	// 	let test_id = Id(42);
-	// 	let voters =
-	// 		VoterSet::new([(local_id, 100), (test_id, 201)].iter().cloned()).expect("nonempty");
+	#[test]
+	fn broadcast_commit_only_if_newer() {
+		let local_id = Id(5);
+		let test_id = Id(42);
+		let voters =
+			VoterSet::new([(local_id, 100), (test_id, 201)].iter().cloned()).expect("nonempty");
 
-	// 	let (network, routing_task) = testing::environment::make_network();
-	// 	let (commits_stream, commits_sink) = network.make_global_comms();
-	// 	let (round_stream, round_sink) = network.make_round_comms(1, test_id);
+		let (network, routing_task) = testing::environment::make_network();
+		let (commits_stream, commits_sink) = network.make_global_comms();
+		let (round_stream, round_sink) = network.make_round_comms(1, test_id);
 
-	// 	let prevote = Message::Prevote(Prevote { target_hash: "E", target_number: 6 });
+		let prevote = Message::Prevote(Prevote { target_hash: "E", target_number: 6 });
 
-	// 	let precommit = Message::Precommit(Precommit { target_hash: "E", target_number: 6 });
+		let precommit = Message::Precommit(Precommit { target_hash: "E", target_number: 6 });
 
-	// 	let commit = (
-	// 		1,
-	// 		Commit {
-	// 			target_hash: "E",
-	// 			target_number: 6,
-	// 			precommits: vec![SignedPrecommit {
-	// 				precommit: Precommit { target_hash: "E", target_number: 6 },
-	// 				signature: Signature(test_id.0),
-	// 				id: test_id,
-	// 			}],
-	// 		},
-	// 	);
+		let commit = (
+			1,
+			Commit {
+				target_hash: "E",
+				target_number: 6,
+				precommits: vec![SignedPrecommit {
+					precommit: Precommit { target_hash: "E", target_number: 6 },
+					signature: Signature(test_id.0),
+					id: test_id,
+				}],
+			},
+		);
 
-	// 	let global_comms = network.make_global_comms();
-	// 	let env = Arc::new(Environment::new(network, local_id));
+		let global_comms = network.make_global_comms();
+		let env = Environment::new(network, local_id);
 
-	// 	// initialize chain
-	// 	let last_finalized = env.with_chain(|chain| {
-	// 		chain.push_blocks(GENESIS_HASH, &["A", "B", "C", "D", "E"]);
-	// 		chain.last_finalized()
-	// 	});
+		// initialize chain
+		let last_finalized = env.with_chain(|chain| {
+			chain.push_blocks(GENESIS_HASH, &["A", "B", "C", "D", "E"]);
+			chain.last_finalized()
+		});
 
-	// 	// run voter in background. scheduling it to shut down at the end.
-	// 	let voter = Voter::new(
-	// 		env.clone(),
-	// 		voters.clone(),
-	// 		global_comms,
-	// 		0,
-	// 		Vec::new(),
-	// 		last_finalized,
-	// 		last_finalized,
-	// 	);
+		// run voter in background. scheduling it to shut down at the end.
+		let voter = voter::run(
+			env.clone(),
+			voters.clone(),
+			global_comms,
+			0,
+			Vec::new(),
+			last_finalized,
+			last_finalized,
+		);
 
-	// 	let mut pool = LocalPool::new();
-	// 	pool.spawner().spawn(voter.map(|v| v.expect("Error voting: {:?}"))).unwrap();
-	// 	pool.spawner().spawn(routing_task.map(|_| ())).unwrap();
+		let mut pool = LocalPool::new();
+		pool.spawner().spawn(voter.map(|v| v.expect("Error voting: {:?}"))).unwrap();
+		pool.spawner().spawn(routing_task.map(|_| ())).unwrap();
 
-	// 	pool.spawner()
-	// 		.spawn(
-	// 			round_stream
-	// 				.into_future()
-	// 				.then(|(value, stream)| {
-	// 					// wait for a prevote
-	// 					assert!(match value {
-	// 						Some(Ok(SignedMessage {
-	// 							message: Message::Prevote(_),
-	// 							id: Id(5),
-	// 							..
-	// 						})) => true,
-	// 						_ => false,
-	// 					});
-	// 					let votes = vec![prevote, precommit].into_iter().map(Result::Ok);
-	// 					futures::stream::iter(votes).forward(round_sink).map(|_| stream) // send our prevote
-	// 				})
-	// 				.then(|stream| {
-	// 					stream
-	// 						.take_while(|value| match value {
-	// 							// wait for a precommit
-	// 							Ok(SignedMessage {
-	// 								message: Message::Precommit(_),
-	// 								id: Id(5),
-	// 								..
-	// 							}) => future::ready(false),
-	// 							_ => future::ready(true),
-	// 						})
-	// 						.for_each(|_| future::ready(()))
-	// 				})
-	// 				.then(|_| {
-	// 					// send our commit
-	// 					stream::iter(iter::once(Ok(CommunicationOut::Commit(commit.0, commit.1))))
-	// 						.forward(commits_sink)
-	// 				})
-	// 				.map(|_| ()),
-	// 		)
-	// 		.unwrap();
+		pool.spawner()
+			.spawn(
+				round_stream
+					.into_future()
+					.then(|(value, stream)| {
+						// wait for a prevote
+						assert!(match value {
+							Some(Ok(SignedMessage {
+								message: Message::Prevote(_),
+								id: Id(5),
+								..
+							})) => true,
+							_ => false,
+						});
+						let votes = vec![prevote, precommit].into_iter().map(Result::Ok);
+						futures::stream::iter(votes).forward(round_sink).map(|_| stream) // send our prevote
+					})
+					.then(|stream| {
+						stream
+							.take_while(|value| match value {
+								// wait for a precommit
+								Ok(SignedMessage {
+									message: Message::Precommit(_),
+									id: Id(5),
+									..
+								}) => future::ready(false),
+								_ => future::ready(true),
+							})
+							.for_each(|_| future::ready(()))
+					})
+					.then(|_| {
+						// send our commit
+						stream::iter(iter::once(Ok(voter::GlobalCommunicationOutgoing::Commit(
+							commit.0, commit.1,
+						))))
+						.forward(commits_sink)
+					})
+					.map(|_| ()),
+			)
+			.unwrap();
 
-	// 	let res = pool.run_until(
-	// 		// wait for the first commit (ours)
-	// 		commits_stream.into_future().then(|(_, stream)| {
-	// 			// the second commit should never arrive
-	// 			let await_second = stream.take(1).for_each(|_| future::ready(()));
-	// 			let delay = Delay::new(Duration::from_millis(500));
-	// 			future::select(await_second, delay)
-	// 		}),
-	// 	);
+		let res = pool.run_until(
+			// wait for the first commit (ours)
+			commits_stream.into_future().then(|(_, stream)| {
+				// the second commit should never arrive
+				let await_second = stream.take(1).for_each(|_| future::ready(()));
+				let delay = Delay::new(Duration::from_millis(500));
+				future::select(await_second, delay)
+			}),
+		);
 
-	// 	match res {
-	// 		future::Either::Right(((), _work)) => {
-	// 			// the future timed out as expected
-	// 		},
-	// 		_ => panic!("Unexpected result"),
-	// 	}
-	// }
+		match res {
+			future::Either::Right(((), _work)) => {
+				// the future timed out as expected
+			},
+			_ => panic!("Unexpected result"),
+		}
+	}
 
-	// #[test]
-	// fn import_commit_for_any_round() {
-	// 	let local_id = Id(5);
-	// 	let test_id = Id(42);
-	// 	let voters =
-	// 		VoterSet::new([(local_id, 100), (test_id, 201)].iter().cloned()).expect("nonempty");
+	#[test]
+	fn import_commit_for_any_round() {
+		let local_id = Id(5);
+		let test_id = Id(42);
+		let voters =
+			VoterSet::new([(local_id, 100), (test_id, 201)].iter().cloned()).expect("nonempty");
 
-	// 	let (network, routing_task) = testing::environment::make_network();
-	// 	let (_, commits_sink) = network.make_global_comms();
+		let (network, routing_task) = testing::environment::make_network();
+		let (_, commits_sink) = network.make_global_comms();
 
-	// 	// this is a commit for a previous round
-	// 	let commit = Commit {
-	// 		target_hash: "E",
-	// 		target_number: 6,
-	// 		precommits: vec![SignedPrecommit {
-	// 			precommit: Precommit { target_hash: "E", target_number: 6 },
-	// 			signature: Signature(test_id.0),
-	// 			id: test_id,
-	// 		}],
-	// 	};
+		// this is a commit for a previous round
+		let commit = Commit {
+			target_hash: "E",
+			target_number: 6,
+			precommits: vec![SignedPrecommit {
+				precommit: Precommit { target_hash: "E", target_number: 6 },
+				signature: Signature(test_id.0),
+				id: test_id,
+			}],
+		};
 
-	// 	let global_comms = network.make_global_comms();
-	// 	let env = Arc::new(Environment::new(network, local_id));
+		let global_comms = network.make_global_comms();
+		let env = Environment::new(network, local_id);
 
-	// 	// initialize chain
-	// 	let last_finalized = env.with_chain(|chain| {
-	// 		chain.push_blocks(GENESIS_HASH, &["A", "B", "C", "D", "E"]);
-	// 		chain.last_finalized()
-	// 	});
+		// initialize chain
+		let last_finalized = env.with_chain(|chain| {
+			chain.push_blocks(GENESIS_HASH, &["A", "B", "C", "D", "E"]);
+			chain.last_finalized()
+		});
 
-	// 	// run voter in background.
-	// 	let voter = Voter::new(
-	// 		env.clone(),
-	// 		voters.clone(),
-	// 		global_comms,
-	// 		1,
-	// 		Vec::new(),
-	// 		last_finalized,
-	// 		last_finalized,
-	// 	);
+		// run voter in background.
+		let voter = voter::run(
+			env.clone(),
+			voters.clone(),
+			global_comms,
+			1,
+			Vec::new(),
+			last_finalized,
+			last_finalized,
+		);
 
-	// 	let mut pool = LocalPool::new();
-	// 	pool.spawner().spawn(voter.map(|v| v.expect("Error voting"))).unwrap();
-	// 	pool.spawner().spawn(routing_task.map(|_| ())).unwrap();
+		let mut pool = LocalPool::new();
+		pool.spawner().spawn(voter.map(|v| v.expect("Error voting"))).unwrap();
+		pool.spawner().spawn(routing_task.map(|_| ())).unwrap();
 
-	// 	// Send the commit message.
-	// 	pool.spawner()
-	// 		.spawn(
-	// 			stream::iter(iter::once(Ok(CommunicationOut::Commit(0, commit.clone()))))
-	// 				.forward(commits_sink)
-	// 				.map(|_| ()),
-	// 		)
-	// 		.unwrap();
+		// Send the commit message.
+		pool.spawner()
+			.spawn(
+				stream::iter(iter::once(Ok(voter::GlobalCommunicationOutgoing::Commit(
+					0,
+					commit.clone(),
+				))))
+				.forward(commits_sink)
+				.map(|_| ()),
+			)
+			.unwrap();
 
-	// 	// Wait for the commit message to be processed.
-	// 	let finalized = pool
-	// 		.run_until(env.finalized_stream().into_future().map(move |(msg, _)| msg.unwrap().2));
+		// Wait for the commit message to be processed.
+		let finalized = pool
+			.run_until(env.finalized_stream().into_future().map(move |(msg, _)| msg.unwrap().2));
 
-	// 	assert_eq!(finalized, commit);
-	// }
+		assert_eq!(finalized, commit);
+	}
 
 	// #[test]
 	// fn skips_to_latest_round_after_catch_up() {
