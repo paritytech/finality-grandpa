@@ -33,6 +33,12 @@ use crate::{
 	BlockNumberOps, Commit, Message, SignedMessage, SignedPrecommit, VoterSet,
 };
 
+pub struct BackgroundRoundCommit<Hash, Number, Id, Signature> {
+	pub round_number: u64,
+	pub commit: Commit<Hash, Number, Signature, Id>,
+	pub broadcast: bool,
+}
+
 pub struct BackgroundRound<Hash, Number, Environment>
 where
 	Hash: Ord,
@@ -46,7 +52,8 @@ where
 		Commit<Hash, Number, Environment::Signature, Environment::Id>,
 		Callback<CommitProcessingOutcome>,
 	)>,
-	commit_outgoing: mpsc::Sender<Commit<Hash, Number, Environment::Signature, Environment::Id>>,
+	commit_outgoing:
+		mpsc::Sender<BackgroundRoundCommit<Hash, Number, Environment::Id, Environment::Signature>>,
 	commit_timer: future::Fuse<Environment::Timer>,
 	best_commit: Option<Commit<Hash, Number, Environment::Signature, Environment::Id>>,
 }
@@ -67,7 +74,7 @@ where
 			Callback<CommitProcessingOutcome>,
 		)>,
 		commit_outgoing: mpsc::Sender<
-			Commit<Hash, Number, Environment::Signature, Environment::Id>,
+			BackgroundRoundCommit<Hash, Number, Environment::Id, Environment::Signature>,
 		>,
 	) -> BackgroundRound<Hash, Number, Environment> {
 		let commit_timer = environment.round_commit_timer().fuse();
@@ -96,7 +103,7 @@ where
 			Callback<CommitProcessingOutcome>,
 		)>,
 		commit_outgoing: mpsc::Sender<
-			Commit<Hash, Number, Environment::Signature, Environment::Id>,
+			BackgroundRoundCommit<Hash, Number, Environment::Id, Environment::Signature>,
 		>,
 	) -> Option<BackgroundRound<Hash, Number, Environment>> {
 		let round_data = environment.round_data(round_number).await;
@@ -147,7 +154,14 @@ where
 		);
 
 		// FIXME: deal with error due to dropped channel receiver
-		let _ = self.commit_outgoing.send(commit.clone()).await;
+		let _ = self
+			.commit_outgoing
+			.send(BackgroundRoundCommit {
+				round_number: self.round.number(),
+				commit: commit.clone(),
+				broadcast: true,
+			})
+			.await;
 
 		self.best_commit = Some(commit);
 
@@ -259,8 +273,9 @@ where
 	}
 
 	pub async fn run(mut self) -> Result<(), Environment::Error> {
-		// FIXME: handle finality notifications
 		loop {
+			let pre_finalized = self.round.state().finalized;
+
 			select! {
 				round_message = self.round_incoming.select_next_some() => {
 					self.handle_incoming_round_message(round_message?).await?;
@@ -273,10 +288,32 @@ where
 				}
 			}
 
+			let post_finalized = self.round.state().finalized;
+
+			// FIXME: not being formatted
+			if pre_finalized != post_finalized {
+				if let Some(finalized) = post_finalized {
+					// FIXME: deal with error
+					let _ = self.commit_outgoing.send(BackgroundRoundCommit {
+						round_number: self.round.number(),
+						commit: Commit {
+							target_hash: finalized.0.clone(),
+							target_number: finalized.1,
+							precommits: self.round.finalizing_precommits(&self.environment)
+								.expect("always returns none if something was finalized; this is checked above; qed")
+								.collect(),
+						},
+						broadcast: false,
+					}).await;
+				}
+			}
+
 			if self.is_concluded() {
 				break
 			}
 		}
+
+		debug!(target: "afg", "Concluded background round: {}", self.round.number());
 
 		Ok(())
 	}

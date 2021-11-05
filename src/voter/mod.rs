@@ -25,17 +25,18 @@
 //!  votes will not be pushed to the sink. The protocol state machine still
 //!  transitions state as if the votes had been pushed out.
 
-use std::fmt::Debug;
+use std::{fmt::Debug, pin::Pin};
 
 use async_trait::async_trait;
 use futures::{
-	channel::mpsc, future::Fuse, pin_mut, select, Future, FutureExt, Sink, SinkExt, Stream,
+	channel::mpsc, future::Fuse, pin_mut, select_biased, Future, FutureExt, Sink, SinkExt, Stream,
 	StreamExt,
 };
 use log::debug;
 
 use crate::{
 	round::State as RoundState,
+	validate_commit,
 	voter::{
 		background_round::BackgroundRound,
 		voting_round::{CompletableRound, VotingRound},
@@ -44,7 +45,7 @@ use crate::{
 	SignedMessage, VoterSet,
 };
 
-use self::Environment as EnvironmentT;
+use self::{background_round::BackgroundRoundCommit, Environment as EnvironmentT};
 
 mod background_round;
 #[cfg(test)]
@@ -267,8 +268,10 @@ where
 	)
 	.await;
 
+	// FIXME: create VoterState struct,
+	// easier to pass around to handlers
+
 	let mut current_round_number = voting_round.round_number();
-	// FIXME: run multiple background rounds with futures unordered
 	let background_round = background_round
 		.map(|round| round.run().fuse())
 		.unwrap_or_else(Fuse::terminated);
@@ -277,7 +280,7 @@ where
 	pin_mut!(background_round, voting_round);
 
 	loop {
-		select! {
+		select_biased! {
 			completable_round = voting_round => {
 				let (new_voting_round, (new_background_round, new_background_round_commits)) =
 					handle_completable_round(
@@ -299,11 +302,14 @@ where
 			res = background_round => {
 				handle_concluded_round(res).await?;
 			},
-			commit = background_round_commits_rx.select_next_some() => {
-				// FIXME: deal with error
-				let _ = global_outgoing
-					.send(GlobalCommunicationOutgoing::Commit(current_round_number - 1, commit))
-					.await;
+			background_round_commit = background_round_commits_rx.select_next_some() => {
+				handle_background_round_commit(
+					&environment,
+					&mut best_finalized_number,
+					background_round_commit,
+					global_outgoing.as_mut(),
+				)
+				.await?;
 			},
 			global_message = global_incoming.select_next_some() => {
 				match global_message? {
@@ -311,13 +317,14 @@ where
 						handle_incoming_commit_message(
 							&environment,
 							&mut best_finalized_number,
+							&voters,
 							current_round_number,
 							commit_round_number,
 							commit.into(),
 							&mut background_round_commits_tx,
 							callback,
 						)
-							.await?;
+						.await?;
 					},
 					GlobalCommunicationIncoming::CatchUp(catch_up, _callback) => {
 						handle_incoming_catch_up_message(&environment, catch_up).await?;
@@ -328,12 +335,60 @@ where
 	}
 }
 
+async fn handle_background_round_commit<Hash, Number, Environment, GlobalOutgoing>(
+	environment: &Environment,
+	best_finalized_number: &mut Number,
+	background_round_commit: BackgroundRoundCommit<
+		Hash,
+		Number,
+		Environment::Id,
+		Environment::Signature,
+	>,
+	mut global_outgoing: Pin<&mut GlobalOutgoing>,
+) -> Result<(), Environment::Error>
+where
+	Hash: Clone + Eq,
+	Number: Copy + Ord,
+	Environment: EnvironmentT<Hash, Number>,
+	GlobalOutgoing: Sink<
+		GlobalCommunicationOutgoing<Hash, Number, Environment::Signature, Environment::Id>,
+		Error = Environment::Error,
+	>,
+{
+	if background_round_commit.broadcast {
+		// FIXME: deal with error
+		let _ = global_outgoing
+			.send(GlobalCommunicationOutgoing::Commit(
+				background_round_commit.round_number,
+				background_round_commit.commit.clone(),
+			))
+			.await;
+	}
+
+	if background_round_commit.commit.target_number > *best_finalized_number {
+		let new_best_finalized_number = background_round_commit.commit.target_number;
+
+		environment
+			.finalize_block(
+				background_round_commit.commit.target_hash.clone(),
+				background_round_commit.commit.target_number,
+				background_round_commit.round_number,
+				background_round_commit.commit,
+			)
+			.await?;
+
+		*best_finalized_number = new_best_finalized_number;
+	}
+
+	Ok(())
+}
+
 async fn handle_completable_round<Hash, Number, Environment>(
 	environment: &Environment,
-	_best_finalized_number: &mut Number,
+	best_finalized_number: &mut Number,
 	completable_round: CompletableRound<Hash, Number, Environment>,
 	background_round_commits: mpsc::Sender<
-		Commit<Hash, Number, Environment::Signature, Environment::Id>,
+		BackgroundRoundCommit<Hash, Number, Environment::Id, Environment::Signature>,
 	>,
 ) -> Result<
 	(
@@ -363,18 +418,22 @@ where
 
 	debug!("completed voting round, finalized: {:?}", completable_round_finalized);
 
-	environment.finalize_block(
-		completable_round_finalized.0.clone(),
-		completable_round_finalized.1,
-		completable_round_number,
-		Commit {
-			target_hash: completable_round_finalized.0.clone(),
-			target_number: completable_round_finalized.1,
-			precommits: completable_round.round.finalizing_precommits(environment)
-				.expect("always returns none if something was finalized; this is checked above; qed")
-				.collect(),
-		},
-	).await?;
+	if completable_round_finalized.1 > *best_finalized_number {
+		environment.finalize_block(
+			completable_round_finalized.0.clone(),
+			completable_round_finalized.1,
+			completable_round_number,
+			Commit {
+				target_hash: completable_round_finalized.0.clone(),
+				target_number: completable_round_finalized.1,
+				precommits: completable_round.round.finalizing_precommits(environment)
+					.expect("always returns none if something was finalized; this is checked above; qed")
+					.collect(),
+			},
+		).await?;
+
+		*best_finalized_number = completable_round_finalized.1;
+	}
 
 	let (previous_round_state_updates_out, previous_round_state_updates_in) =
 		futures::channel::mpsc::channel(4);
@@ -406,13 +465,13 @@ where
 }
 
 async fn handle_concluded_round<Error>(result: Result<(), Error>) -> Result<(), Error> {
-	debug!("concluded background round");
 	result
 }
 
 async fn handle_incoming_commit_message<Hash, Number, Environment>(
-	_environment: &Environment,
-	_best_finalized_number: &mut Number,
+	environment: &Environment,
+	best_finalized_number: &mut Number,
+	voters: &VoterSet<Environment::Id>,
 	current_round_number: u64,
 	commit_round_number: u64,
 	commit: Commit<Hash, Number, Environment::Signature, Environment::Id>,
@@ -420,10 +479,11 @@ async fn handle_incoming_commit_message<Hash, Number, Environment>(
 		Commit<Hash, Number, Environment::Signature, Environment::Id>,
 		Callback<CommitProcessingOutcome>,
 	)>,
-	callback: Callback<CommitProcessingOutcome>,
+	mut callback: Callback<CommitProcessingOutcome>,
 ) -> Result<(), Environment::Error>
 where
-	Hash: Eq,
+	Hash: Clone + Debug + Eq + Ord,
+	Number: BlockNumberOps,
 	Environment: EnvironmentT<Hash, Number>,
 {
 	match current_round_number.checked_sub(1) {
@@ -434,6 +494,25 @@ where
 		},
 		_ => {},
 	}
+
+	let commit_validation_result = validate_commit(&commit, voters, environment)?;
+
+	if let Some((ref finalized_hash, finalized_number)) = commit_validation_result.ghost {
+		if finalized_number > *best_finalized_number {
+			environment
+				.finalize_block(
+					finalized_hash.clone(),
+					finalized_number,
+					commit_round_number,
+					commit,
+				)
+				.await?;
+
+			*best_finalized_number = finalized_number;
+		}
+	}
+
+	callback.run(commit_validation_result.into());
 
 	Ok(())
 }
