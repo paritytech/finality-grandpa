@@ -89,7 +89,10 @@ impl FuzzChain {
 	}
 }
 
-impl Chain<Hash, BlockNumber> for FuzzChain {
+impl Chain for FuzzChain {
+	type Hash = Hash;
+	type Number = BlockNumber;
+
 	fn ancestry(&self, base: Hash, block: Hash) -> Result<Vec<Hash>, Error> {
 		// filter out bad descendents.
 		match (base, block) {

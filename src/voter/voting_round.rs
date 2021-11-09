@@ -66,45 +66,45 @@ impl Voting {
 	}
 }
 
-pub struct CompletableRound<Hash, Number, Environment>
+pub struct CompletableRound<Environment>
 where
-	Hash: Ord,
-	Environment: EnvironmentT<Hash, Number>,
+	Environment: EnvironmentT,
 {
 	pub incoming: stream::Fuse<Environment::Incoming>,
-	pub round: Round<Environment::Id, Hash, Number, Environment::Signature>,
+	pub round:
+		Round<Environment::Id, Environment::Hash, Environment::Number, Environment::Signature>,
 }
 
-pub struct VotingRound<Hash, Number, Environment>
+pub struct VotingRound<Environment>
 where
-	Hash: Ord,
-	Environment: EnvironmentT<Hash, Number>,
+	Environment: EnvironmentT,
 {
 	environment: Environment,
 	voting: Voting,
 	incoming: stream::Fuse<Environment::Incoming>,
 	outgoing: Environment::Outgoing,
-	round: Round<Environment::Id, Hash, Number, Environment::Signature>,
+	round: Round<Environment::Id, Environment::Hash, Environment::Number, Environment::Signature>,
 	state: State<future::Fuse<Environment::Timer>>,
-	primary_block: Option<(Hash, Number)>,
-	previous_round_state: RoundState<Hash, Number>,
-	previous_round_state_updates: mpsc::Receiver<RoundState<Hash, Number>>,
+	primary_block: Option<(Environment::Hash, Environment::Number)>,
+	previous_round_state: RoundState<Environment::Hash, Environment::Number>,
+	previous_round_state_updates:
+		mpsc::Receiver<RoundState<Environment::Hash, Environment::Number>>,
 }
 
-impl<Hash, Number, Environment> VotingRound<Hash, Number, Environment>
+impl<Environment> VotingRound<Environment>
 where
-	Hash: Clone + Debug + Ord,
-	Number: BlockNumberOps,
-	Environment: EnvironmentT<Hash, Number>,
+	Environment: EnvironmentT,
 {
 	pub async fn new(
 		environment: Environment,
 		voters: VoterSet<Environment::Id>,
 		round_number: u64,
-		round_base: (Hash, Number),
-		previous_round_state: RoundState<Hash, Number>,
-		previous_round_state_updates: mpsc::Receiver<RoundState<Hash, Number>>,
-	) -> VotingRound<Hash, Number, Environment> {
+		round_base: (Environment::Hash, Environment::Number),
+		previous_round_state: RoundState<Environment::Hash, Environment::Number>,
+		previous_round_state_updates: mpsc::Receiver<
+			RoundState<Environment::Hash, Environment::Number>,
+		>,
+	) -> VotingRound<Environment> {
 		let round_data = environment.round_data(round_number).await;
 		let round_params = RoundParams { voters, base: round_base, round_number };
 		let round = Round::new(round_params);
@@ -136,7 +136,12 @@ where
 
 	async fn handle_incoming_message(
 		&mut self,
-		message: SignedMessage<Hash, Number, Environment::Signature, Environment::Id>,
+		message: SignedMessage<
+			Environment::Hash,
+			Environment::Number,
+			Environment::Signature,
+			Environment::Id,
+		>,
 	) -> Result<(), Environment::Error> {
 		debug!("got incoming message: {:?}", message.message);
 		let SignedMessage { message, signature, id } = message;
@@ -262,7 +267,11 @@ where
 	}
 
 	/// Construct a prevote message based on local state.
-	async fn construct_prevote(&self) -> Result<Option<Prevote<Hash, Number>>, Environment::Error> {
+	async fn construct_prevote(
+		&self,
+	) -> Result<Option<Prevote<Environment::Hash, Environment::Number>>, Environment::Error> {
+		use num::{AsPrimitive, One};
+
 		let previous_round_estimate = self
 			.previous_round_state
 			.estimate
@@ -300,7 +309,7 @@ where
 						previous_prevote_ghost.0.clone(),
 					) {
 						Ok(ancestry) => {
-							let to_sub = primary_block.1 + Number::one();
+							let to_sub = primary_block.1 + Environment::Number::one();
 
 							let offset: usize = if previous_prevote_ghost.1 < to_sub {
 								0
@@ -387,7 +396,7 @@ where
 	}
 
 	/// Construct a precommit message based on local state.
-	fn construct_precommit(&self) -> Precommit<Hash, Number> {
+	fn construct_precommit(&self) -> Precommit<Environment::Hash, Environment::Number> {
 		let target = match self.round.state().prevote_ghost {
 			Some(target) => target,
 			None => self.round.base(),
@@ -425,9 +434,7 @@ where
 	}
 
 	/// Starts and processes the voting round with the given round number.
-	pub async fn run(
-		mut self,
-	) -> Result<CompletableRound<Hash, Number, Environment>, Environment::Error> {
+	pub async fn run(mut self) -> Result<CompletableRound<Environment>, Environment::Error> {
 		macro_rules! handle_inputs {
 			($timer:expr) => {{
 				select! {

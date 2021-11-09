@@ -181,18 +181,18 @@ where
 }
 
 /// Chain context necessary for implementation of the finality gadget.
-pub trait Chain<H, N>
-where
-	H: Eq,
-{
+pub trait Chain {
+	type Hash: Clone + std::fmt::Debug + Eq + Ord;
+	type Number: BlockNumberOps;
+
 	/// Get the ancestry of a block up to but not including the base hash.
 	/// Should be in reverse order from `block`'s parent.
 	///
 	/// If the block is not a descendent of `base`, returns an error.
-	fn ancestry(&self, base: H, block: H) -> Result<Vec<H>, Error>;
+	fn ancestry(&self, base: Self::Hash, block: Self::Hash) -> Result<Vec<Self::Hash>, Error>;
 
 	/// Returns true if `block` is a descendent of or equal to the given `base`.
-	fn is_equal_or_descendent_of(&self, base: H, block: H) -> bool {
+	fn is_equal_or_descendent_of(&self, base: Self::Hash, block: Self::Hash) -> bool {
 		if base == block {
 			return true
 		}
@@ -438,7 +438,7 @@ impl<H, N> Default for CommitValidationResult<H, N> {
 ///
 /// Duplicate votes or votes from voters not in the voter-set will be ignored, but it is recommended
 /// for the caller of this function to remove those at signature-verification time.
-pub fn validate_commit<H, N, S, I, C: Chain<H, N>>(
+pub fn validate_commit<H, N, S, I, C: Chain<Hash = H, Number = N>>(
 	commit: &Commit<H, N, S, I>,
 	voters: &VoterSet<I>,
 	chain: &C,

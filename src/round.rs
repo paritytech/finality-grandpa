@@ -256,7 +256,7 @@ where
 	///
 	/// Ignores duplicate prevotes (not equivocations).
 	#[cfg_attr(not(feature = "std"), allow(unused))]
-	pub(crate) fn import_prevote<C: Chain<H, N>>(
+	pub(crate) fn import_prevote<C: Chain<Hash = H, Number = N>>(
 		&mut self,
 		chain: &C,
 		prevote: Prevote<H, N>,
@@ -342,7 +342,7 @@ where
 	/// equivocation, and a bool indicating if the vote is duplicated (see `ImportResult`).
 	///
 	/// Ignores duplicate precommits (not equivocations).
-	pub(crate) fn import_precommit<C: Chain<H, N>>(
+	pub(crate) fn import_precommit<C: Chain<Hash = H, Number = N>>(
 		&mut self,
 		chain: &C,
 		precommit: Precommit<H, N>,
@@ -441,7 +441,7 @@ where
 	/// Returns an iterator of all precommits targeting the finalized hash.
 	///
 	/// Only returns `None` if no block has been finalized in this round.
-	pub fn finalizing_precommits<'a, C: 'a + Chain<H, N>>(
+	pub fn finalizing_precommits<'a, C: 'a + Chain<Hash = H, Number = N>>(
 		&'a self,
 		chain: &'a C,
 	) -> Option<impl Iterator<Item = crate::SignedPrecommit<H, N, Signature, Id>> + 'a> {

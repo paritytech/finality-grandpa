@@ -158,7 +158,7 @@ where
 	}
 
 	/// Insert a vote with given value into the graph at given hash and number.
-	pub fn insert<C: Chain<H, N>, W>(
+	pub fn insert<C: Chain<Hash = H, Number = N>, W>(
 		&mut self,
 		hash: H,
 		number: N,
@@ -553,7 +553,12 @@ where
 
 	// append a vote-node onto the chain-tree. This should only be called if
 	// no node in the tree keeps the target anyway.
-	fn append<C: Chain<H, N>>(&mut self, hash: H, number: N, chain: &C) -> Result<(), Error> {
+	fn append<C: Chain<Hash = H, Number = N>>(
+		&mut self,
+		hash: H,
+		number: N,
+		chain: &C,
+	) -> Result<(), Error> {
 		let mut ancestry = chain.ancestry(self.base.clone(), hash.clone())?;
 		ancestry.push(self.base.clone()); // ancestry doesn't include base.
 

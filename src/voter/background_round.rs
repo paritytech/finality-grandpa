@@ -39,44 +39,59 @@ pub struct BackgroundRoundCommit<Hash, Number, Id, Signature> {
 	pub broadcast: bool,
 }
 
-pub struct BackgroundRound<Hash, Number, Environment>
+pub struct BackgroundRound<Environment>
 where
-	Hash: Ord,
-	Environment: EnvironmentT<Hash, Number>,
+	Environment: EnvironmentT,
 {
 	environment: Environment,
 	round_incoming: stream::Fuse<Environment::Incoming>,
-	round: Round<Environment::Id, Hash, Number, Environment::Signature>,
-	round_state_updates: mpsc::Sender<RoundState<Hash, Number>>,
+	round: Round<Environment::Id, Environment::Hash, Environment::Number, Environment::Signature>,
+	round_state_updates: mpsc::Sender<RoundState<Environment::Hash, Environment::Number>>,
 	commit_incoming: mpsc::Receiver<(
-		Commit<Hash, Number, Environment::Signature, Environment::Id>,
+		Commit<Environment::Hash, Environment::Number, Environment::Signature, Environment::Id>,
 		Callback<CommitProcessingOutcome>,
 	)>,
-	commit_outgoing:
-		mpsc::Sender<BackgroundRoundCommit<Hash, Number, Environment::Id, Environment::Signature>>,
+	commit_outgoing: mpsc::Sender<
+		BackgroundRoundCommit<
+			Environment::Hash,
+			Environment::Number,
+			Environment::Id,
+			Environment::Signature,
+		>,
+	>,
 	commit_timer: future::Fuse<Environment::Timer>,
-	best_commit: Option<Commit<Hash, Number, Environment::Signature, Environment::Id>>,
+	best_commit: Option<
+		Commit<Environment::Hash, Environment::Number, Environment::Signature, Environment::Id>,
+	>,
 }
 
-impl<Hash, Number, Environment> BackgroundRound<Hash, Number, Environment>
+impl<Environment> BackgroundRound<Environment>
 where
-	Hash: Clone + Debug + Ord,
-	Number: BlockNumberOps,
-	Environment: EnvironmentT<Hash, Number>,
+	Environment: EnvironmentT,
 {
 	pub async fn new(
 		environment: Environment,
 		round_incoming: stream::Fuse<Environment::Incoming>,
-		round: Round<Environment::Id, Hash, Number, Environment::Signature>,
-		round_state_updates: mpsc::Sender<RoundState<Hash, Number>>,
+		round: Round<
+			Environment::Id,
+			Environment::Hash,
+			Environment::Number,
+			Environment::Signature,
+		>,
+		round_state_updates: mpsc::Sender<RoundState<Environment::Hash, Environment::Number>>,
 		commit_incoming: mpsc::Receiver<(
-			Commit<Hash, Number, Environment::Signature, Environment::Id>,
+			Commit<Environment::Hash, Environment::Number, Environment::Signature, Environment::Id>,
 			Callback<CommitProcessingOutcome>,
 		)>,
 		commit_outgoing: mpsc::Sender<
-			BackgroundRoundCommit<Hash, Number, Environment::Id, Environment::Signature>,
+			BackgroundRoundCommit<
+				Environment::Hash,
+				Environment::Number,
+				Environment::Id,
+				Environment::Signature,
+			>,
 		>,
-	) -> BackgroundRound<Hash, Number, Environment> {
+	) -> BackgroundRound<Environment> {
 		let commit_timer = environment.round_commit_timer().fuse();
 
 		BackgroundRound {
@@ -95,17 +110,29 @@ where
 		environment: Environment,
 		voters: VoterSet<Environment::Id>,
 		round_number: u64,
-		round_base: (Hash, Number),
-		round_votes: Vec<SignedMessage<Hash, Number, Environment::Signature, Environment::Id>>,
-		round_state_updates: mpsc::Sender<RoundState<Hash, Number>>,
+		round_base: (Environment::Hash, Environment::Number),
+		round_votes: Vec<
+			SignedMessage<
+				Environment::Hash,
+				Environment::Number,
+				Environment::Signature,
+				Environment::Id,
+			>,
+		>,
+		round_state_updates: mpsc::Sender<RoundState<Environment::Hash, Environment::Number>>,
 		commit_incoming: mpsc::Receiver<(
-			Commit<Hash, Number, Environment::Signature, Environment::Id>,
+			Commit<Environment::Hash, Environment::Number, Environment::Signature, Environment::Id>,
 			Callback<CommitProcessingOutcome>,
 		)>,
 		commit_outgoing: mpsc::Sender<
-			BackgroundRoundCommit<Hash, Number, Environment::Id, Environment::Signature>,
+			BackgroundRoundCommit<
+				Environment::Hash,
+				Environment::Number,
+				Environment::Id,
+				Environment::Signature,
+			>,
 		>,
-	) -> Option<BackgroundRound<Hash, Number, Environment>> {
+	) -> Option<BackgroundRound<Environment>> {
 		let round_data = environment.round_data(round_number).await;
 		let round = Round::new(RoundParams { voters, base: round_base, round_number });
 
@@ -170,7 +197,12 @@ where
 
 	async fn handle_incoming_round_message(
 		&mut self,
-		message: SignedMessage<Hash, Number, Environment::Signature, Environment::Id>,
+		message: SignedMessage<
+			Environment::Hash,
+			Environment::Number,
+			Environment::Signature,
+			Environment::Id,
+		>,
 	) -> Result<(), Environment::Error> {
 		let SignedMessage { message, signature, id } = message;
 
@@ -226,10 +258,19 @@ where
 
 	async fn handle_incoming_commit_message(
 		&mut self,
-		commit: Commit<Hash, Number, Environment::Signature, Environment::Id>,
+		commit: Commit<
+			Environment::Hash,
+			Environment::Number,
+			Environment::Signature,
+			Environment::Id,
+		>,
 	) -> Result<CommitProcessingOutcome, Environment::Error> {
+		use num::Zero;
+
 		// ignore commits for a block lower than we already finalized
-		if commit.target_number < self.round.finalized().map_or_else(Number::zero, |(_, n)| *n) {
+		if commit.target_number <
+			self.round.finalized().map_or_else(Environment::Number::zero, |(_, n)| *n)
+		{
 			return Ok(CommitProcessingOutcome::Good)
 		}
 

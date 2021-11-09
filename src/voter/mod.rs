@@ -168,32 +168,33 @@ pub struct RoundData<Id, Timer, Incoming, Outgoing> {
 }
 
 #[async_trait]
-pub trait Environment<Hash, Number>: Chain<Hash, Number> + Clone
-where
-	Hash: Eq,
-{
+pub trait Environment: Chain + Clone {
 	type Id: Clone + Debug + Ord;
 	type Signature: Clone + Eq;
 	type Error: From<Error>;
 	// FIXME: is the unpin really needed?
 	// FIXME: maybe it makes sense to make this a FusedFuture to avoid having to wrap it in Fuse<...>
 	type Timer: Future<Output = ()> + Unpin;
-	type Incoming: Stream<Item = Result<SignedMessage<Hash, Number, Self::Signature, Self::Id>, Self::Error>>
-		+ Unpin;
-	type Outgoing: Sink<Message<Hash, Number>, Error = Self::Error> + Unpin;
+	type Incoming: Stream<
+			Item = Result<
+				SignedMessage<Self::Hash, Self::Number, Self::Signature, Self::Id>,
+				Self::Error,
+			>,
+		> + Unpin;
+	type Outgoing: Sink<Message<Self::Hash, Self::Number>, Error = Self::Error> + Unpin;
 
 	async fn best_chain_containing(
 		&self,
-		base: Hash,
-	) -> Result<Option<(Hash, Number)>, Self::Error>;
+		base: Self::Hash,
+	) -> Result<Option<(Self::Hash, Self::Number)>, Self::Error>;
 
 	/// Called when a block should be finalized.
 	async fn finalize_block(
 		&self,
-		hash: Hash,
-		number: Number,
+		hash: Self::Hash,
+		number: Self::Number,
 		round: u64,
-		commit: Commit<Hash, Number, Self::Signature, Self::Id>,
+		commit: Commit<Self::Hash, Self::Number, Self::Signature, Self::Id>,
 	) -> Result<(), Self::Error>;
 
 	async fn round_data(
@@ -208,21 +209,15 @@ where
 	fn round_commit_timer(&self) -> Self::Timer;
 }
 
-type VotingRoundFuture<Hash, Number, Environment> = BoxFuture<
-	'static,
-	Result<
-		CompletableRound<Hash, Number, Environment>,
-		<Environment as EnvironmentT<Hash, Number>>::Error,
-	>,
->;
+type VotingRoundFuture<Environment> =
+	BoxFuture<'static, Result<CompletableRound<Environment>, <Environment as EnvironmentT>::Error>>;
 
-type BackgroundRoundFuture<Hash, Number, Environment> =
-	BoxFuture<'static, Result<(), <Environment as EnvironmentT<Hash, Number>>::Error>>;
+type BackgroundRoundFuture<Environment> =
+	BoxFuture<'static, Result<(), <Environment as EnvironmentT>::Error>>;
 
-pub struct Voter<Hash, Number, Environment, GlobalIncoming, GlobalOutgoing>
+pub struct Voter<Environment, GlobalIncoming, GlobalOutgoing>
 where
-	Hash: Eq + Ord,
-	Environment: EnvironmentT<Hash, Number>,
+	Environment: EnvironmentT,
 {
 	///
 	voters: VoterSet<Environment::Id>,
@@ -232,38 +227,48 @@ where
 	global_incoming: stream::Fuse<GlobalIncoming>,
 	global_outgoing: GlobalOutgoing,
 	/// The best finalized block so far.
-	best_finalized: (Hash, Number),
+	best_finalized: (Environment::Hash, Environment::Number),
 	/// The best finalized block so far that has been finalized through the normal round
 	/// lifecycle (i.e. blocks finalized through global commits are not accounted here).
-	best_finalized_in_rounds: (Hash, Number),
+	best_finalized_in_rounds: (Environment::Hash, Environment::Number),
 	/// The round number of the voting round we're currently processing.
 	current_round_number: u64,
 	/// The future representing the current voting round process.
-	voting_round: future::Fuse<VotingRoundFuture<Hash, Number, Environment>>,
+	voting_round: future::Fuse<VotingRoundFuture<Environment>>,
 	/// The future representing the background round process.
-	background_round: future::Fuse<BackgroundRoundFuture<Hash, Number, Environment>>,
+	background_round: future::Fuse<BackgroundRoundFuture<Environment>>,
 	/// A channel for sending new commits from the main voter task to the background round task.
 	to_background_round_commits_sender: mpsc::Sender<(
-		Commit<Hash, Number, Environment::Signature, Environment::Id>,
+		Commit<Environment::Hash, Environment::Number, Environment::Signature, Environment::Id>,
 		Callback<CommitProcessingOutcome>,
 	)>,
 	/// A channel for receiving new commits from the background round task.
 	from_background_round_commits_receiver: mpsc::Receiver<
-		BackgroundRoundCommit<Hash, Number, Environment::Id, Environment::Signature>,
+		BackgroundRoundCommit<
+			Environment::Hash,
+			Environment::Number,
+			Environment::Id,
+			Environment::Signature,
+		>,
 	>,
 	/// A channel to be used by background rounds to send commits to the main voter task. We keep it
 	/// here since we'll need to clone it and pass it on everytime we instantiate a new background
 	/// round.
-	from_background_round_commits_sender:
-		mpsc::Sender<BackgroundRoundCommit<Hash, Number, Environment::Id, Environment::Signature>>,
+	from_background_round_commits_sender: mpsc::Sender<
+		BackgroundRoundCommit<
+			Environment::Hash,
+			Environment::Number,
+			Environment::Id,
+			Environment::Signature,
+		>,
+	>,
 }
 
-impl<Hash, Number, Environment, GlobalIncoming, GlobalOutgoing>
-	Voter<Hash, Number, Environment, GlobalIncoming, GlobalOutgoing>
+impl<Environment, GlobalIncoming, GlobalOutgoing> Voter<Environment, GlobalIncoming, GlobalOutgoing>
 where
-	Hash: Clone + Debug + Eq + Ord + Send + Sync + 'static,
-	Number: BlockNumberOps + Send + Sync,
-	Environment: EnvironmentT<Hash, Number> + Send + Sync + 'static,
+	Environment: EnvironmentT + Send + Sync + 'static,
+	Environment::Hash: Send + Sync,
+	Environment::Number: Send + Sync,
 	Environment::Error: Send,
 	Environment::Id: Send + Sync,
 	Environment::Signature: Send + Sync,
@@ -272,12 +277,22 @@ where
 	Environment::Outgoing: Send + Sync,
 	GlobalIncoming: Stream<
 			Item = Result<
-				GlobalCommunicationIncoming<Hash, Number, Environment::Signature, Environment::Id>,
+				GlobalCommunicationIncoming<
+					Environment::Hash,
+					Environment::Number,
+					Environment::Signature,
+					Environment::Id,
+				>,
 				Environment::Error,
 			>,
 		> + Unpin,
 	GlobalOutgoing: Sink<
-			GlobalCommunicationOutgoing<Hash, Number, Environment::Signature, Environment::Id>,
+			GlobalCommunicationOutgoing<
+				Environment::Hash,
+				Environment::Number,
+				Environment::Signature,
+				Environment::Id,
+			>,
 			Error = Environment::Error,
 		> + Unpin,
 {
@@ -286,10 +301,17 @@ where
 		voters: VoterSet<Environment::Id>,
 		global_communication: (GlobalIncoming, GlobalOutgoing),
 		last_round_number: u64,
-		last_round_votes: Vec<SignedMessage<Hash, Number, Environment::Signature, Environment::Id>>,
-		last_round_base: (Hash, Number),
-		best_finalized: (Hash, Number),
-	) -> Voter<Hash, Number, Environment, GlobalIncoming, GlobalOutgoing> {
+		last_round_votes: Vec<
+			SignedMessage<
+				Environment::Hash,
+				Environment::Number,
+				Environment::Signature,
+				Environment::Id,
+			>,
+		>,
+		last_round_base: (Environment::Hash, Environment::Number),
+		best_finalized: (Environment::Hash, Environment::Number),
+	) -> Voter<Environment, GlobalIncoming, GlobalOutgoing> {
 		let last_round_state = RoundState::genesis(last_round_base.clone());
 		let (global_incoming, global_outgoing) = global_communication;
 
@@ -348,7 +370,7 @@ where
 
 	async fn handle_completable_round(
 		&mut self,
-		completable_round: CompletableRound<Hash, Number, Environment>,
+		completable_round: CompletableRound<Environment>,
 	) -> Result<(), Environment::Error> {
 		let completable_round_number = completable_round.round.number();
 		let completable_round_state = completable_round.round.state();
@@ -359,17 +381,17 @@ where
 
 		if completable_round_finalized.1 > self.best_finalized.1 {
 			self.environment.finalize_block(
-				completable_round_finalized.0.clone(),
-				completable_round_finalized.1,
-				completable_round_number,
-				Commit {
-					target_hash: completable_round_finalized.0.clone(),
-					target_number: completable_round_finalized.1,
-					precommits: completable_round.round.finalizing_precommits(&self.environment)
-						.expect("always returns none if something was finalized; this is checked above; qed")
-						.collect(),
-				},
-			).await?;
+					completable_round_finalized.0.clone(),
+					completable_round_finalized.1,
+					completable_round_number,
+					Commit {
+						target_hash: completable_round_finalized.0.clone(),
+						target_number: completable_round_finalized.1,
+						precommits: completable_round.round.finalizing_precommits(&self.environment)
+							.expect("always returns none if something was finalized; this is checked above; qed")
+							.collect(),
+					},
+				).await?;
 
 			self.best_finalized = completable_round_finalized.clone();
 		}
@@ -418,8 +440,8 @@ where
 	async fn handle_background_round_commit(
 		&mut self,
 		background_round_commit: BackgroundRoundCommit<
-			Hash,
-			Number,
+			Environment::Hash,
+			Environment::Number,
 			Environment::Id,
 			Environment::Signature,
 		>,
@@ -459,7 +481,12 @@ where
 
 	async fn handle_incoming_global_message(
 		&mut self,
-		message: GlobalCommunicationIncoming<Hash, Number, Environment::Signature, Environment::Id>,
+		message: GlobalCommunicationIncoming<
+			Environment::Hash,
+			Environment::Number,
+			Environment::Signature,
+			Environment::Id,
+		>,
 	) -> Result<(), Environment::Error> {
 		match message {
 			GlobalCommunicationIncoming::Commit(commit_round_number, commit, callback) =>
@@ -472,7 +499,12 @@ where
 
 	async fn handle_incoming_catch_up_message(
 		&mut self,
-		catch_up: CatchUp<Hash, Number, Environment::Signature, Environment::Id>,
+		catch_up: CatchUp<
+			Environment::Hash,
+			Environment::Number,
+			Environment::Signature,
+			Environment::Id,
+		>,
 		mut callback: Callback<CatchUpProcessingOutcome>,
 	) -> Result<(), Environment::Error> {
 		let round = if let Some(round) =
@@ -545,7 +577,12 @@ where
 	async fn handle_incoming_commit_message(
 		&mut self,
 		commit_round_number: u64,
-		commit: Commit<Hash, Number, Environment::Signature, Environment::Id>,
+		commit: Commit<
+			Environment::Hash,
+			Environment::Number,
+			Environment::Signature,
+			Environment::Id,
+		>,
 		mut callback: Callback<CommitProcessingOutcome>,
 	) -> Result<(), Environment::Error> {
 		match self.current_round_number.checked_sub(1) {
@@ -599,16 +636,19 @@ where
 	}
 }
 
-fn validate_catch_up<Hash, Number, Environment>(
-	catch_up: CatchUp<Hash, Number, Environment::Signature, Environment::Id>,
+fn validate_catch_up<Environment>(
+	catch_up: CatchUp<
+		Environment::Hash,
+		Environment::Number,
+		Environment::Signature,
+		Environment::Id,
+	>,
 	env: &Environment,
 	voters: &VoterSet<Environment::Id>,
 	best_round_number: u64,
-) -> Option<Round<Environment::Id, Hash, Number, Environment::Signature>>
+) -> Option<Round<Environment::Id, Environment::Hash, Environment::Number, Environment::Signature>>
 where
-	Hash: Clone + Debug + Eq + Ord,
-	Number: BlockNumberOps,
-	Environment: EnvironmentT<Hash, Number>,
+	Environment: EnvironmentT,
 {
 	if catch_up.round_number <= best_round_number {
 		trace!(target: "afg", "Ignoring because best round number is {}",

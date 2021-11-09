@@ -108,7 +108,10 @@ pub mod chain {
 		}
 	}
 
-	impl Chain<&'static str, u32> for DummyChain {
+	impl Chain for DummyChain {
+		type Hash = &'static str;
+		type Number = u32;
+
 		fn ancestry(
 			&self,
 			base: &'static str,
@@ -235,7 +238,10 @@ pub mod environment {
 		}
 	}
 
-	impl Chain<&'static str, u32> for Environment {
+	impl Chain for Environment {
+		type Hash = &'static str;
+		type Number = u32;
+
 		fn ancestry(
 			&self,
 			base: &'static str,
@@ -246,7 +252,7 @@ pub mod environment {
 	}
 
 	#[async_trait]
-	impl crate::voter::Environment<&'static str, u32> for Environment {
+	impl crate::voter::Environment for Environment {
 		type Id = Id;
 		type Signature = Signature;
 		type Error = Error;
