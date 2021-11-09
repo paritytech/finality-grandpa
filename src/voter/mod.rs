@@ -32,17 +32,18 @@ use futures::{
 	channel::mpsc, future::Fuse, pin_mut, select_biased, Future, FutureExt, Sink, SinkExt, Stream,
 	StreamExt,
 };
-use log::debug;
+use log::{debug, trace};
 
 use crate::{
-	round::State as RoundState,
+	round::{Round, RoundParams, State as RoundState},
 	validate_commit,
 	voter::{
 		background_round::BackgroundRound,
 		voting_round::{CompletableRound, VotingRound},
 	},
+	weights::VoteWeight,
 	BlockNumberOps, CatchUp, Chain, Commit, CommitValidationResult, CompactCommit, Error, Message,
-	SignedMessage, VoterSet,
+	SignedMessage, SignedPrecommit, SignedPrevote, VoterSet,
 };
 
 use self::{background_round::BackgroundRoundCommit, Environment as EnvironmentT};
@@ -279,6 +280,9 @@ where
 
 	pin_mut!(background_round, voting_round);
 
+	// track best finalized number in rounds and global finalized (through global commits)
+	// only use finalized in rounds for base
+	// use global finalized to avoid calling Environment::finalize_block
 	loop {
 		select_biased! {
 			completable_round = voting_round => {
@@ -326,8 +330,27 @@ where
 						)
 						.await?;
 					},
-					GlobalCommunicationIncoming::CatchUp(catch_up, _callback) => {
-						handle_incoming_catch_up_message(&environment, catch_up).await?;
+					GlobalCommunicationIncoming::CatchUp(catch_up, callback) => {
+						if let Some((new_voting_round, (new_background_round, new_background_round_commits))) =
+							handle_incoming_catch_up_message(
+								&environment,
+								&mut best_finalized_number,
+								&voters,
+								current_round_number,
+								catch_up,
+								callback,
+								background_round_commit_outgoing.clone(),
+							)
+							.await?
+						{
+							current_round_number = new_voting_round.round_number();
+							background_round_commits_tx = new_background_round_commits;
+
+							// we need to update futures we're polling on this select
+							// loop to point to the new rounds
+							background_round.set(new_background_round.run().fuse());
+							voting_round.set(new_voting_round.run().fuse());
+						}
 					},
 				}
 			},
@@ -518,15 +541,214 @@ where
 }
 
 async fn handle_incoming_catch_up_message<Hash, Number, Environment>(
-	_environment: &Environment,
-	_catch_up: CatchUp<Hash, Number, Environment::Signature, Environment::Id>,
+	environment: &Environment,
+	best_finalized_number: &mut Number,
+	voters: &VoterSet<Environment::Id>,
+	current_round_number: u64,
+	catch_up: CatchUp<Hash, Number, Environment::Signature, Environment::Id>,
+	mut callback: Callback<CatchUpProcessingOutcome>,
+	background_round_commits: mpsc::Sender<
+		BackgroundRoundCommit<Hash, Number, Environment::Id, Environment::Signature>,
+	>,
 ) -> Result<
-	Option<(VotingRound<Hash, Number, Environment>, BackgroundRound<Hash, Number, Environment>)>,
+	Option<(
+		VotingRound<Hash, Number, Environment>,
+		(
+			BackgroundRound<Hash, Number, Environment>,
+			mpsc::Sender<(
+				Commit<Hash, Number, Environment::Signature, Environment::Id>,
+				Callback<CommitProcessingOutcome>,
+			)>,
+		),
+	)>,
 	Environment::Error,
 >
 where
-	Hash: Eq + Ord,
+	Hash: Clone + Debug + Eq + Ord,
+	Number: BlockNumberOps,
 	Environment: EnvironmentT<Hash, Number>,
 {
-	Ok(None)
+	let round = if let Some(round) =
+		validate_catch_up(catch_up, environment, voters, current_round_number)
+	{
+		round
+	} else {
+		callback.run(CatchUpProcessingOutcome::Bad);
+		return Ok(None)
+	};
+
+	let round_data = environment.round_data(round.number()).await;
+
+	let (previous_round_state_updates_out, previous_round_state_updates_in) =
+		futures::channel::mpsc::channel(4);
+
+	let (background_round_commits_out, background_round_commits_in) =
+		futures::channel::mpsc::channel(4);
+
+	let round_number = round.number();
+	let round_state = round.state();
+	// FIXME
+	let round_state_finalized = round.state().finalized.clone().unwrap();
+
+	let background_round = BackgroundRound::new(
+		environment.clone(),
+		round_data.incoming.fuse(),
+		round,
+		previous_round_state_updates_out,
+		background_round_commits_in,
+		background_round_commits,
+	)
+	.await;
+
+	let voting_round = VotingRound::new(
+		environment.clone(),
+		voters.clone(),
+		round_number + 1,
+		// FIXME: use global value for finalized in rounds
+		round_state_finalized.clone(),
+		round_state,
+		previous_round_state_updates_in,
+	)
+	.await;
+
+	if round_state_finalized.1 > *best_finalized_number {
+		let new_best_finalized_number = round_state_finalized.1;
+
+		// environment
+		// 	.finalize_block(
+		// 		background_round_commit.commit.target_hash.clone(),
+		// 		background_round_commit.commit.target_number,
+		// 		background_round_commit.round_number,
+		// 		background_round_commit.commit,
+		// 	)
+		// 	.await?;
+
+		*best_finalized_number = new_best_finalized_number;
+	}
+
+	// FIXME: run Environment::completed hook
+
+	callback.run(CatchUpProcessingOutcome::Good);
+
+	Ok(Some((voting_round, (background_round, background_round_commits_out))))
+}
+
+fn validate_catch_up<Hash, Number, Environment>(
+	catch_up: CatchUp<Hash, Number, Environment::Signature, Environment::Id>,
+	env: &Environment,
+	voters: &VoterSet<Environment::Id>,
+	best_round_number: u64,
+) -> Option<Round<Environment::Id, Hash, Number, Environment::Signature>>
+where
+	Hash: Clone + Debug + Eq + Ord,
+	Number: BlockNumberOps,
+	Environment: EnvironmentT<Hash, Number>,
+{
+	if catch_up.round_number <= best_round_number {
+		trace!(target: "afg", "Ignoring because best round number is {}",
+			   best_round_number);
+
+		// FIXME: should be outcome::useless?
+		return None
+	}
+
+	// check threshold support in prevotes and precommits.
+	{
+		let mut map = std::collections::BTreeMap::new();
+
+		for prevote in &catch_up.prevotes {
+			if !voters.contains(&prevote.id) {
+				trace!(target: "afg",
+					   "Ignoring invalid catch up, invalid voter: {:?}",
+					   prevote.id,
+				);
+
+				return None
+			}
+
+			map.entry(prevote.id.clone()).or_insert((false, false)).0 = true;
+		}
+
+		for precommit in &catch_up.precommits {
+			if !voters.contains(&precommit.id) {
+				trace!(target: "afg",
+					   "Ignoring invalid catch up, invalid voter: {:?}",
+					   precommit.id,
+				);
+
+				return None
+			}
+
+			map.entry(precommit.id.clone()).or_insert((false, false)).1 = true;
+		}
+
+		let (pv, pc) = map.into_iter().fold(
+			(VoteWeight(0), VoteWeight(0)),
+			|(mut pv, mut pc), (id, (prevoted, precommitted))| {
+				if let Some(v) = voters.get(&id) {
+					if prevoted {
+						pv = pv + v.weight();
+					}
+
+					if precommitted {
+						pc = pc + v.weight();
+					}
+				}
+
+				(pv, pc)
+			},
+		);
+
+		let threshold = voters.threshold();
+		if pv < threshold || pc < threshold {
+			trace!(target: "afg",
+				   "Ignoring invalid catch up, missing voter threshold"
+			);
+
+			return None
+		}
+	}
+
+	let mut round = Round::new(RoundParams {
+		round_number: catch_up.round_number,
+		voters: voters.clone(),
+		base: (catch_up.base_hash.clone(), catch_up.base_number),
+	});
+
+	// import prevotes first.
+	for SignedPrevote { prevote, id, signature } in catch_up.prevotes {
+		match round.import_prevote(env, prevote, id, signature) {
+			Ok(_) => {},
+			Err(e) => {
+				trace!(target: "afg",
+					   "Ignoring invalid catch up, error importing prevote: {:?}",
+					   e,
+				);
+
+				return None
+			},
+		}
+	}
+
+	// then precommits.
+	for SignedPrecommit { precommit, id, signature } in catch_up.precommits {
+		match round.import_precommit(env, precommit, id, signature) {
+			Ok(_) => {},
+			Err(e) => {
+				trace!(target: "afg",
+					   "Ignoring invalid catch up, error importing precommit: {:?}",
+					   e,
+				);
+
+				return None
+			},
+		}
+	}
+
+	let state = round.state();
+	if !state.completable {
+		return None
+	}
+
+	Some(round)
 }
