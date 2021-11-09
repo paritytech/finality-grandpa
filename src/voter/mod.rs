@@ -25,12 +25,13 @@
 //!  votes will not be pushed to the sink. The protocol state machine still
 //!  transitions state as if the votes had been pushed out.
 
-use std::{fmt::Debug, pin::Pin};
+use std::fmt::Debug;
 
 use async_trait::async_trait;
 use futures::{
 	channel::mpsc,
-	future::{Fuse, FusedFuture},
+	future,
+	future::{BoxFuture, Fuse},
 	select_biased, stream, Future, FutureExt, Sink, SinkExt, Stream, StreamExt,
 };
 use log::{debug, trace};
@@ -207,28 +208,16 @@ where
 	fn round_commit_timer(&self) -> Self::Timer;
 }
 
-trait RoundFuture<Hash, Number, Environment, Output>:
-	Future<Output = Result<Output, Environment::Error>> + FusedFuture + Send
-where
-	Hash: Ord,
-	Environment: EnvironmentT<Hash, Number>,
-{
-}
-
-impl<Hash, Number, Environment, Output, Any> RoundFuture<Hash, Number, Environment, Output> for Any
-where
-	Hash: Ord,
-	Environment: EnvironmentT<Hash, Number>,
-	Any: Future<Output = Result<Output, Environment::Error>> + FusedFuture + Send,
-{
-}
-
-type VotingRoundFuture<Hash, Number, Environment> = Pin<
-	Box<dyn RoundFuture<Hash, Number, Environment, CompletableRound<Hash, Number, Environment>>>,
+type VotingRoundFuture<Hash, Number, Environment> = BoxFuture<
+	'static,
+	Result<
+		CompletableRound<Hash, Number, Environment>,
+		<Environment as EnvironmentT<Hash, Number>>::Error,
+	>,
 >;
 
 type BackgroundRoundFuture<Hash, Number, Environment> =
-	Pin<Box<dyn RoundFuture<Hash, Number, Environment, ()>>>;
+	BoxFuture<'static, Result<(), <Environment as EnvironmentT<Hash, Number>>::Error>>;
 
 pub struct Voter<Hash, Number, Environment, GlobalIncoming, GlobalOutgoing>
 where
@@ -250,9 +239,9 @@ where
 	/// The round number of the voting round we're currently processing.
 	current_round_number: u64,
 	/// The future representing the current voting round process.
-	voting_round: VotingRoundFuture<Hash, Number, Environment>,
+	voting_round: future::Fuse<VotingRoundFuture<Hash, Number, Environment>>,
 	/// The future representing the background round process.
-	background_round: BackgroundRoundFuture<Hash, Number, Environment>,
+	background_round: future::Fuse<BackgroundRoundFuture<Hash, Number, Environment>>,
 	/// A channel for sending new commits from the main voter task to the background round task.
 	to_background_round_commits_sender: mpsc::Sender<(
 		Commit<Hash, Number, Environment::Signature, Environment::Id>,
@@ -336,12 +325,10 @@ where
 		)
 		.await;
 
-		let voting_round = Box::pin(voting_round.run().fuse());
-		let background_round = Box::pin(
-			background_round
-				.map(|round| round.run().fuse())
-				.unwrap_or_else(Fuse::terminated),
-		);
+		let voting_round = voting_round.run().boxed().fuse();
+		let background_round = background_round
+			.map(|round| round.run().boxed().fuse())
+			.unwrap_or_else(Fuse::terminated);
 
 		Voter {
 			voters,
@@ -415,8 +402,8 @@ where
 
 		self.current_round_number = completable_round_number + 1;
 		self.to_background_round_commits_sender = to_background_round_commits_sender;
-		self.voting_round = Box::pin(voting_round.run().fuse());
-		self.background_round = Box::pin(background_round.run().fuse());
+		self.voting_round = voting_round.run().boxed().fuse();
+		self.background_round = background_round.run().boxed().fuse();
 
 		Ok(())
 	}
@@ -549,8 +536,8 @@ where
 
 		self.current_round_number = round_number + 1;
 		self.to_background_round_commits_sender = to_background_round_commits_sender;
-		self.voting_round = Box::pin(voting_round.run().fuse());
-		self.background_round = Box::pin(background_round.run().fuse());
+		self.voting_round = voting_round.run().boxed().fuse();
+		self.background_round = background_round.run().boxed().fuse();
 
 		Ok(())
 	}
