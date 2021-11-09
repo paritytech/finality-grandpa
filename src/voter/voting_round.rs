@@ -134,10 +134,6 @@ where
 		}
 	}
 
-	pub fn round_number(&self) -> u64 {
-		self.round.number()
-	}
-
 	async fn handle_incoming_message(
 		&mut self,
 		message: SignedMessage<Hash, Number, Environment::Signature, Environment::Id>,

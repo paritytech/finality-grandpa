@@ -187,6 +187,7 @@ where
 		}
 
 		let initial_round_state = self.round.state();
+
 		match message {
 			Message::Prevote(prevote) => {
 				let import_result =
@@ -212,6 +213,9 @@ where
 		}
 
 		let new_round_state = self.round.state();
+
+		// FIXME: send updates while importing commits as well
+		// move this to main loop
 		if new_round_state != initial_round_state {
 			// TODO: create timer to deal with full round state updates channel
 			let _ = self.round_state_updates.send(new_round_state).await;
