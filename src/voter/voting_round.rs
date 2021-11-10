@@ -30,9 +30,11 @@ use crate::{
 pub enum State<Timer> {
 	/// The voting round has just started.
 	Start(Timer, Timer),
-	/// Already proposed in the voting round (implies that we are the round
-	/// primary proposer).
-	Proposed(Timer, Timer),
+	/// Already tried to propose in the voting round, the boolean indicates
+	/// whether we actually proposed anything or not. Sending a primary proposal
+	/// implies that we are the round primary proposer and that the last round
+	/// estimate has not been finalized yet.
+	Proposed(Timer, Timer, bool),
 	/// Already prevoted in the voting round.
 	Prevoted(Timer),
 	/// Already precommitted in the voting round.
@@ -41,6 +43,18 @@ pub enum State<Timer> {
 	/// always switch back to it later. If it is found in the wild, that means
 	/// there was either a panic or a bug in the state machine code.
 	Poisoned,
+}
+
+impl<Timer> std::fmt::Debug for State<Timer> {
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		match self {
+			State::Start(..) => write!(f, "Start"),
+			State::Proposed(_, _, proposed) => write!(f, "Proposed({})", proposed),
+			State::Prevoted(..) => write!(f, "Prevoted"),
+			State::Precommitted => write!(f, "Precommitted"),
+			State::Poisoned => write!(f, "Poisoned"),
+		}
+	}
 }
 
 /// Whether we should vote in the current round (i.e. push votes to the sink).
@@ -464,30 +478,22 @@ where
 		}
 
 		loop {
+			log::trace!(target: "afg", "Current state: {:?}", self.state);
+
 			match mem::replace(&mut self.state, State::Poisoned) {
-				State::Start(mut prevote_timer, precommit_timer) => {
-					// TODO: move this out and simplify state machine. only needs to be tried once
+				State::Start(prevote_timer, precommit_timer) => {
+					// FIXME: explain why we only need to try this once
 					let proposed = self.primary_propose().await?;
-
-					let prevote_timer_ready = handle_inputs!(prevote_timer);
-					let prevoted = self.prevote(prevote_timer_ready).await?;
-
-					if prevoted {
-						self.state = State::Prevoted(precommit_timer);
-					} else if proposed {
-						self.state = State::Proposed(prevote_timer, precommit_timer);
-					} else {
-						self.state = State::Start(prevote_timer, precommit_timer);
-					}
+					self.state = State::Proposed(prevote_timer, precommit_timer, proposed);
 				},
-				State::Proposed(mut prevote_timer, precommit_timer) => {
+				State::Proposed(mut prevote_timer, precommit_timer, proposed) => {
 					let prevote_timer_ready = handle_inputs!(prevote_timer);
 					let prevoted = self.prevote(prevote_timer_ready).await?;
 
 					if prevoted {
 						self.state = State::Prevoted(precommit_timer);
 					} else {
-						self.state = State::Proposed(prevote_timer, precommit_timer);
+						self.state = State::Proposed(prevote_timer, precommit_timer, proposed);
 					}
 				},
 				State::Prevoted(mut precommit_timer) => {
