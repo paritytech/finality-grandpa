@@ -40,12 +40,13 @@ use crate::{
 	round::{Round, RoundParams, State as RoundState},
 	validate_commit,
 	voter::{
-		background_round::BackgroundRound,
+		background_round::{BackgroundRound, ConcludedRound},
 		voting_round::{CompletableRound, VotingRound},
 	},
 	weights::VoteWeight,
-	BlockNumberOps, CatchUp, Chain, Commit, CommitValidationResult, CompactCommit, Error, Message,
-	SignedMessage, SignedPrecommit, SignedPrevote, VoterSet,
+	CatchUp, Chain, Commit, CommitValidationResult, CompactCommit, Equivocation, Error,
+	HistoricalVotes, Message, Precommit, Prevote, PrimaryPropose, SignedMessage, SignedPrecommit,
+	SignedPrevote, VoterSet,
 };
 
 use self::{background_round::BackgroundRoundCommit, Environment as EnvironmentT};
@@ -188,15 +189,6 @@ pub trait Environment: Chain + Clone {
 		base: Self::Hash,
 	) -> Result<Option<(Self::Hash, Self::Number)>, Self::Error>;
 
-	/// Called when a block should be finalized.
-	async fn finalize_block(
-		&self,
-		hash: Self::Hash,
-		number: Self::Number,
-		round: u64,
-		commit: Commit<Self::Hash, Self::Number, Self::Signature, Self::Id>,
-	) -> Result<(), Self::Error>;
-
 	async fn round_data(
 		&self,
 		round: u64,
@@ -207,13 +199,83 @@ pub trait Environment: Chain + Clone {
 	/// commit messages that are sent (e.g. random value in [0, 1] seconds).
 	/// NOTE: this function is not async as we are returning a named future.
 	fn round_commit_timer(&self) -> Self::Timer;
+
+	/// Note that we've done a primary proposal in the given round.
+	async fn proposed(
+		&self,
+		round: u64,
+		propose: PrimaryPropose<Self::Hash, Self::Number>,
+	) -> Result<(), Self::Error>;
+
+	/// Note that we have prevoted in the given round.
+	async fn prevoted(
+		&self,
+		round: u64,
+		prevote: Prevote<Self::Hash, Self::Number>,
+	) -> Result<(), Self::Error>;
+
+	/// Note that we have precommitted in the given round.
+	async fn precommitted(
+		&self,
+		round: u64,
+		precommit: Precommit<Self::Hash, Self::Number>,
+	) -> Result<(), Self::Error>;
+
+	/// Note that a round is completed. This is called when a round has been
+	/// voted in and the next round can start. The round may continue to be run
+	/// in the background until _concluded_.
+	/// Should return an error when something fatal occurs.
+	async fn completed(
+		&self,
+		round: u64,
+		state: RoundState<Self::Hash, Self::Number>,
+		base: (Self::Hash, Self::Number),
+		votes: &HistoricalVotes<Self::Hash, Self::Number, Self::Signature, Self::Id>,
+	) -> Result<(), Self::Error>;
+
+	/// Note that a round has concluded. This is called when a round has been
+	/// `completed` and additionally, the round's estimate has been finalized.
+	///
+	/// There may be more votes than when `completed`, and it is the responsibility
+	/// of the `Environment` implementation to deduplicate. However, the caller guarantees
+	/// that the votes passed to `completed` for this round are a prefix of the votes passed here.
+	async fn concluded(
+		&self,
+		round: u64,
+		state: RoundState<Self::Hash, Self::Number>,
+		base: (Self::Hash, Self::Number),
+		votes: &HistoricalVotes<Self::Hash, Self::Number, Self::Signature, Self::Id>,
+	) -> Result<(), Self::Error>;
+
+	/// Called when a block should be finalized.
+	async fn finalize_block(
+		&self,
+		hash: Self::Hash,
+		number: Self::Number,
+		round: u64,
+		commit: Commit<Self::Hash, Self::Number, Self::Signature, Self::Id>,
+	) -> Result<(), Self::Error>;
+
+	/// Note that an equivocation in prevotes has occurred.
+	async fn prevote_equivocation(
+		&self,
+		round: u64,
+		equivocation: Equivocation<Self::Id, Prevote<Self::Hash, Self::Number>, Self::Signature>,
+	);
+
+	/// Note that an equivocation in precommits has occurred.
+	async fn precommit_equivocation(
+		&self,
+		round: u64,
+		equivocation: Equivocation<Self::Id, Precommit<Self::Hash, Self::Number>, Self::Signature>,
+	);
 }
 
 type VotingRoundFuture<Environment> =
 	BoxFuture<'static, Result<CompletableRound<Environment>, <Environment as EnvironmentT>::Error>>;
 
 type BackgroundRoundFuture<Environment> =
-	BoxFuture<'static, Result<(), <Environment as EnvironmentT>::Error>>;
+	BoxFuture<'static, Result<ConcludedRound<Environment>, <Environment as EnvironmentT>::Error>>;
 
 pub struct Voter<Environment, GlobalIncoming, GlobalOutgoing>
 where
@@ -396,6 +458,15 @@ where
 			self.best_finalized = completable_round_finalized.clone();
 		}
 
+		self.environment
+			.completed(
+				completable_round.round.number(),
+				completable_round.round.state(),
+				completable_round.round.base(),
+				completable_round.round.historical_votes(),
+			)
+			.await?;
+
 		let (previous_round_state_updates_sender, previous_round_state_updates_receiver) =
 			futures::channel::mpsc::channel(4);
 
@@ -432,9 +503,18 @@ where
 
 	async fn handle_concluded_round(
 		&mut self,
-		result: Result<(), Environment::Error>,
+		concluded_round: ConcludedRound<Environment>,
 	) -> Result<(), Environment::Error> {
-		result
+		self.environment
+			.concluded(
+				concluded_round.round.number(),
+				concluded_round.round.state(),
+				concluded_round.round.base(),
+				concluded_round.round.historical_votes(),
+			)
+			.await?;
+
+		Ok(())
 	}
 
 	async fn handle_background_round_commit(
@@ -529,6 +609,10 @@ where
 		// FIXME deal with unwrap
 		let round_state_finalized = round.state().finalized.clone().unwrap();
 
+		self.environment
+			.completed(round.number(), round.state(), round.base(), round.historical_votes())
+			.await?;
+
 		let background_round = BackgroundRound::new(
 			self.environment.clone(),
 			round_data.incoming.fuse(),
@@ -551,6 +635,7 @@ where
 		.await;
 
 		if round_state_finalized.1 > self.best_finalized.1 {
+			// FIXME: finalize block
 			// self.environment
 			// 	.finalize_block(
 			// 		background_round_commit.commit.target_hash.clone(),
@@ -563,7 +648,6 @@ where
 			self.best_finalized = round_state_finalized;
 		}
 
-		// FIXME: run Environment::completed hook
 		callback.run(CatchUpProcessingOutcome::Good);
 
 		self.current_round_number = round_number + 1;
@@ -622,8 +706,8 @@ where
 				completable_round = &mut self.voting_round => {
 					self.handle_completable_round(completable_round?).await?;
 				},
-				result = &mut self.background_round => {
-					self.handle_concluded_round(result).await?;
+				concluded_round = &mut self.background_round => {
+					self.handle_concluded_round(concluded_round?).await?;
 				},
 				background_round_commit = self.from_background_round_commits_receiver.select_next_some() => {
 					self.handle_background_round_commit(background_round_commit).await?;

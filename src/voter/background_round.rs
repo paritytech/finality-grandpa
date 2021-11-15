@@ -21,8 +21,6 @@
 //!   - Informing it of any new finalized block heights
 //!   - Passing it any validated commits (so backgrounded rounds don't produce conflicting ones)
 
-use std::fmt::Debug;
-
 use futures::{channel::mpsc, future, select, stream, FutureExt, SinkExt, StreamExt};
 use log::{debug, trace};
 
@@ -30,8 +28,16 @@ use crate::{
 	round::{Round, RoundParams, State as RoundState},
 	validate_commit,
 	voter::{Callback, CommitProcessingOutcome, Environment as EnvironmentT},
-	BlockNumberOps, Commit, Message, SignedMessage, SignedPrecommit, VoterSet,
+	Commit, Message, SignedMessage, SignedPrecommit, VoterSet,
 };
+
+pub struct ConcludedRound<Environment>
+where
+	Environment: EnvironmentT,
+{
+	pub round:
+		Round<Environment::Id, Environment::Hash, Environment::Number, Environment::Signature>,
+}
 
 pub struct BackgroundRoundCommit<Hash, Number, Id, Signature> {
 	pub round_number: u64,
@@ -317,7 +323,7 @@ where
 		true
 	}
 
-	pub async fn run(mut self) -> Result<(), Environment::Error> {
+	pub async fn run(mut self) -> Result<ConcludedRound<Environment>, Environment::Error> {
 		loop {
 			let pre_finalized = self.round.state().finalized;
 
@@ -360,6 +366,6 @@ where
 
 		debug!(target: "afg", "Concluded background round: {}", self.round.number());
 
-		Ok(())
+		Ok(ConcludedRound { round: self.round })
 	}
 }

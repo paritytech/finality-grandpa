@@ -14,7 +14,7 @@
 
 //! Logic for voting and handling messages within a single round.
 
-use std::{fmt::Debug, mem};
+use std::mem;
 
 use futures::{channel::mpsc, future, select, stream, FutureExt, SinkExt, StreamExt};
 use log::{debug, trace, warn};
@@ -23,7 +23,7 @@ use crate::{
 	round::{Round, RoundParams, State as RoundState},
 	voter::Environment as EnvironmentT,
 	voter_set::VoterSet,
-	BlockNumberOps, Error, Message, Precommit, Prevote, PrimaryPropose, SignedMessage,
+	Error, Message, Precommit, Prevote, PrimaryPropose, SignedMessage,
 };
 
 /// The state of a voting round.
@@ -177,18 +177,18 @@ where
 				let import_result =
 					self.round.import_prevote(&self.environment, prevote, id, signature)?;
 
-				if let Some(_equivocation) = import_result.equivocation {
-					// TODO: handle equivocation
-					// self.environment.prevote_equivocation(self.round.number(), equivocation);
+				if let Some(equivocation) = import_result.equivocation {
+					self.environment.prevote_equivocation(self.round.number(), equivocation).await;
 				}
 			},
 			Message::Precommit(precommit) => {
 				let import_result =
 					self.round.import_precommit(&self.environment, precommit, id, signature)?;
 
-				if let Some(_equivocation) = import_result.equivocation {
-					// TODO: handle equivocation
-					// self.environment.precommit_equivocation(self.round.number(), equivocation);
+				if let Some(equivocation) = import_result.equivocation {
+					self.environment
+						.precommit_equivocation(self.round.number(), equivocation)
+						.await;
 				}
 			},
 			Message::PrimaryPropose(primary) => {
@@ -229,8 +229,7 @@ where
 						target_number: previous_round_estimate.1,
 					};
 
-					// TODO: handle proposed hook
-					// self.environment.proposed(self.round.number(), primary.clone())?;
+					self.environment.proposed(self.round.number(), primary.clone()).await?;
 					self.outgoing.send(Message::PrimaryPropose(primary)).await?;
 
 					Ok(true)
@@ -263,10 +262,8 @@ where
 					debug!(target: "afg", "Casting prevote for round {}", self.round.number());
 
 					self.round.set_prevoted_index();
-
-					// self.env.prevoted(self.round.number(), prevote.clone())?;
+					self.environment.prevoted(self.round.number(), prevote.clone()).await?;
 					self.outgoing.send(Message::Prevote(prevote)).await?;
-					debug!("prevote sent");
 				} else {
 					// when we can't construct a prevote, we should cease voting
 					// for the rest of the round.
@@ -398,8 +395,7 @@ where
 				let precommit = self.construct_precommit();
 				self.round.set_precommitted_index();
 
-				// TODO: environment precommitted hook
-				// self.env.precommitted(self.round.number(), precommit.clone())?;
+				self.environment.precommitted(self.round.number(), precommit.clone()).await?;
 				self.outgoing.send(Message::Precommit(precommit)).await?;
 			}
 
@@ -483,6 +479,7 @@ where
 			match mem::replace(&mut self.state, State::Poisoned) {
 				State::Start(prevote_timer, precommit_timer) => {
 					// FIXME: explain why we only need to try this once
+					// add test for sending primary (i.e. previous round estimate not finalized)
 					let proposed = self.primary_propose().await?;
 					self.state = State::Proposed(prevote_timer, precommit_timer, proposed);
 				},
