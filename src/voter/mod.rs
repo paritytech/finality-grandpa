@@ -29,10 +29,12 @@ use std::fmt::Debug;
 
 use async_trait::async_trait;
 use futures::{
-	channel::mpsc,
+	channel::{mpsc, oneshot},
 	future,
-	future::{BoxFuture, Fuse},
-	select_biased, stream, Future, FutureExt, Sink, SinkExt, Stream, StreamExt,
+	future::BoxFuture,
+	select_biased,
+	stream::{self, FuturesUnordered},
+	Future, FutureExt, Sink, SinkExt, Stream, StreamExt,
 };
 use log::{debug, trace};
 
@@ -298,7 +300,8 @@ where
 	/// The future representing the current voting round process.
 	voting_round: future::Fuse<VotingRoundFuture<Environment>>,
 	/// The future representing the background round process.
-	background_round: future::Fuse<BackgroundRoundFuture<Environment>>,
+	background_rounds: FuturesUnordered<future::Fuse<BackgroundRoundFuture<Environment>>>,
+	force_conclude_background_round: Option<oneshot::Sender<()>>,
 	/// A channel for sending new commits from the main voter task to the background round task.
 	to_background_round_commits_sender: mpsc::Sender<(
 		Commit<Environment::Hash, Environment::Number, Environment::Signature, Environment::Id>,
@@ -325,6 +328,16 @@ where
 		>,
 	>,
 }
+
+// FIXME: add a way to do a clean shutdown this will make sure the background round is concluded and
+// pending commits are sent out (currently there's probably an issue with commits not being set out
+// on authority set changes, since the voter is abruptly stopped)
+
+// FIXME: create Handle interface for VotingRound and BackgroundRound, this should hide a way all the
+// channel stuff and just look like async method calls.
+// it is also possible to merge multiple channels by sending Request enum messages instead for IO
+// between actors
+// use Mutex<Sender> ToBackground message types
 
 impl<Environment, GlobalIncoming, GlobalOutgoing> Voter<Environment, GlobalIncoming, GlobalOutgoing>
 where
@@ -410,9 +423,15 @@ where
 		.await;
 
 		let voting_round = voting_round.run().boxed().fuse();
-		let background_round = background_round
-			.map(|round| round.run().boxed().fuse())
-			.unwrap_or_else(Fuse::terminated);
+		let background_rounds = FuturesUnordered::new();
+
+		let force_conclude_background_round = if let Some(background_round) = background_round {
+			let (background_round, force_conclude_sender) = background_round.start();
+			background_rounds.push(background_round.boxed().fuse());
+			Some(force_conclude_sender)
+		} else {
+			None
+		};
 
 		Voter {
 			voters,
@@ -423,7 +442,8 @@ where
 			best_finalized,
 			current_round_number: last_round_number + 1,
 			voting_round,
-			background_round,
+			background_rounds,
+			force_conclude_background_round,
 			to_background_round_commits_sender,
 			from_background_round_commits_receiver,
 			from_background_round_commits_sender,
@@ -467,6 +487,11 @@ where
 			)
 			.await?;
 
+		if let Some(sender) = self.force_conclude_background_round.take() {
+			// FIXME: deal with channel dropped error
+			let _ = sender.send(());
+		}
+
 		let (previous_round_state_updates_sender, previous_round_state_updates_receiver) =
 			futures::channel::mpsc::channel(4);
 
@@ -496,7 +521,9 @@ where
 		self.current_round_number = completable_round_number + 1;
 		self.to_background_round_commits_sender = to_background_round_commits_sender;
 		self.voting_round = voting_round.run().boxed().fuse();
-		self.background_round = background_round.run().boxed().fuse();
+		let (background_round, force_conclude_background_round) = background_round.start();
+		self.background_rounds.push(background_round.boxed().fuse());
+		self.force_conclude_background_round = Some(force_conclude_background_round);
 
 		Ok(())
 	}
@@ -613,6 +640,11 @@ where
 			.completed(round.number(), round.state(), round.base(), round.historical_votes())
 			.await?;
 
+		if let Some(sender) = self.force_conclude_background_round.take() {
+			// FIXME: deal with channel dropped error
+			let _ = sender.send(());
+		}
+
 		let background_round = BackgroundRound::new(
 			self.environment.clone(),
 			round_data.incoming.fuse(),
@@ -653,7 +685,9 @@ where
 		self.current_round_number = round_number + 1;
 		self.to_background_round_commits_sender = to_background_round_commits_sender;
 		self.voting_round = voting_round.run().boxed().fuse();
-		self.background_round = background_round.run().boxed().fuse();
+		let (background_round, force_conclude_background_round) = background_round.start();
+		self.background_rounds.push(background_round.boxed().fuse());
+		self.force_conclude_background_round = Some(force_conclude_background_round);
 
 		Ok(())
 	}
@@ -706,7 +740,7 @@ where
 				completable_round = &mut self.voting_round => {
 					self.handle_completable_round(completable_round?).await?;
 				},
-				concluded_round = &mut self.background_round => {
+				concluded_round = self.background_rounds.select_next_some() => {
 					self.handle_concluded_round(concluded_round?).await?;
 				},
 				background_round_commit = self.from_background_round_commits_receiver.select_next_some() => {

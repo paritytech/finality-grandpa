@@ -474,7 +474,7 @@ where
 		}
 
 		loop {
-			log::trace!(target: "afg", "Current state: {:?}", self.state);
+			log::trace!(target: "afg", "Round: {}, state: {:?}", self.round.number(), self.state);
 
 			match mem::replace(&mut self.state, State::Poisoned) {
 				State::Start(prevote_timer, precommit_timer) => {

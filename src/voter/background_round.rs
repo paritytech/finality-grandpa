@@ -21,7 +21,10 @@
 //!   - Informing it of any new finalized block heights
 //!   - Passing it any validated commits (so backgrounded rounds don't produce conflicting ones)
 
-use futures::{channel::mpsc, future, select, stream, FutureExt, SinkExt, StreamExt};
+use futures::{
+	channel::{mpsc, oneshot},
+	future, select, stream, FutureExt, SinkExt, StreamExt,
+};
 use log::{debug, trace};
 
 use crate::{
@@ -323,11 +326,17 @@ where
 		true
 	}
 
-	pub async fn run(mut self) -> Result<ConcludedRound<Environment>, Environment::Error> {
+	async fn run(
+		&mut self,
+		mut force_conclude_receiver: oneshot::Receiver<()>,
+	) -> Result<(), Environment::Error> {
 		loop {
 			let pre_finalized = self.round.state().finalized;
 
 			select! {
+				_ = force_conclude_receiver => {
+					break;
+				}
 				round_message = self.round_incoming.select_next_some() => {
 					self.handle_incoming_round_message(round_message?).await?;
 				},
@@ -366,6 +375,22 @@ where
 
 		debug!(target: "afg", "Concluded background round: {}", self.round.number());
 
-		Ok(ConcludedRound { round: self.round })
+		Ok(())
+	}
+
+	pub fn start(
+		mut self,
+	) -> (
+		impl futures::Future<Output = Result<ConcludedRound<Environment>, Environment::Error>>,
+		oneshot::Sender<()>,
+	) {
+		let (force_conclude_sender, force_conclude_receiver) = oneshot::channel();
+
+		let run = async {
+			self.run(force_conclude_receiver).await?;
+			Ok(ConcludedRound { round: self.round })
+		};
+
+		(run, force_conclude_sender)
 	}
 }

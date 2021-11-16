@@ -146,8 +146,10 @@ pub mod chain {
 pub mod environment {
 	use super::chain::*;
 	use crate::{
+		round::State as RoundState,
 		voter::{Callback, GlobalCommunicationIncoming, GlobalCommunicationOutgoing, RoundData},
-		Chain, Commit, Error, Message, SignedMessage,
+		Chain, Commit, Equivocation, Error, HistoricalVotes, Message, Precommit, Prevote,
+		PrimaryPropose, SignedMessage,
 	};
 	use async_trait::async_trait;
 	use futures::{
@@ -232,6 +234,14 @@ pub mod environment {
 			rx
 		}
 
+		fn set_last_completed(&self, last_completed: u64) {
+			self.inner.last_completed_and_concluded.lock().0 = last_completed;
+		}
+
+		fn set_last_concluded(&self, last_concluded: u64) {
+			self.inner.last_completed_and_concluded.lock().1 = last_concluded;
+		}
+
 		/// Get the last completed and concluded rounds.
 		pub fn last_completed_and_concluded(&self) -> (u64, u64) {
 			self.inner.last_completed_and_concluded.lock().clone()
@@ -301,27 +311,51 @@ pub mod environment {
 			Box::new(Delay::new(delay))
 		}
 
-		// 		fn completed(
-		// 			&self,
-		// 			round: u64,
-		// 			_state: RoundState<&'static str, u32>,
-		// 			_base: (&'static str, u32),
-		// 			_votes: &HistoricalVotes<&'static str, u32, Self::Signature, Self::Id>,
-		// 		) -> Result<(), Error> {
-		// 			self.last_completed_and_concluded.lock().0 = round;
-		// 			Ok(())
-		// 		}
+		async fn proposed(
+			&self,
+			_round: u64,
+			_propose: PrimaryPropose<&'static str, u32>,
+		) -> Result<(), Self::Error> {
+			Ok(())
+		}
 
-		// 		fn concluded(
-		// 			&self,
-		// 			round: u64,
-		// 			_state: RoundState<&'static str, u32>,
-		// 			_base: (&'static str, u32),
-		// 			_votes: &HistoricalVotes<&'static str, u32, Self::Signature, Self::Id>,
-		// 		) -> Result<(), Error> {
-		// 			self.last_completed_and_concluded.lock().1 = round;
-		// 			Ok(())
-		// 		}
+		async fn prevoted(
+			&self,
+			_round: u64,
+			_prevote: Prevote<&'static str, u32>,
+		) -> Result<(), Self::Error> {
+			Ok(())
+		}
+
+		async fn precommitted(
+			&self,
+			_round: u64,
+			_precommit: Precommit<&'static str, u32>,
+		) -> Result<(), Self::Error> {
+			Ok(())
+		}
+
+		async fn completed(
+			&self,
+			round: u64,
+			_state: RoundState<&'static str, u32>,
+			_base: (&'static str, u32),
+			_votes: &HistoricalVotes<&'static str, u32, Self::Signature, Self::Id>,
+		) -> Result<(), Error> {
+			self.set_last_completed(round);
+			Ok(())
+		}
+
+		async fn concluded(
+			&self,
+			round: u64,
+			_state: RoundState<&'static str, u32>,
+			_base: (&'static str, u32),
+			_votes: &HistoricalVotes<&'static str, u32, Self::Signature, Self::Id>,
+		) -> Result<(), Error> {
+			self.set_last_concluded(round);
+			Ok(())
+		}
 
 		async fn finalize_block(
 			&self,
@@ -357,45 +391,21 @@ pub mod environment {
 			Ok(())
 		}
 
-		// 		fn proposed(
-		// 			&self,
-		// 			_round: u64,
-		// 			_propose: PrimaryPropose<&'static str, u32>,
-		// 		) -> Result<(), Self::Error> {
-		// 			Ok(())
-		// 		}
+		async fn prevote_equivocation(
+			&self,
+			round: u64,
+			equivocation: Equivocation<Id, Prevote<&'static str, u32>, Signature>,
+		) {
+			panic!("Encountered equivocation in round {}: {:?}", round, equivocation);
+		}
 
-		// 		fn prevoted(
-		// 			&self,
-		// 			_round: u64,
-		// 			_prevote: Prevote<&'static str, u32>,
-		// 		) -> Result<(), Self::Error> {
-		// 			Ok(())
-		// 		}
-
-		// 		fn precommitted(
-		// 			&self,
-		// 			_round: u64,
-		// 			_precommit: Precommit<&'static str, u32>,
-		// 		) -> Result<(), Self::Error> {
-		// 			Ok(())
-		// 		}
-
-		// 		fn prevote_equivocation(
-		// 			&self,
-		// 			round: u64,
-		// 			equivocation: Equivocation<Id, Prevote<&'static str, u32>, Signature>,
-		// 		) {
-		// 			panic!("Encountered equivocation in round {}: {:?}", round, equivocation);
-		// 		}
-
-		// 		fn precommit_equivocation(
-		// 			&self,
-		// 			round: u64,
-		// 			equivocation: Equivocation<Id, Precommit<&'static str, u32>, Signature>,
-		// 		) {
-		// 			panic!("Encountered equivocation in round {}: {:?}", round, equivocation);
-		// 		}
+		async fn precommit_equivocation(
+			&self,
+			round: u64,
+			equivocation: Equivocation<Id, Precommit<&'static str, u32>, Signature>,
+		) {
+			panic!("Encountered equivocation in round {}: {:?}", round, equivocation);
+		}
 	}
 
 	// p2p network data for a round.
