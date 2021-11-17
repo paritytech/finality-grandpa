@@ -103,8 +103,6 @@ where
 	state: State<future::Fuse<Environment::Timer>>,
 	primary_block: Option<(Environment::Hash, Environment::Number)>,
 	previous_round_state: RoundState<Environment::Hash, Environment::Number>,
-	previous_round_state_updates:
-		mpsc::Receiver<RoundState<Environment::Hash, Environment::Number>>,
 }
 
 impl<Environment> VotingRound<Environment>
@@ -117,9 +115,6 @@ where
 		round_number: u64,
 		round_base: (Environment::Hash, Environment::Number),
 		previous_round_state: RoundState<Environment::Hash, Environment::Number>,
-		previous_round_state_updates: mpsc::Receiver<
-			RoundState<Environment::Hash, Environment::Number>,
-		>,
 	) -> VotingRound<Environment> {
 		let round_data = environment.round_data(round_number).await;
 		let round_params = RoundParams { voters, base: round_base, round_number };
@@ -146,7 +141,6 @@ where
 			state,
 			primary_block: None,
 			previous_round_state,
-			previous_round_state_updates,
 		}
 	}
 
@@ -446,7 +440,12 @@ where
 	}
 
 	/// Starts and processes the voting round with the given round number.
-	pub async fn run(&mut self) -> Result<(), Environment::Error> {
+	pub async fn run(
+		&mut self,
+		mut previous_round_state_updates: mpsc::Receiver<
+			RoundState<Environment::Hash, Environment::Number>,
+		>,
+	) -> Result<(), Environment::Error> {
 		macro_rules! handle_inputs {
 			($timer:expr) => {{
 				select! {
@@ -456,7 +455,7 @@ where
 						false
 					},
 					// process any state updates from the previous round
-					round_state = self.previous_round_state_updates.select_next_some() => {
+					round_state = previous_round_state_updates.select_next_some() => {
 						self.previous_round_state = round_state;
 						false
 					},
@@ -526,12 +525,15 @@ where
 
 	pub fn start(
 		mut self,
+		previous_round_state_updates: mpsc::Receiver<
+			RoundState<Environment::Hash, Environment::Number>,
+		>,
 	) -> (
 		impl futures::Future<Output = Result<CompletableRound<Environment>, Environment::Error>>,
 		VotingRoundHandle,
 	) {
 		let run = async {
-			self.run().await?;
+			self.run(previous_round_state_updates).await?;
 			Ok(CompletableRound { incoming: self.incoming, round: self.round })
 		};
 

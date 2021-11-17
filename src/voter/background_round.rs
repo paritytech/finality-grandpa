@@ -55,7 +55,6 @@ where
 	environment: Environment,
 	round_incoming: stream::Fuse<Environment::Incoming>,
 	round: Round<Environment::Id, Environment::Hash, Environment::Number, Environment::Signature>,
-	round_state_updates: mpsc::Sender<RoundState<Environment::Hash, Environment::Number>>,
 	commit_outgoing: mpsc::Sender<
 		BackgroundRoundCommit<
 			Environment::Hash,
@@ -113,6 +112,10 @@ where
 	}
 }
 
+pub type BackgroundRoundStateUpdatesReceiver<Environment> = mpsc::Receiver<
+	RoundState<<Environment as crate::Chain>::Hash, <Environment as crate::Chain>::Number>,
+>;
+
 impl<Environment> BackgroundRound<Environment>
 where
 	Environment: EnvironmentT,
@@ -126,7 +129,6 @@ where
 			Environment::Number,
 			Environment::Signature,
 		>,
-		round_state_updates: mpsc::Sender<RoundState<Environment::Hash, Environment::Number>>,
 		commit_outgoing: mpsc::Sender<
 			BackgroundRoundCommit<
 				Environment::Hash,
@@ -142,7 +144,6 @@ where
 			environment,
 			round_incoming,
 			round,
-			round_state_updates,
 			commit_outgoing,
 			commit_timer,
 			best_commit: None,
@@ -162,7 +163,6 @@ where
 				Environment::Id,
 			>,
 		>,
-		round_state_updates: mpsc::Sender<RoundState<Environment::Hash, Environment::Number>>,
 		commit_outgoing: mpsc::Sender<
 			BackgroundRoundCommit<
 				Environment::Hash,
@@ -175,14 +175,9 @@ where
 		let round_data = environment.round_data(round_number).await;
 		let round = Round::new(RoundParams { voters, base: round_base, round_number });
 
-		let mut background_round = BackgroundRound::new(
-			environment,
-			round_data.incoming.fuse(),
-			round,
-			round_state_updates,
-			commit_outgoing,
-		)
-		.await;
+		let mut background_round =
+			BackgroundRound::new(environment, round_data.incoming.fuse(), round, commit_outgoing)
+				.await;
 
 		for vote in round_votes {
 			// bail if any votes are bad.
@@ -286,10 +281,10 @@ where
 
 		// FIXME: send updates while importing commits as well
 		// move this to main loop
-		if new_round_state != initial_round_state {
-			// TODO: create timer to deal with full round state updates channel
-			let _ = self.round_state_updates.send(new_round_state).await;
-		}
+		// if new_round_state != initial_round_state {
+		// 	// TODO: create timer to deal with full round state updates channel
+		// 	let _ = self.round_state_updates.send(new_round_state).await;
+		// }
 
 		Ok(())
 	}
@@ -361,6 +356,9 @@ where
 			Callback<CommitProcessingOutcome>,
 		)>,
 		mut force_conclude_receiver: oneshot::Receiver<()>,
+		mut round_state_updates_sender: mpsc::Sender<
+			RoundState<Environment::Hash, Environment::Number>,
+		>,
 	) -> Result<(), Environment::Error> {
 		loop {
 			let pre_finalized = self.round.state().finalized;
@@ -414,13 +412,16 @@ where
 		mut self,
 	) -> (
 		impl futures::Future<Output = Result<ConcludedRound<Environment>, Environment::Error>>,
+		BackgroundRoundStateUpdatesReceiver<Environment>,
 		BackgroundRoundHandle<Environment>,
 	) {
 		let (force_conclude_sender, force_conclude_receiver) = oneshot::channel();
+		let (round_state_updates_sender, round_state_updates_receiver) = mpsc::channel(4);
 		let (commits_sender, commits_receiver) = mpsc::channel(4);
 
 		let run = async {
-			self.run(commits_receiver, force_conclude_receiver).await?;
+			self.run(commits_receiver, force_conclude_receiver, round_state_updates_sender)
+				.await?;
 			Ok(ConcludedRound { round: self.round })
 		};
 
@@ -429,6 +430,6 @@ where
 			force_conclude_sender: Some(force_conclude_sender),
 		};
 
-		(run, handle)
+		(run, round_state_updates_receiver, handle)
 	}
 }

@@ -392,10 +392,9 @@ where
 		let (global_incoming, global_outgoing) = global_communication;
 
 		let (from_background_round_commits_sender, from_background_round_commits_receiver) =
-			futures::channel::mpsc::channel(4);
+			mpsc::channel(4);
 
-		let (previous_round_state_updates_sender, previous_round_state_updates_receiver) =
-			futures::channel::mpsc::channel(4);
+		let background_rounds = FuturesUnordered::new();
 
 		let background_round = BackgroundRound::restore(
 			environment.clone(),
@@ -403,10 +402,19 @@ where
 			last_round_number,
 			last_round_base,
 			last_round_votes,
-			previous_round_state_updates_sender,
 			from_background_round_commits_sender.clone(),
 		)
 		.await;
+
+		let (background_round_state_updates_receiver, background_round_handle) =
+			if let Some(background_round) = background_round {
+				let (round, round_state_updates_receiver, handle) = background_round.start();
+				background_rounds.push(round.boxed().fuse());
+				(round_state_updates_receiver, Some(handle))
+			} else {
+				// FIXME: add comment about this edge case
+				(mpsc::channel(0).1, None)
+			};
 
 		let voting_round = VotingRound::new(
 			environment.clone(),
@@ -415,17 +423,11 @@ where
 			// TODO: use finalized from previous round state?
 			best_finalized.clone(),
 			last_round_state,
-			previous_round_state_updates_receiver,
 		)
 		.await;
 
-		let (voting_round, voting_round_handle) = voting_round.start();
-		let background_rounds = FuturesUnordered::new();
-		let background_round_handle = background_round.map(|background_round| {
-			let (round, handle) = background_round.start();
-			background_rounds.push(round.boxed().fuse());
-			handle
-		});
+		let (voting_round, voting_round_handle) =
+			voting_round.start(background_round_state_updates_receiver);
 
 		Voter {
 			voters,
@@ -481,17 +483,19 @@ where
 			)
 			.await?;
 
-		let (previous_round_state_updates_sender, previous_round_state_updates_receiver) =
-			futures::channel::mpsc::channel(4);
-
 		let background_round = BackgroundRound::new(
 			self.environment.clone(),
 			completable_round.incoming,
 			completable_round.round,
-			previous_round_state_updates_sender,
 			self.from_background_round_commits_sender.clone(),
 		)
 		.await;
+
+		let (background_round, background_round_state_updates_receiver, background_round_handle) =
+			background_round.start();
+
+		self.background_rounds.push(background_round.boxed().fuse());
+		self.background_round_handle = Some(background_round_handle);
 
 		let voting_round = VotingRound::new(
 			self.environment.clone(),
@@ -499,19 +503,16 @@ where
 			completable_round_number + 1,
 			completable_round_finalized,
 			completable_round_state,
-			previous_round_state_updates_receiver,
 		)
 		.await;
 
-		self.current_round_number = completable_round_number + 1;
+		let (voting_round, voting_round_handle) =
+			voting_round.start(background_round_state_updates_receiver);
 
-		let (voting_round, voting_round_handle) = voting_round.start();
 		self.voting_round = voting_round.boxed().fuse();
 		self.voting_round_handle = voting_round_handle;
 
-		let (background_round, background_round_handle) = background_round.start();
-		self.background_rounds.push(background_round.boxed().fuse());
-		self.background_round_handle = Some(background_round_handle);
+		self.current_round_number = completable_round_number + 1;
 
 		Ok(())
 	}
@@ -613,9 +614,6 @@ where
 
 		let round_data = self.environment.round_data(round.number()).await;
 
-		let (previous_round_state_updates_sender, previous_round_state_updates_receiver) =
-			futures::channel::mpsc::channel(4);
-
 		let round_number = round.number();
 		let round_state = round.state();
 		// FIXME deal with unwrap
@@ -629,10 +627,15 @@ where
 			self.environment.clone(),
 			round_data.incoming.fuse(),
 			round,
-			previous_round_state_updates_sender,
 			self.from_background_round_commits_sender.clone(),
 		)
 		.await;
+
+		let (background_round, background_round_state_updates_receiver, background_round_handle) =
+			background_round.start();
+
+		self.background_rounds.push(background_round.boxed().fuse());
+		self.background_round_handle = Some(background_round_handle);
 
 		let voting_round = VotingRound::new(
 			self.environment.clone(),
@@ -641,9 +644,16 @@ where
 			// FIXME: use global value for finalized in rounds
 			round_state_finalized.clone(),
 			round_state,
-			previous_round_state_updates_receiver,
 		)
 		.await;
+
+		let (voting_round, voting_round_handle) =
+			voting_round.start(background_round_state_updates_receiver);
+
+		self.voting_round = voting_round.boxed().fuse();
+		self.voting_round_handle = voting_round_handle;
+
+		self.current_round_number = round_number + 1;
 
 		if round_state_finalized.1 > self.best_finalized.1 {
 			// FIXME: finalize block
@@ -660,16 +670,6 @@ where
 		}
 
 		callback.run(CatchUpProcessingOutcome::Good);
-
-		self.current_round_number = round_number + 1;
-
-		let (voting_round, voting_round_handle) = voting_round.start();
-		self.voting_round = voting_round.boxed().fuse();
-		self.voting_round_handle = voting_round_handle;
-
-		let (background_round, background_round_handle) = background_round.start();
-		self.background_rounds.push(background_round.boxed().fuse());
-		self.background_round_handle = Some(background_round_handle);
 
 		Ok(())
 	}
