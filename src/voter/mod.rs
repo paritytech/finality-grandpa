@@ -43,7 +43,7 @@ use crate::{
 	validate_commit,
 	voter::{
 		background_round::{BackgroundRound, ConcludedRound},
-		voting_round::{CompletableRound, VotingRound},
+		voting_round::{CompletableRound, VotingRound, VotingRoundHandle},
 	},
 	weights::VoteWeight,
 	CatchUp, Chain, Commit, CommitValidationResult, CompactCommit, Equivocation, Error,
@@ -302,6 +302,8 @@ where
 	current_round_number: u64,
 	/// The future representing the current voting round process.
 	voting_round: future::Fuse<VotingRoundFuture<Environment>>,
+	/// A handle to the latest voting round.
+	voting_round_handle: VotingRoundHandle,
 	/// The future representing the background round process.
 	background_rounds: FuturesUnordered<future::Fuse<BackgroundRoundFuture<Environment>>>,
 	/// A handle to the background round.
@@ -426,7 +428,7 @@ where
 		)
 		.await;
 
-		let voting_round = voting_round.start().boxed().fuse();
+		let (voting_round, voting_round_handle) = voting_round.start();
 		let background_rounds = FuturesUnordered::new();
 		let background_round_handle = background_round.map(|background_round| {
 			let (round, handle) = background_round.start();
@@ -442,7 +444,8 @@ where
 			best_finalized_in_rounds: best_finalized.clone(),
 			best_finalized,
 			current_round_number: last_round_number + 1,
-			voting_round,
+			voting_round: voting_round.boxed().fuse(),
+			voting_round_handle,
 			background_rounds,
 			background_round_handle,
 			to_background_round_commits_sender,
@@ -516,7 +519,11 @@ where
 
 		self.current_round_number = completable_round_number + 1;
 		self.to_background_round_commits_sender = to_background_round_commits_sender;
-		self.voting_round = voting_round.start().boxed().fuse();
+
+		let (voting_round, voting_round_handle) = voting_round.start();
+		self.voting_round = voting_round.boxed().fuse();
+		self.voting_round_handle = voting_round_handle;
+
 		let (background_round, background_round_handle) = background_round.start();
 		self.background_rounds.push(background_round.boxed().fuse());
 		self.background_round_handle = Some(background_round_handle);
@@ -675,7 +682,11 @@ where
 
 		self.current_round_number = round_number + 1;
 		self.to_background_round_commits_sender = to_background_round_commits_sender;
-		self.voting_round = voting_round.start().boxed().fuse();
+
+		let (voting_round, voting_round_handle) = voting_round.start();
+		self.voting_round = voting_round.boxed().fuse();
+		self.voting_round_handle = voting_round_handle;
+
 		let (background_round, background_round_handle) = background_round.start();
 		self.background_rounds.push(background_round.boxed().fuse());
 		self.background_round_handle = Some(background_round_handle);

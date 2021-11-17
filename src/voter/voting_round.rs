@@ -89,6 +89,8 @@ where
 		Round<Environment::Id, Environment::Hash, Environment::Number, Environment::Signature>,
 }
 
+pub struct VotingRoundHandle {}
+
 pub struct VotingRound<Environment>
 where
 	Environment: EnvironmentT,
@@ -444,7 +446,7 @@ where
 	}
 
 	/// Starts and processes the voting round with the given round number.
-	pub async fn start(mut self) -> Result<CompletableRound<Environment>, Environment::Error> {
+	pub async fn run(&mut self) -> Result<(), Environment::Error> {
 		macro_rules! handle_inputs {
 			($timer:expr) => {{
 				select! {
@@ -519,6 +521,20 @@ where
 			}
 		}
 
-		Ok(CompletableRound { incoming: self.incoming, round: self.round })
+		Ok(())
+	}
+
+	pub fn start(
+		mut self,
+	) -> (
+		impl futures::Future<Output = Result<CompletableRound<Environment>, Environment::Error>>,
+		VotingRoundHandle,
+	) {
+		let run = async {
+			self.run().await?;
+			Ok(CompletableRound { incoming: self.incoming, round: self.round })
+		};
+
+		(run, VotingRoundHandle {})
 	}
 }
