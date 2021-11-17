@@ -31,7 +31,7 @@ use crate::{
 	round::{Round, RoundParams, State as RoundState},
 	validate_commit,
 	voter::{Callback, CommitProcessingOutcome, Environment as EnvironmentT},
-	Commit, Message, SignedMessage, SignedPrecommit, VoterSet,
+	Commit, ImportResult, Message, SignedMessage, SignedPrecommit, VoterSet,
 };
 
 pub struct ConcludedRound<Environment>
@@ -56,10 +56,6 @@ where
 	round_incoming: stream::Fuse<Environment::Incoming>,
 	round: Round<Environment::Id, Environment::Hash, Environment::Number, Environment::Signature>,
 	round_state_updates: mpsc::Sender<RoundState<Environment::Hash, Environment::Number>>,
-	commit_incoming: mpsc::Receiver<(
-		Commit<Environment::Hash, Environment::Number, Environment::Signature, Environment::Id>,
-		Callback<CommitProcessingOutcome>,
-	)>,
 	commit_outgoing: mpsc::Sender<
 		BackgroundRoundCommit<
 			Environment::Hash,
@@ -75,15 +71,45 @@ where
 }
 
 /// The background round is forcefully concluded when this handle is dropped.
-pub struct BackgroundRoundHandle {
+pub struct BackgroundRoundHandle<Environment>
+where
+	Environment: EnvironmentT,
+{
+	commits_sender: mpsc::Sender<(
+		Commit<Environment::Hash, Environment::Number, Environment::Signature, Environment::Id>,
+		Callback<CommitProcessingOutcome>,
+	)>,
 	force_conclude_sender: Option<oneshot::Sender<()>>,
 }
 
-impl Drop for BackgroundRoundHandle {
+impl<Environment> Drop for BackgroundRoundHandle<Environment>
+where
+	Environment: EnvironmentT,
+{
 	fn drop(&mut self) {
 		if let Some(sender) = self.force_conclude_sender.take() {
 			let _ = sender.send(());
 		}
+	}
+}
+
+impl<Environment> BackgroundRoundHandle<Environment>
+where
+	Environment: EnvironmentT,
+{
+	pub async fn send_commit(
+		&mut self,
+		commit: Commit<
+			Environment::Hash,
+			Environment::Number,
+			Environment::Signature,
+			Environment::Id,
+		>,
+		callback: Callback<CommitProcessingOutcome>,
+	) -> Result<(), Environment::Error> {
+		// FIXME: deal with error due to dropped channel
+		let _ = self.commits_sender.send((commit, callback)).await;
+		Ok(())
 	}
 }
 
@@ -101,10 +127,6 @@ where
 			Environment::Signature,
 		>,
 		round_state_updates: mpsc::Sender<RoundState<Environment::Hash, Environment::Number>>,
-		commit_incoming: mpsc::Receiver<(
-			Commit<Environment::Hash, Environment::Number, Environment::Signature, Environment::Id>,
-			Callback<CommitProcessingOutcome>,
-		)>,
 		commit_outgoing: mpsc::Sender<
 			BackgroundRoundCommit<
 				Environment::Hash,
@@ -121,7 +143,6 @@ where
 			round_incoming,
 			round,
 			round_state_updates,
-			commit_incoming,
 			commit_outgoing,
 			commit_timer,
 			best_commit: None,
@@ -142,10 +163,6 @@ where
 			>,
 		>,
 		round_state_updates: mpsc::Sender<RoundState<Environment::Hash, Environment::Number>>,
-		commit_incoming: mpsc::Receiver<(
-			Commit<Environment::Hash, Environment::Number, Environment::Signature, Environment::Id>,
-			Callback<CommitProcessingOutcome>,
-		)>,
 		commit_outgoing: mpsc::Sender<
 			BackgroundRoundCommit<
 				Environment::Hash,
@@ -163,7 +180,6 @@ where
 			round_data.incoming.fuse(),
 			round,
 			round_state_updates,
-			commit_incoming,
 			commit_outgoing,
 		)
 		.await;
@@ -340,23 +356,27 @@ where
 
 	async fn run(
 		&mut self,
+		mut commits_receiver: mpsc::Receiver<(
+			Commit<Environment::Hash, Environment::Number, Environment::Signature, Environment::Id>,
+			Callback<CommitProcessingOutcome>,
+		)>,
 		mut force_conclude_receiver: oneshot::Receiver<()>,
 	) -> Result<(), Environment::Error> {
 		loop {
 			let pre_finalized = self.round.state().finalized;
 
 			select! {
-				_ = force_conclude_receiver => {
-					break;
-				}
 				round_message = self.round_incoming.select_next_some() => {
 					self.handle_incoming_round_message(round_message?).await?;
 				},
-				(commit, mut callback) = self.commit_incoming.select_next_some() => {
+				(commit, mut callback) = commits_receiver.select_next_some() => {
 					callback.run(self.handle_incoming_commit_message(commit).await?)
 				},
 				_ = &mut self.commit_timer => {
 					self.commit().await?;
+				}
+				_ = force_conclude_receiver => {
+					break;
 				}
 			}
 
@@ -394,15 +414,21 @@ where
 		mut self,
 	) -> (
 		impl futures::Future<Output = Result<ConcludedRound<Environment>, Environment::Error>>,
-		BackgroundRoundHandle,
+		BackgroundRoundHandle<Environment>,
 	) {
 		let (force_conclude_sender, force_conclude_receiver) = oneshot::channel();
+		let (commits_sender, commits_receiver) = mpsc::channel(4);
 
 		let run = async {
-			self.run(force_conclude_receiver).await?;
+			self.run(commits_receiver, force_conclude_receiver).await?;
 			Ok(ConcludedRound { round: self.round })
 		};
 
-		(run, BackgroundRoundHandle { force_conclude_sender: Some(force_conclude_sender) })
+		let handle = BackgroundRoundHandle {
+			commits_sender,
+			force_conclude_sender: Some(force_conclude_sender),
+		};
+
+		(run, handle)
 	}
 }

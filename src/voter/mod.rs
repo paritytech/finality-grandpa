@@ -29,7 +29,7 @@ use std::fmt::Debug;
 
 use async_trait::async_trait;
 use futures::{
-	channel::{mpsc, oneshot},
+	channel::mpsc,
 	future,
 	future::BoxFuture,
 	select_biased,
@@ -307,12 +307,7 @@ where
 	/// The future representing the background round process.
 	background_rounds: FuturesUnordered<future::Fuse<BackgroundRoundFuture<Environment>>>,
 	/// A handle to the background round.
-	background_round_handle: Option<BackgroundRoundHandle>,
-	/// A channel for sending new commits from the main voter task to the background round task.
-	to_background_round_commits_sender: mpsc::Sender<(
-		Commit<Environment::Hash, Environment::Number, Environment::Signature, Environment::Id>,
-		Callback<CommitProcessingOutcome>,
-	)>,
+	background_round_handle: Option<BackgroundRoundHandle<Environment>>,
 	/// A channel for receiving new commits from the background round task.
 	from_background_round_commits_receiver: mpsc::Receiver<
 		BackgroundRoundCommit<
@@ -396,9 +391,6 @@ where
 		let last_round_state = RoundState::genesis(last_round_base.clone());
 		let (global_incoming, global_outgoing) = global_communication;
 
-		let (to_background_round_commits_sender, to_background_round_commits_receiver) =
-			futures::channel::mpsc::channel(4);
-
 		let (from_background_round_commits_sender, from_background_round_commits_receiver) =
 			futures::channel::mpsc::channel(4);
 
@@ -412,7 +404,6 @@ where
 			last_round_base,
 			last_round_votes,
 			previous_round_state_updates_sender,
-			to_background_round_commits_receiver,
 			from_background_round_commits_sender.clone(),
 		)
 		.await;
@@ -448,7 +439,6 @@ where
 			voting_round_handle,
 			background_rounds,
 			background_round_handle,
-			to_background_round_commits_sender,
 			from_background_round_commits_receiver,
 			from_background_round_commits_sender,
 		}
@@ -494,15 +484,11 @@ where
 		let (previous_round_state_updates_sender, previous_round_state_updates_receiver) =
 			futures::channel::mpsc::channel(4);
 
-		let (to_background_round_commits_sender, to_background_round_commits_receiver) =
-			futures::channel::mpsc::channel(4);
-
 		let background_round = BackgroundRound::new(
 			self.environment.clone(),
 			completable_round.incoming,
 			completable_round.round,
 			previous_round_state_updates_sender,
-			to_background_round_commits_receiver,
 			self.from_background_round_commits_sender.clone(),
 		)
 		.await;
@@ -518,7 +504,6 @@ where
 		.await;
 
 		self.current_round_number = completable_round_number + 1;
-		self.to_background_round_commits_sender = to_background_round_commits_sender;
 
 		let (voting_round, voting_round_handle) = voting_round.start();
 		self.voting_round = voting_round.boxed().fuse();
@@ -631,9 +616,6 @@ where
 		let (previous_round_state_updates_sender, previous_round_state_updates_receiver) =
 			futures::channel::mpsc::channel(4);
 
-		let (to_background_round_commits_sender, to_background_round_commits_receiver) =
-			futures::channel::mpsc::channel(4);
-
 		let round_number = round.number();
 		let round_state = round.state();
 		// FIXME deal with unwrap
@@ -648,7 +630,6 @@ where
 			round_data.incoming.fuse(),
 			round,
 			previous_round_state_updates_sender,
-			to_background_round_commits_receiver,
 			self.from_background_round_commits_sender.clone(),
 		)
 		.await;
@@ -681,7 +662,6 @@ where
 		callback.run(CatchUpProcessingOutcome::Good);
 
 		self.current_round_number = round_number + 1;
-		self.to_background_round_commits_sender = to_background_round_commits_sender;
 
 		let (voting_round, voting_round_handle) = voting_round.start();
 		self.voting_round = voting_round.boxed().fuse();
@@ -707,8 +687,10 @@ where
 	) -> Result<(), Environment::Error> {
 		match self.current_round_number.checked_sub(1) {
 			Some(background_round_number) if background_round_number == commit_round_number => {
-				// FIXME: deal with error due to dropped channel
-				let _ = self.to_background_round_commits_sender.send((commit, callback)).await;
+				if let Some(handle) = self.background_round_handle.as_mut() {
+					handle.send_commit(commit, callback).await?;
+				}
+
 				return Ok(())
 			},
 			_ => {},
