@@ -51,7 +51,10 @@ use crate::{
 	SignedPrevote, VoterSet,
 };
 
-use self::{background_round::BackgroundRoundCommit, Environment as EnvironmentT};
+use self::{
+	background_round::{BackgroundRoundCommit, BackgroundRoundHandle},
+	Environment as EnvironmentT,
+};
 
 mod background_round;
 #[cfg(test)]
@@ -301,7 +304,8 @@ where
 	voting_round: future::Fuse<VotingRoundFuture<Environment>>,
 	/// The future representing the background round process.
 	background_rounds: FuturesUnordered<future::Fuse<BackgroundRoundFuture<Environment>>>,
-	force_conclude_background_round: Option<oneshot::Sender<()>>,
+	/// A handle to the background round.
+	background_round_handle: Option<BackgroundRoundHandle>,
 	/// A channel for sending new commits from the main voter task to the background round task.
 	to_background_round_commits_sender: mpsc::Sender<(
 		Commit<Environment::Hash, Environment::Number, Environment::Signature, Environment::Id>,
@@ -422,16 +426,13 @@ where
 		)
 		.await;
 
-		let voting_round = voting_round.run().boxed().fuse();
+		let voting_round = voting_round.start().boxed().fuse();
 		let background_rounds = FuturesUnordered::new();
-
-		let force_conclude_background_round = if let Some(background_round) = background_round {
-			let (background_round, force_conclude_sender) = background_round.start();
-			background_rounds.push(background_round.boxed().fuse());
-			Some(force_conclude_sender)
-		} else {
-			None
-		};
+		let background_round_handle = background_round.map(|background_round| {
+			let (round, handle) = background_round.start();
+			background_rounds.push(round.boxed().fuse());
+			handle
+		});
 
 		Voter {
 			voters,
@@ -443,7 +444,7 @@ where
 			current_round_number: last_round_number + 1,
 			voting_round,
 			background_rounds,
-			force_conclude_background_round,
+			background_round_handle,
 			to_background_round_commits_sender,
 			from_background_round_commits_receiver,
 			from_background_round_commits_sender,
@@ -487,11 +488,6 @@ where
 			)
 			.await?;
 
-		if let Some(sender) = self.force_conclude_background_round.take() {
-			// FIXME: deal with channel dropped error
-			let _ = sender.send(());
-		}
-
 		let (previous_round_state_updates_sender, previous_round_state_updates_receiver) =
 			futures::channel::mpsc::channel(4);
 
@@ -520,10 +516,10 @@ where
 
 		self.current_round_number = completable_round_number + 1;
 		self.to_background_round_commits_sender = to_background_round_commits_sender;
-		self.voting_round = voting_round.run().boxed().fuse();
-		let (background_round, force_conclude_background_round) = background_round.start();
+		self.voting_round = voting_round.start().boxed().fuse();
+		let (background_round, background_round_handle) = background_round.start();
 		self.background_rounds.push(background_round.boxed().fuse());
-		self.force_conclude_background_round = Some(force_conclude_background_round);
+		self.background_round_handle = Some(background_round_handle);
 
 		Ok(())
 	}
@@ -640,11 +636,6 @@ where
 			.completed(round.number(), round.state(), round.base(), round.historical_votes())
 			.await?;
 
-		if let Some(sender) = self.force_conclude_background_round.take() {
-			// FIXME: deal with channel dropped error
-			let _ = sender.send(());
-		}
-
 		let background_round = BackgroundRound::new(
 			self.environment.clone(),
 			round_data.incoming.fuse(),
@@ -684,10 +675,10 @@ where
 
 		self.current_round_number = round_number + 1;
 		self.to_background_round_commits_sender = to_background_round_commits_sender;
-		self.voting_round = voting_round.run().boxed().fuse();
-		let (background_round, force_conclude_background_round) = background_round.start();
+		self.voting_round = voting_round.start().boxed().fuse();
+		let (background_round, background_round_handle) = background_round.start();
 		self.background_rounds.push(background_round.boxed().fuse());
-		self.force_conclude_background_round = Some(force_conclude_background_round);
+		self.background_round_handle = Some(background_round_handle);
 
 		Ok(())
 	}

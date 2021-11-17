@@ -444,7 +444,7 @@ where
 	}
 
 	/// Starts and processes the voting round with the given round number.
-	pub async fn run(mut self) -> Result<CompletableRound<Environment>, Environment::Error> {
+	pub async fn start(mut self) -> Result<CompletableRound<Environment>, Environment::Error> {
 		macro_rules! handle_inputs {
 			($timer:expr) => {{
 				select! {

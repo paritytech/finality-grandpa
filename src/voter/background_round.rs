@@ -74,6 +74,19 @@ where
 	>,
 }
 
+/// The background round is forcefully concluded when this handle is dropped.
+pub struct BackgroundRoundHandle {
+	force_conclude_sender: Option<oneshot::Sender<()>>,
+}
+
+impl Drop for BackgroundRoundHandle {
+	fn drop(&mut self) {
+		if let Some(sender) = self.force_conclude_sender.take() {
+			let _ = sender.send(());
+		}
+	}
+}
+
 impl<Environment> BackgroundRound<Environment>
 where
 	Environment: EnvironmentT,
@@ -382,7 +395,7 @@ where
 		mut self,
 	) -> (
 		impl futures::Future<Output = Result<ConcludedRound<Environment>, Environment::Error>>,
-		oneshot::Sender<()>,
+		BackgroundRoundHandle,
 	) {
 		let (force_conclude_sender, force_conclude_receiver) = oneshot::channel();
 
@@ -391,6 +404,6 @@ where
 			Ok(ConcludedRound { round: self.round })
 		};
 
-		(run, force_conclude_sender)
+		(run, BackgroundRoundHandle { force_conclude_sender: Some(force_conclude_sender) })
 	}
 }
