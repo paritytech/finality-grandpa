@@ -247,18 +247,18 @@ where
 				let import_result =
 					self.round.import_prevote(&self.environment, prevote, id, signature)?;
 
-				if let Some(_equivocation) = import_result.equivocation {
-					// TODO: handle equivocation
-					// self.environment.prevote_equivocation(self.round.number(), equivocation);
+				if let Some(equivocation) = import_result.equivocation {
+					self.environment.prevote_equivocation(self.round.number(), equivocation).await;
 				}
 			},
 			Message::Precommit(precommit) => {
 				let import_result =
 					self.round.import_precommit(&self.environment, precommit, id, signature)?;
 
-				if let Some(_equivocation) = import_result.equivocation {
-					// TODO: handle equivocation
-					// self.environment.precommit_equivocation(self.round.number(), equivocation);
+				if let Some(equivocation) = import_result.equivocation {
+					self.environment
+						.precommit_equivocation(self.round.number(), equivocation)
+						.await;
 				}
 			},
 			Message::PrimaryPropose(_primary) => {
@@ -301,13 +301,12 @@ where
 
 		if commit_validation_result.ghost.is_some() {
 			for SignedPrecommit { precommit, signature, id } in commit.precommits.iter().cloned() {
-				let _import_result =
+				let import_result =
 					self.round.import_precommit(&self.environment, precommit, id, signature)?;
 
-				// TODO: handle equivocations
-				// if let ImportResult { equivocation: Some(e), .. } = import_result {
-				// 	self.env.precommit_equivocation(self.round_number(), e);
-				// }
+				if let ImportResult { equivocation: Some(e), .. } = import_result {
+					self.environment.precommit_equivocation(self.round.number(), e).await;
+				}
 			}
 
 			self.best_commit = Some(commit);
