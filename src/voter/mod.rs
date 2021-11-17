@@ -408,12 +408,13 @@ where
 
 		let (background_round_state_updates_receiver, background_round_handle) =
 			if let Some(background_round) = background_round {
-				let (round, round_state_updates_receiver, handle) = background_round.start();
+				let (round, receiver, handle) = background_round.start();
 				background_rounds.push(round.boxed().fuse());
-				(round_state_updates_receiver, Some(handle))
+				(receiver, Some(handle))
 			} else {
 				// FIXME: add comment about this edge case
-				(mpsc::channel(0).1, None)
+				let (_, receiver) = mpsc::channel(0);
+				(receiver, None)
 			};
 
 		let voting_round = VotingRound::new(

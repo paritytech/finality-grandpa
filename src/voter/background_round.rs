@@ -251,8 +251,6 @@ where
 			return Ok(())
 		}
 
-		let initial_round_state = self.round.state();
-
 		match message {
 			Message::Prevote(prevote) => {
 				let import_result =
@@ -276,15 +274,6 @@ where
 				debug!("ignoring primary proposal message for background round");
 			},
 		}
-
-		let new_round_state = self.round.state();
-
-		// FIXME: send updates while importing commits as well
-		// move this to main loop
-		// if new_round_state != initial_round_state {
-		// 	// TODO: create timer to deal with full round state updates channel
-		// 	let _ = self.round_state_updates.send(new_round_state).await;
-		// }
 
 		Ok(())
 	}
@@ -361,7 +350,7 @@ where
 		>,
 	) -> Result<(), Environment::Error> {
 		loop {
-			let pre_finalized = self.round.state().finalized;
+			let initial_round_state = self.round.state();
 
 			select! {
 				round_message = self.round_incoming.select_next_some() => {
@@ -378,24 +367,40 @@ where
 				}
 			}
 
-			let post_finalized = self.round.state().finalized;
+			let new_round_state = self.round.state();
 
-			// FIXME: not being formatted
-			if pre_finalized != post_finalized {
-				if let Some(finalized) = post_finalized {
-					// FIXME: deal with error
-					let _ = self.commit_outgoing.send(BackgroundRoundCommit {
-						round_number: self.round.number(),
-						commit: Commit {
+			if new_round_state != initial_round_state {
+				if new_round_state.finalized != initial_round_state.finalized {
+					if let Some(finalized) = new_round_state.finalized.as_ref() {
+						let precommits = self
+							.round
+							.finalizing_precommits(&self.environment)
+							.expect(
+								"always returns none if something was finalized; \
+								this is checked above; qed",
+							)
+							.collect();
+
+						let commit = Commit {
 							target_hash: finalized.0.clone(),
 							target_number: finalized.1,
-							precommits: self.round.finalizing_precommits(&self.environment)
-								.expect("always returns none if something was finalized; this is checked above; qed")
-								.collect(),
-						},
-						broadcast: false,
-					}).await;
+							precommits,
+						};
+
+						// FIXME: deal with error
+						let _ = self
+							.commit_outgoing
+							.send(BackgroundRoundCommit {
+								commit,
+								round_number: self.round.number(),
+								broadcast: false,
+							})
+							.await;
+					}
 				}
+
+				// TODO: create timer to deal with full round state updates channel
+				let _ = round_state_updates_sender.send(new_round_state).await;
 			}
 
 			if self.is_concluded() {
