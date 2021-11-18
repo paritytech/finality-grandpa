@@ -22,6 +22,9 @@ scale-info = { version = "1.0", default-features = false, optional = true, featu
 ] }
 
 [dev-dependencies]
+futures = { version = "0.3", features = [
+    "thread-pool",
+] }
 env_logger = "0.9"
 futures-timer = "3.0"
 parking_lot = "0.11"
