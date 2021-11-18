@@ -20,20 +20,17 @@ use crate::{
 	},
 	voter,
 	voter::{Callback, GlobalCommunicationIncoming, Voter},
-	weights::VoteWeight,
+	weights::{VoteWeight, VoterWeight},
 	CatchUp, Commit, Message, Precommit, Prevote, SignedMessage, SignedPrecommit, VoterSet,
 };
 use futures::{
-	executor::LocalPool,
-	future,
-	future::FutureExt,
-	stream,
-	stream::StreamExt,
-	task::{Poll, SpawnExt},
+	executor::LocalPool, future, future::FutureExt, stream, stream::StreamExt, task::SpawnExt,
 };
 use futures_timer::Delay;
 use parking_lot::Mutex;
-use std::{collections::HashSet, iter, sync::Arc, time::Duration};
+use std::{collections::BTreeSet, iter, sync::Arc, time::Duration};
+
+// FIXME: clean up tests by using async await syntax
 
 #[test]
 fn talking_to_myself() {
@@ -55,7 +52,7 @@ fn talking_to_myself() {
 
 	// run voter in background. scheduling it to shut down at the end.
 	let finalized = environment.finalized_stream();
-	let voter = futures::executor::block_on(Voter::new(
+	let (voter, _) = futures::executor::block_on(Voter::new(
 		environment.clone(),
 		voters.clone(),
 		global_comms,
@@ -63,12 +60,13 @@ fn talking_to_myself() {
 		Vec::new(),
 		last_finalized,
 		last_finalized,
-	));
+	))
+	.start();
 
 	let mut pool = LocalPool::new();
 
 	pool.spawner().spawn(routing_task).unwrap();
-	pool.spawner().spawn(voter.run().map(|v| v.expect("Error voting"))).unwrap();
+	pool.spawner().spawn(voter.map(|v| v.expect("Error voting"))).unwrap();
 
 	// wait for the best block to finalize.
 	pool.run_until(
@@ -101,7 +99,7 @@ fn finalizing_at_fault_threshold() {
 
 			// run voter in background. scheduling it to shut down at the end.
 			let finalized = env.finalized_stream();
-			let voter = futures::executor::block_on(Voter::new(
+			let (voter, _) = futures::executor::block_on(Voter::new(
 				env.clone(),
 				voters.clone(),
 				network.make_global_comms(),
@@ -109,9 +107,10 @@ fn finalizing_at_fault_threshold() {
 				Vec::new(),
 				last_finalized,
 				last_finalized,
-			));
+			))
+			.start();
 
-			pool.spawner().spawn(voter.run().map(|v| v.expect("Error voting"))).unwrap();
+			pool.spawner().spawn(voter.map(|v| v.expect("Error voting"))).unwrap();
 
 			// wait for the best block to be finalized by all honest voters
 			finalized
@@ -149,7 +148,7 @@ fn multiple_rounds() {
 
 			// run voter in background. scheduling it to shut down at the end.
 			let finalized = env.finalized_stream();
-			let voter = futures::executor::block_on(Voter::new(
+			let (voter, _) = futures::executor::block_on(Voter::new(
 				env.clone(),
 				voters.clone(),
 				network.make_global_comms(),
@@ -157,9 +156,10 @@ fn multiple_rounds() {
 				Vec::new(),
 				last_finalized,
 				last_finalized,
-			));
+			))
+			.start();
 
-			pool.spawner().spawn(voter.run().map(|v| v.expect("Error voting"))).unwrap();
+			pool.spawner().spawn(voter.map(|v| v.expect("Error voting"))).unwrap();
 
 			// wait for the best block to be finalized by all honest voters
 			finalized
@@ -185,76 +185,85 @@ fn multiple_rounds() {
 	pool.run_until(future::join_all(finalized_streams.into_iter()));
 }
 
-// #[test]
-// fn exposing_voter_state() {
-// 	let num_voters = 10;
-// 	let voters_online = 7;
-// 	let voters = VoterSet::new((0..num_voters).map(|i| (Id(i), 1))).expect("nonempty");
+#[test]
+fn exposing_voter_state() {
+	let num_voters = 10;
+	let voters_online = 7;
+	let voters = VoterSet::new((0..num_voters).map(|i| (Id(i), 1))).expect("nonempty");
 
-// 	let (network, routing_task) = testing::environment::make_network();
-// 	let mut pool = LocalPool::new();
+	let (network, routing_task) = testing::environment::make_network();
+	let pool = futures::executor::ThreadPool::new().unwrap();
 
-// 	// some voters offline
-// 	let (finalized_streams, voter_states): (Vec<_>, Vec<_>) = (0..voters_online)
-// 		.map(|i| {
-// 			let local_id = Id(i);
-// 			// initialize chain
-// 			let env = Arc::new(Environment::new(network.clone(), local_id));
-// 			let last_finalized = env.with_chain(|chain| {
-// 				chain.push_blocks(GENESIS_HASH, &["A", "B", "C", "D", "E"]);
-// 				chain.last_finalized()
-// 			});
+	// some voters offline
+	let (finalized_streams, mut voter_handles): (Vec<_>, Vec<_>) = (0..voters_online)
+		.map(|i| {
+			let local_id = Id(i);
+			// initialize chain
+			let environment = Environment::new(network.clone(), local_id);
+			let last_finalized = environment.with_chain(|chain| {
+				chain.push_blocks(GENESIS_HASH, &["A", "B", "C", "D", "E"]);
+				chain.last_finalized()
+			});
 
-// 			// run voter in background. scheduling it to shut down at the end.
-// 			let finalized = env.finalized_stream();
-// 			let voter = Voter::new(
-// 				env.clone(),
-// 				voters.clone(),
-// 				network.make_global_comms(),
-// 				0,
-// 				Vec::new(),
-// 				last_finalized,
-// 				last_finalized,
-// 			);
-// 			let voter_state = voter.voter_state();
+			// run voter in background. scheduling it to shut down at the end.
+			let finalized = environment.finalized_stream();
+			let (voter, voter_handle) = futures::executor::block_on(Voter::new(
+				environment,
+				voters.clone(),
+				network.make_global_comms(),
+				0,
+				Vec::new(),
+				last_finalized,
+				last_finalized,
+			))
+			.start();
 
-// 			pool.spawner().spawn(voter.map(|v| v.expect("Error voting"))).unwrap();
+			pool.spawn_ok(voter.map(|v| v.expect("Error voting")));
 
-// 			(
-// 				// wait for the best block to be finalized by all honest voters
-// 				finalized
-// 					.take_while(|&(_, n, _)| future::ready(n < 6))
-// 					.for_each(|_| future::ready(())),
-// 				voter_state,
-// 			)
-// 		})
-// 		.unzip();
+			(
+				// wait for the best block to be finalized by all honest voters
+				finalized
+					.take_while(|&(_, n, _)| future::ready(n < 6))
+					.for_each(|_| future::ready(())),
+				voter_handle,
+			)
+		})
+		.unzip();
 
-// 	let voter_state = &voter_states[0];
-// 	voter_states.iter().all(|vs| vs.get() == voter_state.get());
+	let mut voter_handle = voter_handles[0].clone();
+	voter_handles.iter_mut().all(|h| {
+		futures::executor::block_on(h.report_voter_state()) ==
+			futures::executor::block_on(voter_handle.report_voter_state())
+	});
 
-// 	let expected_round_state = report::RoundState::<Id> {
-// 		total_weight: VoterWeight::new(num_voters.into()).expect("nonzero"),
-// 		threshold_weight: VoterWeight::new(voters_online.into()).expect("nonzero"),
-// 		prevote_current_weight: VoteWeight(0),
-// 		prevote_ids: Default::default(),
-// 		precommit_current_weight: VoteWeight(0),
-// 		precommit_ids: Default::default(),
-// 	};
+	let expected_round_state = super::report::RoundState::<Id> {
+		total_weight: VoterWeight::new(num_voters.into()).expect("nonzero"),
+		threshold_weight: VoterWeight::new(voters_online.into()).expect("nonzero"),
+		prevote_current_weight: VoteWeight(0),
+		prevote_ids: Default::default(),
+		precommit_current_weight: VoteWeight(0),
+		precommit_ids: Default::default(),
+	};
 
-// 	assert_eq!(
-// 		voter_state.get(),
-// 		report::VoterState {
-// 			background_rounds: Default::default(),
-// 			best_round: (1, expected_round_state.clone()),
-// 		}
-// 	);
+	assert_eq!(
+		futures::executor::block_on(voter_handle.report_voter_state()).unwrap(),
+		super::report::VoterState {
+			background_rounds: Default::default(),
+			best_round: (1, expected_round_state.clone()),
+		}
+	);
 
-// 	pool.spawner().spawn(routing_task.map(|_| ())).unwrap();
-// 	pool.run_until(future::join_all(finalized_streams.into_iter()));
+	pool.spawn_ok(routing_task.map(|_| ()));
 
-// 	assert_eq!(voter_state.get().best_round, (2, expected_round_state.clone()));
-// }
+	futures::executor::block_on(future::join_all(finalized_streams.into_iter()));
+
+	assert_eq!(
+		futures::executor::block_on(voter_handle.report_voter_state())
+			.unwrap()
+			.best_round,
+		(2, expected_round_state.clone())
+	);
+}
 
 #[test]
 fn broadcast_commit() {
@@ -276,7 +285,7 @@ fn broadcast_commit() {
 	});
 
 	// run voter in background. scheduling it to shut down at the end.
-	let voter = futures::executor::block_on(Voter::new(
+	let (voter, _) = futures::executor::block_on(Voter::new(
 		env.clone(),
 		voters.clone(),
 		global_comms,
@@ -284,10 +293,11 @@ fn broadcast_commit() {
 		Vec::new(),
 		last_finalized,
 		last_finalized,
-	));
+	))
+	.start();
 
 	let mut pool = LocalPool::new();
-	pool.spawner().spawn(voter.run().map(|v| v.expect("Error voting"))).unwrap();
+	pool.spawner().spawn(voter.map(|v| v.expect("Error voting"))).unwrap();
 	pool.spawner().spawn(routing_task).unwrap();
 
 	// wait for the node to broadcast a commit message
@@ -334,7 +344,7 @@ fn broadcast_commit_only_if_newer() {
 	});
 
 	// run voter in background. scheduling it to shut down at the end.
-	let voter = futures::executor::block_on(Voter::new(
+	let (voter, _) = futures::executor::block_on(Voter::new(
 		env.clone(),
 		voters.clone(),
 		global_comms,
@@ -342,13 +352,12 @@ fn broadcast_commit_only_if_newer() {
 		Vec::new(),
 		last_finalized,
 		last_finalized,
-	));
+	))
+	.start();
 
 	let mut pool = LocalPool::new();
 
-	pool.spawner()
-		.spawn(voter.run().map(|v| v.expect("Error voting: {:?}")))
-		.unwrap();
+	pool.spawner().spawn(voter.map(|v| v.expect("Error voting: {:?}"))).unwrap();
 
 	pool.spawner().spawn(routing_task.map(|_| ())).unwrap();
 
@@ -440,7 +449,7 @@ fn import_commit_for_any_round() {
 	});
 
 	// run voter in background.
-	let voter = futures::executor::block_on(Voter::new(
+	let (voter, _) = futures::executor::block_on(Voter::new(
 		env.clone(),
 		voters.clone(),
 		global_comms,
@@ -448,10 +457,11 @@ fn import_commit_for_any_round() {
 		Vec::new(),
 		last_finalized,
 		last_finalized,
-	));
+	))
+	.start();
 
 	let mut pool = LocalPool::new();
-	pool.spawner().spawn(voter.run().map(|v| v.expect("Error voting"))).unwrap();
+	pool.spawner().spawn(voter.map(|v| v.expect("Error voting"))).unwrap();
 	pool.spawner().spawn(routing_task.map(|_| ())).unwrap();
 
 	// Send the commit message.
@@ -473,116 +483,121 @@ fn import_commit_for_any_round() {
 	assert_eq!(finalized, commit);
 }
 
-// #[test]
-// fn skips_to_latest_round_after_catch_up() {
-// 	let _ = env_logger::try_init();
+#[test]
+fn skips_to_latest_round_after_catch_up() {
+	let _ = env_logger::try_init();
 
-// 	// 3 voters
-// 	let voters = VoterSet::new((0..3).map(|i| (Id(i), 1u64))).expect("nonempty");
-// 	let total_weight = voters.total_weight();
-// 	let threshold_weight = voters.threshold();
-// 	let voter_ids: HashSet<Id> = (0..3).map(|i| Id(i)).collect();
+	// 3 voters
+	let voters = VoterSet::new((0..3).map(|i| (Id(i), 1u64))).expect("nonempty");
+	let total_weight = voters.total_weight();
+	let threshold_weight = voters.threshold();
+	let voter_ids: BTreeSet<Id> = (0..3).map(|i| Id(i)).collect();
 
-// 	let (network, routing_task) = testing::environment::make_network();
-// 	let mut pool = LocalPool::new();
+	let (network, routing_task) = testing::environment::make_network();
 
-// 	pool.spawner().spawn(routing_task.map(|_| ())).unwrap();
+	// FIXME: explain why we need threadpool here
+	let pool = futures::executor::ThreadPool::new().unwrap();
 
-// 	// initialize unsynced voter at round 0
-// 	let (env, unsynced_voter) = {
-// 		let local_id = Id(4);
+	pool.spawn_ok(routing_task.map(|_| ()));
 
-// 		let env = Environment::new(network.clone(), local_id);
-// 		let last_finalized = env.with_chain(|chain| {
-// 			chain.push_blocks(GENESIS_HASH, &["A", "B", "C", "D", "E"]);
-// 			chain.last_finalized()
-// 		});
+	// initialize unsynced voter at round 0
+	let (env, unsynced_voter, mut unsynced_voter_handle) = {
+		let local_id = Id(4);
 
-// 		let voter = Voter::new(
-// 			env.clone(),
-// 			voters.clone(),
-// 			network.make_global_comms(),
-// 			0,
-// 			Vec::new(),
-// 			last_finalized,
-// 			last_finalized,
-// 		);
+		let env = Environment::new(network.clone(), local_id);
+		let last_finalized = env.with_chain(|chain| {
+			chain.push_blocks(GENESIS_HASH, &["A", "B", "C", "D", "E"]);
+			chain.last_finalized()
+		});
 
-// 		(env, voter)
-// 	};
+		let (voter, voter_handle) = futures::executor::block_on(Voter::new(
+			env.clone(),
+			voters.clone(),
+			network.make_global_comms(),
+			0,
+			Vec::new(),
+			last_finalized,
+			last_finalized,
+		))
+		.start();
 
-// 	let pv = |id| crate::SignedPrevote {
-// 		prevote: crate::Prevote { target_hash: "C", target_number: 4 },
-// 		id: Id(id),
-// 		signature: Signature(99),
-// 	};
+		(env, voter, voter_handle)
+	};
 
-// 	let pc = |id| crate::SignedPrecommit {
-// 		precommit: crate::Precommit { target_hash: "C", target_number: 4 },
-// 		id: Id(id),
-// 		signature: Signature(99),
-// 	};
+	let pv = |id| crate::SignedPrevote {
+		prevote: crate::Prevote { target_hash: "C", target_number: 4 },
+		id: Id(id),
+		signature: Signature(99),
+	};
 
-// 	// send in a catch-up message for round 5.
-// 	network.send_message(GlobalCommunicationIncoming::CatchUp(
-// 		CatchUp {
-// 			base_number: 1,
-// 			base_hash: GENESIS_HASH,
-// 			round_number: 5,
-// 			prevotes: vec![pv(0), pv(1), pv(2)],
-// 			precommits: vec![pc(0), pc(1), pc(2)],
-// 		},
-// 		Callback::Blank,
-// 	));
+	let pc = |id| crate::SignedPrecommit {
+		precommit: crate::Precommit { target_hash: "C", target_number: 4 },
+		id: Id(id),
+		signature: Signature(99),
+	};
 
-// 	let voter_state = unsynced_voter.voter_state();
-// 	assert_eq!(voter_state.get().background_rounds.get(&5), None);
+	// send in a catch-up message for round 5.
+	network.send_message(GlobalCommunicationIncoming::CatchUp(
+		CatchUp {
+			base_number: 1,
+			base_hash: GENESIS_HASH,
+			round_number: 5,
+			prevotes: vec![pv(0), pv(1), pv(2)],
+			precommits: vec![pc(0), pc(1), pc(2)],
+		},
+		Callback::Blank,
+	));
 
-// 	// spawn the voter in the background
-// 	pool.spawner().spawn(unsynced_voter.map(|_| ())).unwrap();
+	let mut voter_handle = unsynced_voter_handle.clone();
+	let mut get_voter_state =
+		|| futures::executor::block_on(unsynced_voter_handle.report_voter_state()).unwrap();
 
-// 	// wait until it's caught up, it should skip to round 6 and send a
-// 	// finality notification for the block that was finalized by catching
-// 	// up.
-// 	let caught_up = future::poll_fn(|_| {
-// 		// if voter_state.get().best_round.0 == 6 {
-// 		// 	Poll::Ready(())
-// 		// } else {
-// 		Poll::Pending
-// 		// }
-// 	});
+	// spawn the voter in the background
+	pool.spawn_ok(unsynced_voter.map(|_| ()));
 
-// 	let finalized = env.finalized_stream().take(1).into_future();
+	// wait until it's caught up, it should skip to round 6 and send a
+	// finality notification for the block that was finalized by catching
+	// up.
+	let caught_up = async move {
+		loop {
+			if voter_handle.report_voter_state().await.unwrap().best_round.0 == 6 {
+				break
+			}
 
-// 	pool.run_until(caught_up.then(|_| finalized.map(|_| ())));
+			Delay::new(Duration::from_millis(10)).await;
+		}
+	};
+	let finalized = env.finalized_stream().take(1).into_future();
 
-// 	assert_eq!(
-// 		voter_state.get().best_round,
-// 		(
-// 			6,
-// 			report::RoundState::<Id> {
-// 				total_weight,
-// 				threshold_weight,
-// 				prevote_current_weight: VoteWeight(0),
-// 				prevote_ids: Default::default(),
-// 				precommit_current_weight: VoteWeight(0),
-// 				precommit_ids: Default::default(),
-// 			}
-// 		)
-// 	);
+	futures::executor::block_on(caught_up.then(|_| finalized.map(|_| ())));
 
-// 	assert_eq!(
-// 		voter_state.get().background_rounds.get(&5),
-// 		Some(&report::RoundState::<Id> {
-// 			total_weight,
-// 			threshold_weight,
-// 			prevote_current_weight: VoteWeight(3),
-// 			prevote_ids: voter_ids.clone(),
-// 			precommit_current_weight: VoteWeight(3),
-// 			precommit_ids: voter_ids,
-// 		})
-// 	);
-// }
+	assert_eq!(
+		get_voter_state().best_round,
+		(
+			6,
+			super::report::RoundState::<Id> {
+				total_weight,
+				threshold_weight,
+				prevote_current_weight: VoteWeight(0),
+				prevote_ids: Default::default(),
+				precommit_current_weight: VoteWeight(0),
+				precommit_ids: Default::default(),
+			}
+		)
+	);
+
+	assert_eq!(
+		get_voter_state().background_rounds.get(&5),
+		Some(&super::report::RoundState::<Id> {
+			total_weight,
+			threshold_weight,
+			prevote_current_weight: VoteWeight(3),
+			prevote_ids: voter_ids.clone(),
+			precommit_current_weight: VoteWeight(3),
+			precommit_ids: voter_ids,
+		})
+	);
+}
 
 #[test]
 fn pick_up_from_prior_without_grandparent_state() {
@@ -603,7 +618,7 @@ fn pick_up_from_prior_without_grandparent_state() {
 	});
 
 	// run voter in background. scheduling it to shut down at the end.
-	let voter = futures::executor::block_on(Voter::new(
+	let (voter, _) = futures::executor::block_on(Voter::new(
 		env.clone(),
 		voters,
 		global_comms,
@@ -611,10 +626,11 @@ fn pick_up_from_prior_without_grandparent_state() {
 		Vec::new(),
 		last_finalized,
 		last_finalized,
-	));
+	))
+	.start();
 
 	let mut pool = LocalPool::new();
-	pool.spawner().spawn(voter.run().map(|v| v.expect("Error voting"))).unwrap();
+	pool.spawner().spawn(voter.map(|v| v.expect("Error voting"))).unwrap();
 	pool.spawner().spawn(routing_task.map(|_| ())).unwrap();
 
 	// wait for the best block to finalize.
@@ -692,7 +708,7 @@ fn pick_up_from_prior_with_grandparent_state() {
 		.unwrap();
 
 	// run voter in background. scheduling it to shut down at the end.
-	let voter = futures::executor::block_on(Voter::new(
+	let (voter, _) = futures::executor::block_on(Voter::new(
 		env.clone(),
 		voters,
 		global_comms,
@@ -700,10 +716,11 @@ fn pick_up_from_prior_with_grandparent_state() {
 		last_round_votes,
 		last_finalized,
 		last_finalized,
-	));
+	))
+	.start();
 
 	pool.spawner()
-		.spawn(voter.run().map(|v| v.expect("Error voting")).map(|_| ()))
+		.spawn(voter.map(|v| v.expect("Error voting")).map(|_| ()))
 		.unwrap();
 
 	pool.spawner().spawn(routing_task.map(|_| ())).unwrap();
