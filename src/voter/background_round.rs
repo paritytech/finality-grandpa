@@ -21,6 +21,8 @@
 //!   - Informing it of any new finalized block heights
 //!   - Passing it any validated commits (so backgrounded rounds don't produce conflicting ones)
 
+use std::sync::Arc;
+
 use futures::{
 	channel::{mpsc, oneshot},
 	future, select, stream, FutureExt, SinkExt, StreamExt,
@@ -70,6 +72,7 @@ where
 }
 
 /// The background round is forcefully concluded when this handle is dropped.
+#[derive(Clone)]
 pub struct BackgroundRoundHandle<Environment>
 where
 	Environment: EnvironmentT,
@@ -78,7 +81,9 @@ where
 		Commit<Environment::Hash, Environment::Number, Environment::Signature, Environment::Id>,
 		Callback<CommitProcessingOutcome>,
 	)>,
-	force_conclude_sender: Option<oneshot::Sender<()>>,
+	report_round_state_sender:
+		mpsc::Sender<oneshot::Sender<super::report::RoundState<Environment::Id>>>,
+	force_conclude_sender: Arc<Option<oneshot::Sender<()>>>,
 }
 
 impl<Environment> Drop for BackgroundRoundHandle<Environment>
@@ -86,8 +91,11 @@ where
 	Environment: EnvironmentT,
 {
 	fn drop(&mut self) {
-		if let Some(sender) = self.force_conclude_sender.take() {
-			let _ = sender.send(());
+		// FIXME: add note about this
+		if let Some(force_conclude_sender) = Arc::get_mut(&mut self.force_conclude_sender) {
+			if let Some(sender) = force_conclude_sender.take() {
+				let _ = sender.send(());
+			}
 		}
 	}
 }
@@ -109,6 +117,18 @@ where
 		// FIXME: deal with error due to dropped channel
 		let _ = self.commits_sender.send((commit, callback)).await;
 		Ok(())
+	}
+
+	pub async fn report_round_state(
+		&mut self,
+	) -> Result<super::report::RoundState<Environment::Id>, Environment::Error> {
+		let (sender, receiver) = oneshot::channel();
+
+		// FIXME: Handle error
+		let _ = self.report_round_state_sender.send(sender).await;
+		let round_state = receiver.await.unwrap();
+
+		Ok(round_state)
 	}
 }
 
@@ -315,6 +335,25 @@ where
 		Ok(commit_validation_result.into())
 	}
 
+	async fn handle_report_round_state_request(
+		&mut self,
+		response_sender: oneshot::Sender<super::report::RoundState<Environment::Id>>,
+	) -> Result<(), Environment::Error> {
+		let round_state = super::report::RoundState {
+			total_weight: self.round.voters().total_weight(),
+			threshold_weight: self.round.threshold(),
+			prevote_current_weight: self.round.prevote_participation().0,
+			prevote_ids: self.round.prevotes().into_iter().map(|pv| pv.0).collect(),
+			precommit_current_weight: self.round.precommit_participation().0,
+			precommit_ids: self.round.precommits().into_iter().map(|pv| pv.0).collect(),
+		};
+
+		// FIXME: deal with error
+		let _ = response_sender.send(round_state);
+
+		Ok(())
+	}
+
 	fn is_concluded(&self) -> bool {
 		// we haven't committed or received any valid commit for this round yet
 		if self.best_commit.is_none() {
@@ -344,6 +383,9 @@ where
 			Commit<Environment::Hash, Environment::Number, Environment::Signature, Environment::Id>,
 			Callback<CommitProcessingOutcome>,
 		)>,
+		mut report_round_state_receiver: mpsc::Receiver<
+			oneshot::Sender<super::report::RoundState<Environment::Id>>,
+		>,
 		mut force_conclude_receiver: oneshot::Receiver<()>,
 		mut round_state_updates_sender: mpsc::Sender<
 			RoundState<Environment::Hash, Environment::Number>,
@@ -358,6 +400,9 @@ where
 				},
 				(commit, mut callback) = commits_receiver.select_next_some() => {
 					callback.run(self.handle_incoming_commit_message(commit).await?)
+				},
+				response_sender = report_round_state_receiver.select_next_some() => {
+					self.handle_report_round_state_request(response_sender).await?;
 				},
 				_ = &mut self.commit_timer => {
 					self.commit().await?;
@@ -423,16 +468,23 @@ where
 		let (force_conclude_sender, force_conclude_receiver) = oneshot::channel();
 		let (round_state_updates_sender, round_state_updates_receiver) = mpsc::channel(4);
 		let (commits_sender, commits_receiver) = mpsc::channel(4);
+		let (report_round_state_sender, report_round_state_receiver) = mpsc::channel(4);
 
 		let run = async {
-			self.run(commits_receiver, force_conclude_receiver, round_state_updates_sender)
-				.await?;
+			self.run(
+				commits_receiver,
+				report_round_state_receiver,
+				force_conclude_receiver,
+				round_state_updates_sender,
+			)
+			.await?;
 			Ok(ConcludedRound { round: self.round })
 		};
 
 		let handle = BackgroundRoundHandle {
 			commits_sender,
-			force_conclude_sender: Some(force_conclude_sender),
+			report_round_state_sender,
+			force_conclude_sender: Arc::new(Some(force_conclude_sender)),
 		};
 
 		(run, round_state_updates_receiver, handle)

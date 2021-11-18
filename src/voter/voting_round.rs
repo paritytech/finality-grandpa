@@ -16,7 +16,10 @@
 
 use std::mem;
 
-use futures::{channel::mpsc, future, select, stream, FutureExt, SinkExt, StreamExt};
+use futures::{
+	channel::{mpsc, oneshot},
+	future, select, stream, FutureExt, SinkExt, StreamExt,
+};
 use log::{debug, trace, warn};
 
 use crate::{
@@ -89,8 +92,6 @@ where
 		Round<Environment::Id, Environment::Hash, Environment::Number, Environment::Signature>,
 }
 
-pub struct VotingRoundHandle {}
-
 pub struct VotingRound<Environment>
 where
 	Environment: EnvironmentT,
@@ -103,6 +104,32 @@ where
 	state: State<future::Fuse<Environment::Timer>>,
 	primary_block: Option<(Environment::Hash, Environment::Number)>,
 	previous_round_state: RoundState<Environment::Hash, Environment::Number>,
+}
+
+#[derive(Clone)]
+pub struct VotingRoundHandle<Environment>
+where
+	Environment: EnvironmentT,
+{
+	report_round_state_sender:
+		mpsc::Sender<oneshot::Sender<super::report::RoundState<Environment::Id>>>,
+}
+
+impl<Environment> VotingRoundHandle<Environment>
+where
+	Environment: EnvironmentT,
+{
+	pub async fn report_round_state(
+		&mut self,
+	) -> Result<super::report::RoundState<Environment::Id>, Environment::Error> {
+		let (sender, receiver) = oneshot::channel();
+
+		// FIXME: Handle error
+		let _ = self.report_round_state_sender.send(sender).await;
+		let round_state = receiver.await.unwrap();
+
+		Ok(round_state)
+	}
 }
 
 impl<Environment> VotingRound<Environment>
@@ -142,6 +169,25 @@ where
 			primary_block: None,
 			previous_round_state,
 		}
+	}
+
+	async fn handle_report_round_state_request(
+		&mut self,
+		response_sender: oneshot::Sender<super::report::RoundState<Environment::Id>>,
+	) -> Result<(), Environment::Error> {
+		let round_state = super::report::RoundState {
+			total_weight: self.round.voters().total_weight(),
+			threshold_weight: self.round.threshold(),
+			prevote_current_weight: self.round.prevote_participation().0,
+			prevote_ids: self.round.prevotes().into_iter().map(|pv| pv.0).collect(),
+			precommit_current_weight: self.round.precommit_participation().0,
+			precommit_ids: self.round.precommits().into_iter().map(|pv| pv.0).collect(),
+		};
+
+		// FIXME: deal with error
+		let _ = response_sender.send(round_state);
+
+		Ok(())
 	}
 
 	async fn handle_incoming_message(
@@ -442,6 +488,9 @@ where
 	/// Starts and processes the voting round with the given round number.
 	pub async fn run(
 		&mut self,
+		mut report_round_state_receiver: mpsc::Receiver<
+			oneshot::Sender<super::report::RoundState<Environment::Id>>,
+		>,
 		mut previous_round_state_updates: mpsc::Receiver<
 			RoundState<Environment::Hash, Environment::Number>,
 		>,
@@ -457,6 +506,10 @@ where
 					// process any state updates from the previous round
 					round_state = previous_round_state_updates.select_next_some() => {
 						self.previous_round_state = round_state;
+						false
+					},
+					response_sender = report_round_state_receiver.select_next_some() => {
+						self.handle_report_round_state_request(response_sender).await?;
 						false
 					},
 					// process the given timer (for prevoting or precommitting)
@@ -530,13 +583,15 @@ where
 		>,
 	) -> (
 		impl futures::Future<Output = Result<CompletableRound<Environment>, Environment::Error>>,
-		VotingRoundHandle,
+		VotingRoundHandle<Environment>,
 	) {
+		let (report_round_state_sender, report_round_state_receiver) = mpsc::channel(4);
+
 		let run = async {
-			self.run(previous_round_state_updates).await?;
+			self.run(report_round_state_receiver, previous_round_state_updates).await?;
 			Ok(CompletableRound { incoming: self.incoming, round: self.round })
 		};
 
-		(run, VotingRoundHandle {})
+		(run, VotingRoundHandle { report_round_state_sender })
 	}
 }

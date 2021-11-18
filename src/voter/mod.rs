@@ -29,7 +29,7 @@ use std::fmt::Debug;
 
 use async_trait::async_trait;
 use futures::{
-	channel::mpsc,
+	channel::{mpsc, oneshot},
 	future,
 	future::BoxFuture,
 	select_biased,
@@ -303,9 +303,9 @@ where
 	/// The future representing the current voting round process.
 	voting_round: future::Fuse<VotingRoundFuture<Environment>>,
 	/// A handle to the latest voting round.
-	voting_round_handle: VotingRoundHandle,
+	voting_round_handle: VotingRoundHandle<Environment>,
 	/// The future representing the background round process.
-	background_rounds: FuturesUnordered<future::Fuse<BackgroundRoundFuture<Environment>>>,
+	background_rounds: FuturesUnordered<BackgroundRoundFuture<Environment>>,
 	/// A handle to the background round.
 	background_round_handle: Option<BackgroundRoundHandle<Environment>>,
 	/// A channel for receiving new commits from the background round task.
@@ -328,6 +328,33 @@ where
 			Environment::Signature,
 		>,
 	>,
+	pending_report_voter_state_requests:
+		FuturesUnordered<BoxFuture<'static, Result<(), Environment::Error>>>,
+}
+
+#[derive(Clone)]
+pub struct VoterHandle<Environment>
+where
+	Environment: EnvironmentT,
+{
+	report_voter_state_sender: mpsc::Sender<oneshot::Sender<report::VoterState<Environment::Id>>>,
+}
+
+impl<Environment> VoterHandle<Environment>
+where
+	Environment: EnvironmentT,
+{
+	pub async fn report_voter_state(
+		&mut self,
+	) -> Result<report::VoterState<Environment::Id>, Environment::Error> {
+		let (sender, receiver) = oneshot::channel();
+
+		// FIXME: Handle error
+		let _ = self.report_voter_state_sender.send(sender).await;
+		let voter_state = receiver.await.unwrap();
+
+		Ok(voter_state)
+	}
 }
 
 // FIXME: add a way to do a clean shutdown this will make sure the background round is concluded and
@@ -409,7 +436,7 @@ where
 		let (background_round_state_updates_receiver, background_round_handle) =
 			if let Some(background_round) = background_round {
 				let (round, receiver, handle) = background_round.start();
-				background_rounds.push(round.boxed().fuse());
+				background_rounds.push(round.boxed());
 				(receiver, Some(handle))
 			} else {
 				// FIXME: add comment about this edge case
@@ -444,6 +471,7 @@ where
 			background_round_handle,
 			from_background_round_commits_receiver,
 			from_background_round_commits_sender,
+			pending_report_voter_state_requests: FuturesUnordered::new(),
 		}
 	}
 
@@ -459,18 +487,25 @@ where
 		debug!("completed voting round, finalized: {:?}", completable_round_finalized);
 
 		if completable_round_finalized.1 > self.best_finalized.1 {
-			self.environment.finalize_block(
+			self.environment
+				.finalize_block(
 					completable_round_finalized.0.clone(),
 					completable_round_finalized.1,
 					completable_round_number,
 					Commit {
 						target_hash: completable_round_finalized.0.clone(),
 						target_number: completable_round_finalized.1,
-						precommits: completable_round.round.finalizing_precommits(&self.environment)
-							.expect("always returns none if something was finalized; this is checked above; qed")
+						precommits: completable_round
+							.round
+							.finalizing_precommits(&self.environment)
+							.expect(
+								"always returns none if something was finalized; \
+								 this is checked above; qed",
+							)
 							.collect(),
 					},
-				).await?;
+				)
+				.await?;
 
 			self.best_finalized = completable_round_finalized.clone();
 		}
@@ -495,7 +530,7 @@ where
 		let (background_round, background_round_state_updates_receiver, background_round_handle) =
 			background_round.start();
 
-		self.background_rounds.push(background_round.boxed().fuse());
+		self.background_rounds.push(background_round.boxed());
 		self.background_round_handle = Some(background_round_handle);
 
 		let voting_round = VotingRound::new(
@@ -618,11 +653,40 @@ where
 		let round_number = round.number();
 		let round_state = round.state();
 		// FIXME deal with unwrap
-		let round_state_finalized = round.state().finalized.clone().unwrap();
+		let round_state_finalized = round.state().finalized.unwrap();
 
 		self.environment
 			.completed(round.number(), round.state(), round.base(), round.historical_votes())
 			.await?;
+
+		// FIXME: clean this up
+		if round_state_finalized.1 > self.best_finalized.1 {
+			let precommits = round
+				.finalizing_precommits(&self.environment)
+				.expect(
+					"always returns none if something was finalized; \
+								this is checked above; qed",
+				)
+				.collect();
+
+			let commit = Commit {
+				target_hash: round_state_finalized.0.clone(),
+				target_number: round_state_finalized.1,
+				precommits,
+			};
+
+			// FIXME: finalize block
+			self.environment
+				.finalize_block(
+					commit.target_hash.clone(),
+					commit.target_number,
+					round_number,
+					commit,
+				)
+				.await?;
+
+			self.best_finalized = round_state_finalized.clone();
+		}
 
 		let background_round = BackgroundRound::new(
 			self.environment.clone(),
@@ -635,7 +699,7 @@ where
 		let (background_round, background_round_state_updates_receiver, background_round_handle) =
 			background_round.start();
 
-		self.background_rounds.push(background_round.boxed().fuse());
+		self.background_rounds.push(background_round.boxed());
 		self.background_round_handle = Some(background_round_handle);
 
 		let voting_round = VotingRound::new(
@@ -643,7 +707,7 @@ where
 			self.voters.clone(),
 			round_number + 1,
 			// FIXME: use global value for finalized in rounds
-			round_state_finalized.clone(),
+			round_state_finalized,
 			round_state,
 		)
 		.await;
@@ -655,20 +719,6 @@ where
 		self.voting_round_handle = voting_round_handle;
 
 		self.current_round_number = round_number + 1;
-
-		if round_state_finalized.1 > self.best_finalized.1 {
-			// FIXME: finalize block
-			// self.environment
-			// 	.finalize_block(
-			// 		background_round_commit.commit.target_hash.clone(),
-			// 		background_round_commit.commit.target_number,
-			// 		background_round_commit.round_number,
-			// 		background_round_commit.commit,
-			// 	)
-			// 	.await?;
-
-			self.best_finalized = round_state_finalized;
-		}
 
 		callback.run(CatchUpProcessingOutcome::Good);
 
@@ -719,7 +769,49 @@ where
 		Ok(())
 	}
 
-	pub async fn run(mut self) -> Result<(), Environment::Error> {
+	async fn handle_report_voter_state_request(
+		&mut self,
+		response_sender: oneshot::Sender<report::VoterState<Environment::Id>>,
+	) -> Result<(), Environment::Error> {
+		let current_round_number = self.current_round_number;
+		let mut voting_round_handle = self.voting_round_handle.clone();
+		let mut background_round_handle = self.background_round_handle.clone();
+
+		// NOTE: we need to do this out of the voter main loop, otherwise voting
+		// round and background round won't be polled, which means the requests
+		// below will go unanswered.
+		let work = async move {
+			let voting_round_state = voting_round_handle.report_round_state().await?;
+
+			let mut background_rounds = std::collections::BTreeMap::new();
+			if let Some(handle) = background_round_handle.as_mut() {
+				let background_round_state = handle.report_round_state().await?;
+				// FIXME: check underflow
+				background_rounds.insert(current_round_number - 1, background_round_state);
+			}
+
+			let voter_state = report::VoterState {
+				best_round: (current_round_number, voting_round_state),
+				background_rounds,
+			};
+
+			// FIXME: deal with error
+			let _ = response_sender.send(voter_state);
+
+			Ok(())
+		};
+
+		self.pending_report_voter_state_requests.push(work.boxed());
+
+		Ok(())
+	}
+
+	pub async fn run(
+		&mut self,
+		mut report_voter_state_receiver: mpsc::Receiver<
+			oneshot::Sender<report::VoterState<Environment::Id>>,
+		>,
+	) -> Result<(), Environment::Error> {
 		loop {
 			select_biased! {
 				completable_round = &mut self.voting_round => {
@@ -734,8 +826,64 @@ where
 				global_message = self.global_incoming.select_next_some() => {
 					self.handle_incoming_global_message(global_message?).await?;
 				},
+				response_sender = report_voter_state_receiver.select_next_some() => {
+					self.handle_report_voter_state_request(response_sender).await?;
+				},
+				_ = self.pending_report_voter_state_requests.select_next_some() => {
+					// noop, we just need to keep polling this future to make
+					// background work progress
+				},
 			}
 		}
+	}
+
+	pub fn start(
+		mut self,
+	) -> (impl Future<Output = Result<(), Environment::Error>>, VoterHandle<Environment>) {
+		let (report_voter_state_sender, report_voter_state_receiver) = mpsc::channel(4);
+
+		(
+			async move { self.run(report_voter_state_receiver).await },
+			VoterHandle { report_voter_state_sender },
+		)
+	}
+}
+
+/// Contains a number of data transfer objects for reporting data to the outside world.
+pub mod report {
+	use std::collections::{BTreeMap, BTreeSet};
+
+	use crate::weights::{VoteWeight, VoterWeight};
+
+	/// Basic data struct for the state of a round.
+	#[derive(PartialEq, Eq, Clone)]
+	#[cfg_attr(test, derive(Debug))]
+	pub struct RoundState<Id> {
+		/// Total weight of all votes.
+		pub total_weight: VoterWeight,
+		/// The threshold voter weight.
+		pub threshold_weight: VoterWeight,
+
+		/// Current weight of the prevotes.
+		pub prevote_current_weight: VoteWeight,
+		/// The identities of nodes that have cast prevotes so far.
+		pub prevote_ids: BTreeSet<Id>,
+
+		/// Current weight of the precommits.
+		pub precommit_current_weight: VoteWeight,
+		/// The identities of nodes that have cast precommits so far.
+		pub precommit_ids: BTreeSet<Id>,
+	}
+
+	/// Basic data struct for the current state of the voter in a form suitable
+	/// for passing on to other systems.
+	#[derive(PartialEq, Eq)]
+	#[cfg_attr(test, derive(Debug))]
+	pub struct VoterState<Id> {
+		/// Voting rounds running in the background.
+		pub background_rounds: BTreeMap<u64, RoundState<Id>>,
+		/// The current best voting round.
+		pub best_round: (u64, RoundState<Id>),
 	}
 }
 
