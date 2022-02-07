@@ -18,7 +18,7 @@ parity-scale-codec = { version = "2.0", default-features = false, optional = tru
 ] }
 parking_lot = { version = "0.11", optional = true }
 rand = { version = "0.8", optional = true }
-scale-info = { version = "1.0", default-features = false, optional = true, features = [
+scale-info = { version = "2.0", default-features = false, optional = true, features = [
     "derive",
 ] }
 
