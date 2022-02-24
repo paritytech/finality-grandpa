@@ -1356,7 +1356,7 @@ mod tests {
 							})
 							.for_each(|_| future::ready(()))
 					})
-					.then(|_| {
+					.then(move |_| {
 						// send our commit
 						stream::iter(iter::once(Ok(CommunicationOut::Commit(commit.0, commit.1))))
 							.forward(commits_sink)
