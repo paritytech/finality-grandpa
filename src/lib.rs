@@ -378,20 +378,20 @@ impl<H: Clone, N: Clone, S, Id> From<Commit<H, N, S, Id>> for CompactCommit<H, N
 
 /// Struct returned from `validate_commit` function with information
 /// about the validation result.
-pub struct CommitValidationResult<H, N> {
-	ghost: Option<(H, N)>,
+#[derive(Debug)]
+pub struct CommitValidationResult {
+	valid: bool,
 	num_precommits: usize,
 	num_duplicated_precommits: usize,
 	num_equivocations: usize,
 	num_invalid_voters: usize,
 }
 
-impl<H, N> CommitValidationResult<H, N> {
-	/// Returns the commit GHOST i.e. the block with highest number for which
-	/// the cumulative votes of descendents and itself reach finalization
-	/// threshold.
-	pub fn ghost(&self) -> Option<&(H, N)> {
-		self.ghost.as_ref()
+impl CommitValidationResult {
+	/// Returns `true` if the commit is valid, which implies that the target
+	/// block in the commit is finalized.
+	pub fn is_valid(&self) -> bool {
+		self.valid
 	}
 
 	/// Returns the number of precommits in the commit.
@@ -415,10 +415,10 @@ impl<H, N> CommitValidationResult<H, N> {
 	}
 }
 
-impl<H, N> Default for CommitValidationResult<H, N> {
+impl Default for CommitValidationResult {
 	fn default() -> Self {
 		CommitValidationResult {
-			ghost: None,
+			valid: false,
 			num_precommits: 0,
 			num_duplicated_precommits: 0,
 			num_equivocations: 0,
@@ -427,19 +427,23 @@ impl<H, N> Default for CommitValidationResult<H, N> {
 	}
 }
 
-/// Validates a GRANDPA commit message and returns the ghost calculated using
-/// the precommits in the commit message and using the commit target as a
-/// base.
+/// Validates a GRANDPA commit message.
+///
+/// For a commit to be valid the round ghost is calculated using the precommits
+/// in the commit message, making sure that it is exists and that it is the same
+/// as the commit target. The precommit with the lowest block number is used as
+/// the round base.
 ///
 /// Signatures on precommits are assumed to have been checked.
 ///
-/// Duplicate votes or votes from voters not in the voter-set will be ignored, but it is recommended
-/// for the caller of this function to remove those at signature-verification time.
+/// Duplicate votes or votes from voters not in the voter-set will be ignored,
+/// but it is recommended for the caller of this function to remove those at
+/// signature-verification time.
 pub fn validate_commit<H, N, S, I, C: Chain<H, N>>(
 	commit: &Commit<H, N, S, I>,
 	voters: &VoterSet<I>,
 	chain: &C,
-) -> Result<CommitValidationResult<H, N>, crate::Error>
+) -> Result<CommitValidationResult, crate::Error>
 where
 	H: Clone + Eq + Ord + std::fmt::Debug,
 	N: Copy + BlockNumberOps + std::fmt::Debug,
@@ -449,28 +453,37 @@ where
 	let mut validation_result =
 		CommitValidationResult { num_precommits: commit.precommits.len(), ..Default::default() };
 
-	// check that all precommits are for blocks higher than the target
-	// commit block, and that they're its descendents
-	let all_precommits_higher_than_target = commit.precommits.iter().all(|signed| {
-		signed.precommit.target_number >= commit.target_number &&
-			chain.is_equal_or_descendent_of(
-				commit.target_hash.clone(),
-				signed.precommit.target_hash.clone(),
-			)
+	// the base of the round should be the lowest block for which we can find a
+	// precommit (any vote would only have been accepted if it was targetting a
+	// block higher or equal to the round base)
+	let base = match commit
+		.precommits
+		.iter()
+		.map(|signed| &signed.precommit)
+		.min_by_key(|precommit| precommit.target_number)
+		.map(|precommit| (precommit.target_hash.clone(), precommit.target_number))
+	{
+		None => return Ok(validation_result),
+		Some(base) => base,
+	};
+
+	// check that all precommits are for blocks that are equal to or descendants
+	// of the round base
+	let all_precommits_higher_than_base = commit.precommits.iter().all(|signed| {
+		chain.is_equal_or_descendent_of(base.0.clone(), signed.precommit.target_hash.clone())
 	});
 
-	if !all_precommits_higher_than_target {
+	if !all_precommits_higher_than_base {
 		return Ok(validation_result)
 	}
 
 	let mut equivocated = std::collections::BTreeSet::new();
 
-	// Add all precommits to the round with correct counting logic
-	// using the commit target as a base.
+	// add all precommits to the round with correct counting logic
 	let mut round = round::Round::new(round::RoundParams {
 		round_number: 0, // doesn't matter here.
 		voters: voters.clone(),
-		base: (commit.target_hash.clone(), commit.target_number),
+		base,
 	});
 
 	for SignedPrecommit { precommit, id, signature } in &commit.precommits {
@@ -493,9 +506,18 @@ where
 		}
 	}
 
-	// if a ghost is found then it must be equal or higher than the commit
-	// target, otherwise the commit is invalid
-	validation_result.ghost = round.precommit_ghost();
+	// for the commit to be valid, then a precommit ghost must be found for the
+	// round and it must be equal to the commit target
+	match round.precommit_ghost() {
+		Some((precommit_ghost_hash, precommit_ghost_number))
+			if precommit_ghost_hash == commit.target_hash &&
+				precommit_ghost_number == commit.target_number =>
+		{
+			validation_result.valid = true;
+		},
+		_ => {},
+	}
+
 	Ok(validation_result)
 }
 
@@ -503,11 +525,11 @@ where
 /// the given `CommitValidationResult`. Outcome is bad if ghost is undefined,
 /// good otherwise.
 #[cfg(feature = "std")]
-pub fn process_commit_validation_result<H, N>(
-	validation_result: CommitValidationResult<H, N>,
+pub fn process_commit_validation_result(
+	validation_result: CommitValidationResult,
 	mut callback: voter::Callback<voter::CommitProcessingOutcome>,
 ) {
-	if validation_result.ghost.is_some() {
+	if validation_result.is_valid() {
 		callback.run(voter::CommitProcessingOutcome::Good(voter::GoodCommit::new()))
 	} else {
 		callback.run(voter::CommitProcessingOutcome::Bad(voter::BadCommit::from(validation_result)))

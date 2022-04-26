@@ -192,7 +192,7 @@ impl CommitProcessingOutcome {
 
 	/// Returns a `Bad` instance of commit processing outcome's opaque type. Useful for testing.
 	pub fn bad() -> CommitProcessingOutcome {
-		CommitProcessingOutcome::Bad(CommitValidationResult::<(), ()>::default().into())
+		CommitProcessingOutcome::Bad(CommitValidationResult::default().into())
 	}
 }
 
@@ -240,8 +240,8 @@ impl BadCommit {
 	}
 }
 
-impl<H, N> From<CommitValidationResult<H, N>> for BadCommit {
-	fn from(r: CommitValidationResult<H, N>) -> Self {
+impl From<CommitValidationResult> for BadCommit {
+	fn from(r: CommitValidationResult) -> Self {
 		BadCommit {
 			num_precommits: r.num_precommits,
 			num_duplicated_precommits: r.num_duplicated_precommits,
@@ -658,24 +658,24 @@ where
 					// if the commit is for a background round dispatch to round committer.
 					// that returns Some if there wasn't one.
 					if let Some(commit) = inner.past_rounds.import_commit(round_number, commit) {
-						// otherwise validate the commit and signal the finalized block
-						// (if any) to the environment
+						// otherwise validate the commit and signal the finalized block from the
+						// commit to the environment (if valid and higher than current finalized)
 						let validation_result = validate_commit(&commit, &self.voters, &*self.env)?;
 
-						if let Some((finalized_hash, finalized_number)) = validation_result.ghost {
+						if validation_result.is_valid() {
 							// this can't be moved to a function because the compiler
 							// will complain about getting two mutable borrows to self
 							// (due to the call to `self.rounds.get_mut`).
 							let last_finalized_number = &mut self.last_finalized_number;
 
 							// clean up any background rounds
-							inner.past_rounds.update_finalized(finalized_number);
+							inner.past_rounds.update_finalized(commit.target_number);
 
-							if finalized_number > *last_finalized_number {
-								*last_finalized_number = finalized_number;
+							if commit.target_number > *last_finalized_number {
+								*last_finalized_number = commit.target_number;
 								self.env.finalize_block(
-									finalized_hash,
-									finalized_number,
+									commit.target_hash.clone(),
+									commit.target_number,
 									round_number,
 									commit,
 								)?;
