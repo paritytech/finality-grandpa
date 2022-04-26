@@ -597,6 +597,8 @@ impl<H, N, S, Id> HistoricalVotes<H, N, S, Id> {
 
 #[cfg(test)]
 mod tests {
+	use super::*;
+	use crate::testing::chain::{DummyChain, GENESIS_HASH};
 
 	#[cfg(feature = "derive-codec")]
 	#[test]
@@ -615,5 +617,98 @@ mod tests {
 		let encoded = signed.encode();
 		let signed2 = crate::SignedMessage::decode(&mut &encoded[..]).unwrap();
 		assert_eq!(signed, signed2);
+	}
+
+	#[test]
+	fn commit_validation() {
+		let mut chain = DummyChain::new();
+		chain.push_blocks(GENESIS_HASH, &["A"]);
+
+		let voters = VoterSet::new((1..=100).map(|id| (id, 1))).unwrap();
+
+		let make_precommit = |target_hash, target_number, id| SignedPrecommit {
+			precommit: Precommit { target_hash, target_number },
+			id,
+			signature: (),
+		};
+
+		let mut precommits = Vec::new();
+		for id in 1..67 {
+			let precommit = make_precommit("C", 3, id);
+			precommits.push(precommit);
+		}
+
+		// we have still not reached threshold with 66/100 votes, so the commit
+		// is not valid.
+		let result = validate_commit(
+			&Commit { target_hash: "C", target_number: 3, precommits: precommits.clone() },
+			&voters,
+			&chain,
+		)
+		.unwrap();
+
+		assert!(!result.is_valid());
+
+		// after adding one more commit targetting the same block we are over
+		// the finalization threshold and the commit should be valid
+		precommits.push(make_precommit("C", 3, 67));
+
+		let result = validate_commit(
+			&Commit { target_hash: "C", target_number: 3, precommits: precommits.clone() },
+			&voters,
+			&chain,
+		)
+		.unwrap();
+
+		assert!(result.is_valid());
+
+		// the commit target must be the exact same as the round precommit ghost
+		// that is calculated with the given precommits for the commit to be valid
+		let result = validate_commit(
+			&Commit { target_hash: "B", target_number: 2, precommits: precommits.clone() },
+			&voters,
+			&chain,
+		)
+		.unwrap();
+
+		assert!(!result.is_valid());
+	}
+
+	#[test]
+	fn commit_validation_with_equivocation() {
+		let mut chain = DummyChain::new();
+		chain.push_blocks(GENESIS_HASH, &["A", "B", "C"]);
+
+		let voters = VoterSet::new((1..=100).map(|id| (id, 1))).unwrap();
+
+		let make_precommit = |target_hash, target_number, id| SignedPrecommit {
+			precommit: Precommit { target_hash, target_number },
+			id,
+			signature: (),
+		};
+
+		// we add 66/100 precommits targeting block C
+		let mut precommits = Vec::new();
+		for id in 1..67 {
+			let precommit = make_precommit("C", 3, id);
+			precommits.push(precommit);
+		}
+
+		// we then add two equivocated votes targeting A and B
+		// from the 67th validator
+		precommits.push(make_precommit("A", 1, 67));
+		precommits.push(make_precommit("B", 2, 67));
+
+		// this equivocation is treated as "voting for all blocks", which means
+		// that block C will now have 67/100 votes and therefore it can be
+		// finalized.
+		let result = validate_commit(
+			&Commit { target_hash: "C", target_number: 3, precommits: precommits.clone() },
+			&voters,
+			&chain,
+		)
+		.unwrap();
+
+		assert!(result.is_valid());
 	}
 }
