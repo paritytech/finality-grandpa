@@ -378,7 +378,7 @@ impl<H: Clone, N: Clone, S, Id> From<Commit<H, N, S, Id>> for CompactCommit<H, N
 
 /// Struct returned from `validate_commit` function with information
 /// about the validation result.
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct CommitValidationResult {
 	valid: bool,
 	num_precommits: usize,
@@ -412,18 +412,6 @@ impl CommitValidationResult {
 	/// Returns the number of invalid voters in the commit.
 	pub fn num_invalid_voters(&self) -> usize {
 		self.num_invalid_voters
-	}
-}
-
-impl Default for CommitValidationResult {
-	fn default() -> Self {
-		CommitValidationResult {
-			valid: false,
-			num_precommits: 0,
-			num_duplicated_precommits: 0,
-			num_equivocations: 0,
-			num_invalid_voters: 0,
-		}
 	}
 }
 
