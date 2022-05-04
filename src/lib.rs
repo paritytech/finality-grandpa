@@ -698,6 +698,6 @@ mod tests {
 		.unwrap();
 
 		assert!(result.is_valid());
- 		assert_eq!(result.num_equivocations(), 1);
+		assert_eq!(result.num_equivocations(), 1);
 	}
 }
