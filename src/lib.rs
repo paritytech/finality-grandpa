@@ -418,7 +418,7 @@ impl CommitValidationResult {
 /// Validates a GRANDPA commit message.
 ///
 /// For a commit to be valid the round ghost is calculated using the precommits
-/// in the commit message, making sure that it is exists and that it is the same
+/// in the commit message, making sure that it exists and that it is the same
 /// as the commit target. The precommit with the lowest block number is used as
 /// the round base.
 ///
