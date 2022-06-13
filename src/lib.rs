@@ -378,20 +378,20 @@ impl<H: Clone, N: Clone, S, Id> From<Commit<H, N, S, Id>> for CompactCommit<H, N
 
 /// Struct returned from `validate_commit` function with information
 /// about the validation result.
-pub struct CommitValidationResult<H, N> {
-	ghost: Option<(H, N)>,
+#[derive(Debug, Default)]
+pub struct CommitValidationResult {
+	valid: bool,
 	num_precommits: usize,
 	num_duplicated_precommits: usize,
 	num_equivocations: usize,
 	num_invalid_voters: usize,
 }
 
-impl<H, N> CommitValidationResult<H, N> {
-	/// Returns the commit GHOST i.e. the block with highest number for which
-	/// the cumulative votes of descendents and itself reach finalization
-	/// threshold.
-	pub fn ghost(&self) -> Option<&(H, N)> {
-		self.ghost.as_ref()
+impl CommitValidationResult {
+	/// Returns `true` if the commit is valid, which implies that the target
+	/// block in the commit is finalized.
+	pub fn is_valid(&self) -> bool {
+		self.valid
 	}
 
 	/// Returns the number of precommits in the commit.
@@ -409,37 +409,30 @@ impl<H, N> CommitValidationResult<H, N> {
 		self.num_equivocations
 	}
 
-	/// Returns the number of invalid voters in the commit.
+	/// Returns the number of invalid voters in the commit, i.e. votes from
+	/// identities that are not part of the voter set.
 	pub fn num_invalid_voters(&self) -> usize {
 		self.num_invalid_voters
 	}
 }
 
-impl<H, N> Default for CommitValidationResult<H, N> {
-	fn default() -> Self {
-		CommitValidationResult {
-			ghost: None,
-			num_precommits: 0,
-			num_duplicated_precommits: 0,
-			num_equivocations: 0,
-			num_invalid_voters: 0,
-		}
-	}
-}
-
-/// Validates a GRANDPA commit message and returns the ghost calculated using
-/// the precommits in the commit message and using the commit target as a
-/// base.
+/// Validates a GRANDPA commit message.
+///
+/// For a commit to be valid the round ghost is calculated using the precommits
+/// in the commit message, making sure that it exists and that it is the same
+/// as the commit target. The precommit with the lowest block number is used as
+/// the round base.
 ///
 /// Signatures on precommits are assumed to have been checked.
 ///
-/// Duplicate votes or votes from voters not in the voter-set will be ignored, but it is recommended
-/// for the caller of this function to remove those at signature-verification time.
+/// Duplicate votes or votes from voters not in the voter-set will be ignored,
+/// but it is recommended for the caller of this function to remove those at
+/// signature-verification time.
 pub fn validate_commit<H, N, S, I, C: Chain<H, N>>(
 	commit: &Commit<H, N, S, I>,
 	voters: &VoterSet<I>,
 	chain: &C,
-) -> Result<CommitValidationResult<H, N>, crate::Error>
+) -> Result<CommitValidationResult, crate::Error>
 where
 	H: Clone + Eq + Ord + std::fmt::Debug,
 	N: Copy + BlockNumberOps + std::fmt::Debug,
@@ -449,31 +442,53 @@ where
 	let mut validation_result =
 		CommitValidationResult { num_precommits: commit.precommits.len(), ..Default::default() };
 
-	// check that all precommits are for blocks higher than the target
-	// commit block, and that they're its descendents
-	let all_precommits_higher_than_target = commit.precommits.iter().all(|signed| {
-		signed.precommit.target_number >= commit.target_number &&
-			chain.is_equal_or_descendent_of(
-				commit.target_hash.clone(),
-				signed.precommit.target_hash.clone(),
-			)
+	// filter any precommits by voters that are not part of the set
+	let valid_precommits = commit
+		.precommits
+		.iter()
+		.filter(|signed| {
+			if !voters.contains(&signed.id) {
+				validation_result.num_invalid_voters += 1;
+				return false
+			}
+
+			true
+		})
+		.collect::<Vec<_>>();
+
+	// the base of the round should be the lowest block for which we can find a
+	// precommit (any vote would only have been accepted if it was targetting a
+	// block higher or equal to the round base)
+	let base = match valid_precommits
+		.iter()
+		.map(|signed| &signed.precommit)
+		.min_by_key(|precommit| precommit.target_number)
+		.map(|precommit| (precommit.target_hash.clone(), precommit.target_number))
+	{
+		None => return Ok(validation_result),
+		Some(base) => base,
+	};
+
+	// check that all precommits are for blocks that are equal to or descendants
+	// of the round base
+	let all_precommits_higher_than_base = valid_precommits.iter().all(|signed| {
+		chain.is_equal_or_descendent_of(base.0.clone(), signed.precommit.target_hash.clone())
 	});
 
-	if !all_precommits_higher_than_target {
+	if !all_precommits_higher_than_base {
 		return Ok(validation_result)
 	}
 
 	let mut equivocated = std::collections::BTreeSet::new();
 
-	// Add all precommits to the round with correct counting logic
-	// using the commit target as a base.
+	// add all precommits to the round with correct counting logic
 	let mut round = round::Round::new(round::RoundParams {
 		round_number: 0, // doesn't matter here.
 		voters: voters.clone(),
-		base: (commit.target_hash.clone(), commit.target_number),
+		base,
 	});
 
-	for SignedPrecommit { precommit, id, signature } in &commit.precommits {
+	for SignedPrecommit { precommit, id, signature } in &valid_precommits {
 		match round.import_precommit(chain, precommit.clone(), id.clone(), signature.clone())? {
 			ImportResult { equivocation: Some(_), .. } => {
 				validation_result.num_equivocations += 1;
@@ -482,20 +497,25 @@ where
 					return Ok(validation_result)
 				}
 			},
-			ImportResult { duplicated, valid_voter, .. } => {
+			ImportResult { duplicated, .. } =>
 				if duplicated {
 					validation_result.num_duplicated_precommits += 1;
-				}
-				if !valid_voter {
-					validation_result.num_invalid_voters += 1;
-				}
-			},
+				},
 		}
 	}
 
-	// if a ghost is found then it must be equal or higher than the commit
-	// target, otherwise the commit is invalid
-	validation_result.ghost = round.precommit_ghost();
+	// for the commit to be valid, then a precommit ghost must be found for the
+	// round and it must be equal to the commit target
+	match round.precommit_ghost() {
+		Some((precommit_ghost_hash, precommit_ghost_number))
+			if precommit_ghost_hash == commit.target_hash &&
+				precommit_ghost_number == commit.target_number =>
+		{
+			validation_result.valid = true;
+		},
+		_ => {},
+	}
+
 	Ok(validation_result)
 }
 
@@ -503,11 +523,11 @@ where
 /// the given `CommitValidationResult`. Outcome is bad if ghost is undefined,
 /// good otherwise.
 #[cfg(feature = "std")]
-pub fn process_commit_validation_result<H, N>(
-	validation_result: CommitValidationResult<H, N>,
+pub fn process_commit_validation_result(
+	validation_result: CommitValidationResult,
 	mut callback: voter::Callback<voter::CommitProcessingOutcome>,
 ) {
-	if validation_result.ghost.is_some() {
+	if validation_result.is_valid() {
 		callback.run(voter::CommitProcessingOutcome::Good(voter::GoodCommit::new()))
 	} else {
 		callback.run(voter::CommitProcessingOutcome::Bad(voter::BadCommit::from(validation_result)))
@@ -575,6 +595,8 @@ impl<H, N, S, Id> HistoricalVotes<H, N, S, Id> {
 
 #[cfg(test)]
 mod tests {
+	use super::*;
+	use crate::testing::chain::{DummyChain, GENESIS_HASH};
 
 	#[cfg(feature = "derive-codec")]
 	#[test]
@@ -593,5 +615,136 @@ mod tests {
 		let encoded = signed.encode();
 		let signed2 = crate::SignedMessage::decode(&mut &encoded[..]).unwrap();
 		assert_eq!(signed, signed2);
+	}
+
+	#[test]
+	fn commit_validation() {
+		let mut chain = DummyChain::new();
+		chain.push_blocks(GENESIS_HASH, &["A"]);
+
+		let voters = VoterSet::new((1..=100).map(|id| (id, 1))).unwrap();
+
+		let make_precommit = |target_hash, target_number, id| SignedPrecommit {
+			precommit: Precommit { target_hash, target_number },
+			id,
+			signature: (),
+		};
+
+		let mut precommits = Vec::new();
+		for id in 1..67 {
+			let precommit = make_precommit("C", 3, id);
+			precommits.push(precommit);
+		}
+
+		// we have still not reached threshold with 66/100 votes, so the commit
+		// is not valid.
+		let result = validate_commit(
+			&Commit { target_hash: "C", target_number: 3, precommits: precommits.clone() },
+			&voters,
+			&chain,
+		)
+		.unwrap();
+
+		assert!(!result.is_valid());
+
+		// after adding one more commit targetting the same block we are over
+		// the finalization threshold and the commit should be valid
+		precommits.push(make_precommit("C", 3, 67));
+
+		let result = validate_commit(
+			&Commit { target_hash: "C", target_number: 3, precommits: precommits.clone() },
+			&voters,
+			&chain,
+		)
+		.unwrap();
+
+		assert!(result.is_valid());
+
+		// the commit target must be the exact same as the round precommit ghost
+		// that is calculated with the given precommits for the commit to be valid
+		let result = validate_commit(
+			&Commit { target_hash: "B", target_number: 2, precommits: precommits.clone() },
+			&voters,
+			&chain,
+		)
+		.unwrap();
+
+		assert!(!result.is_valid());
+	}
+
+	#[test]
+	fn commit_validation_with_equivocation() {
+		let mut chain = DummyChain::new();
+		chain.push_blocks(GENESIS_HASH, &["A", "B", "C"]);
+
+		let voters = VoterSet::new((1..=100).map(|id| (id, 1))).unwrap();
+
+		let make_precommit = |target_hash, target_number, id| SignedPrecommit {
+			precommit: Precommit { target_hash, target_number },
+			id,
+			signature: (),
+		};
+
+		// we add 66/100 precommits targeting block C
+		let mut precommits = Vec::new();
+		for id in 1..67 {
+			let precommit = make_precommit("C", 3, id);
+			precommits.push(precommit);
+		}
+
+		// we then add two equivocated votes targeting A and B
+		// from the 67th validator
+		precommits.push(make_precommit("A", 1, 67));
+		precommits.push(make_precommit("B", 2, 67));
+
+		// this equivocation is treated as "voting for all blocks", which means
+		// that block C will now have 67/100 votes and therefore it can be
+		// finalized.
+		let result = validate_commit(
+			&Commit { target_hash: "C", target_number: 3, precommits: precommits.clone() },
+			&voters,
+			&chain,
+		)
+		.unwrap();
+
+		assert!(result.is_valid());
+		assert_eq!(result.num_equivocations(), 1);
+	}
+
+	#[test]
+	fn commit_validation_precommit_from_unknown_voter_is_ignored() {
+		let mut chain = DummyChain::new();
+		chain.push_blocks(GENESIS_HASH, &["A", "B", "C"]);
+
+		let voters = VoterSet::new((1..=100).map(|id| (id, 1))).unwrap();
+
+		let make_precommit = |target_hash, target_number, id| SignedPrecommit {
+			precommit: Precommit { target_hash, target_number },
+			id,
+			signature: (),
+		};
+
+		let mut precommits = Vec::new();
+
+		// invalid vote from unknown voter should not influence the base
+		precommits.push(make_precommit("Z", 1, 1000));
+
+		for id in 1..=67 {
+			let precommit = make_precommit("C", 3, id);
+			precommits.push(precommit);
+		}
+
+		let result = validate_commit(
+			&Commit { target_hash: "C", target_number: 3, precommits: precommits.clone() },
+			&voters,
+			&chain,
+		)
+		.unwrap();
+
+		// we have threshold votes for block "C" so it should be valid
+		assert!(result.is_valid());
+
+		// there is one invalid voter in the commit
+		assert_eq!(result.num_invalid_voters(), 1);
 	}
 }

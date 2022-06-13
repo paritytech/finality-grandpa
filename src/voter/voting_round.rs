@@ -300,8 +300,7 @@ where
 		&mut self,
 		commit: &Commit<H, N, E::Signature, E::Id>,
 	) -> Result<Option<(H, N)>, E::Error> {
-		let base = validate_commit(commit, self.voters(), &*self.env)?.ghost;
-		if base.is_none() {
+		if !validate_commit(commit, self.voters(), &*self.env)?.is_valid() {
 			return Ok(None)
 		}
 
@@ -313,7 +312,7 @@ where
 			}
 		}
 
-		Ok(base)
+		Ok(Some((commit.target_hash.clone(), commit.target_number)))
 	}
 
 	/// Get a clone of the finalized sender.
