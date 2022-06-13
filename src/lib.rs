@@ -409,7 +409,8 @@ impl CommitValidationResult {
 		self.num_equivocations
 	}
 
-	/// Returns the number of invalid voters in the commit.
+	/// Returns the number of invalid voters in the commit, i.e. votes from
+	/// identities that are not part of the voter set.
 	pub fn num_invalid_voters(&self) -> usize {
 		self.num_invalid_voters
 	}
@@ -441,11 +442,24 @@ where
 	let mut validation_result =
 		CommitValidationResult { num_precommits: commit.precommits.len(), ..Default::default() };
 
+	// filter any precommits by voters that are not part of the set
+	let valid_precommits = commit
+		.precommits
+		.iter()
+		.filter(|signed| {
+			if !voters.contains(&signed.id) {
+				validation_result.num_invalid_voters += 1;
+				return false
+			}
+
+			true
+		})
+		.collect::<Vec<_>>();
+
 	// the base of the round should be the lowest block for which we can find a
 	// precommit (any vote would only have been accepted if it was targetting a
 	// block higher or equal to the round base)
-	let base = match commit
-		.precommits
+	let base = match valid_precommits
 		.iter()
 		.map(|signed| &signed.precommit)
 		.min_by_key(|precommit| precommit.target_number)
@@ -457,7 +471,7 @@ where
 
 	// check that all precommits are for blocks that are equal to or descendants
 	// of the round base
-	let all_precommits_higher_than_base = commit.precommits.iter().all(|signed| {
+	let all_precommits_higher_than_base = valid_precommits.iter().all(|signed| {
 		chain.is_equal_or_descendent_of(base.0.clone(), signed.precommit.target_hash.clone())
 	});
 
@@ -474,7 +488,7 @@ where
 		base,
 	});
 
-	for SignedPrecommit { precommit, id, signature } in &commit.precommits {
+	for SignedPrecommit { precommit, id, signature } in &valid_precommits {
 		match round.import_precommit(chain, precommit.clone(), id.clone(), signature.clone())? {
 			ImportResult { equivocation: Some(_), .. } => {
 				validation_result.num_equivocations += 1;
@@ -483,14 +497,10 @@ where
 					return Ok(validation_result)
 				}
 			},
-			ImportResult { duplicated, valid_voter, .. } => {
+			ImportResult { duplicated, .. } =>
 				if duplicated {
 					validation_result.num_duplicated_precommits += 1;
-				}
-				if !valid_voter {
-					validation_result.num_invalid_voters += 1;
-				}
-			},
+				},
 		}
 	}
 
@@ -699,5 +709,42 @@ mod tests {
 
 		assert!(result.is_valid());
 		assert_eq!(result.num_equivocations(), 1);
+	}
+
+	#[test]
+	fn commit_validation_precommit_from_unknown_voter_is_ignored() {
+		let mut chain = DummyChain::new();
+		chain.push_blocks(GENESIS_HASH, &["A", "B", "C"]);
+
+		let voters = VoterSet::new((1..=100).map(|id| (id, 1))).unwrap();
+
+		let make_precommit = |target_hash, target_number, id| SignedPrecommit {
+			precommit: Precommit { target_hash, target_number },
+			id,
+			signature: (),
+		};
+
+		let mut precommits = Vec::new();
+
+		// invalid vote from unknown voter should not influence the base
+		precommits.push(make_precommit("Z", 1, 1000));
+
+		for id in 1..=67 {
+			let precommit = make_precommit("C", 3, id);
+			precommits.push(precommit);
+		}
+
+		let result = validate_commit(
+			&Commit { target_hash: "C", target_number: 3, precommits: precommits.clone() },
+			&voters,
+			&chain,
+		)
+		.unwrap();
+
+		// we have threshold votes for block "C" so it should be valid
+		assert!(result.is_valid());
+
+		// there is one invalid voter in the commit
+		assert_eq!(result.num_invalid_voters(), 1);
 	}
 }
