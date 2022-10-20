@@ -208,14 +208,12 @@ pub trait Chain<H: Eq, N: Copy + BlockNumberOps> {
 #[derive(Clone, Debug, PartialEq)]
 #[cfg_attr(feature = "derive-codec", derive(Encode, Decode, TypeInfo))]
 pub struct Equivocation<Id, V, S> {
-	/// The round number equivocated in.
-	pub round_number: u64,
 	/// The identity of the equivocator.
 	pub identity: Id,
-	/// The first vote in the equivocation.
-	pub first: (V, S),
-	/// The second vote in the equivocation.
-	pub second: (V, S),
+	/// The first vote in the equivocation with round number.
+	pub first: (V, S, u64),
+	/// The second vote in the equivocation with round number.
+	pub second: (V, S, u64),
 }
 
 /// A protocol message or vote.

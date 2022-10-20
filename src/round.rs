@@ -316,10 +316,9 @@ where
 					self.historical_votes.push_vote(signed_message);
 
 					Some(Equivocation {
-						round_number,
 						identity: signer,
-						first: first.clone(),
-						second: second.clone(),
+						first: (first.0.clone(), first.1.clone(), round_number),
+						second: (second.0.clone(), second.1.clone(), round_number),
 					})
 				},
 			}
@@ -401,10 +400,9 @@ where
 					self.historical_votes.push_vote(signed_message);
 
 					Some(Equivocation {
-						round_number,
 						identity: signer,
-						first: first.clone(),
-						second: second.clone(),
+						first: (first.0.clone(), first.1.clone(), round_number),
+						second: (second.0.clone(), second.1.clone(), round_number),
 					})
 				},
 			}
