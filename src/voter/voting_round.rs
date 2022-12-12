@@ -33,7 +33,7 @@ use crate::{
 	voter_set::VoterSet,
 	weights::VoteWeight,
 	BlockNumberOps, Commit, HistoricalVotes, ImportResult, Message, Precommit, Prevote,
-	PrimaryPropose, SignedMessage, SignedPrecommit,
+	PrimaryPropose, SignedMessage, SignedPrecommit, LOG_TARGET,
 };
 
 /// The state of a voting round.
@@ -169,7 +169,13 @@ where
 	/// Poll the round. When the round is completable and messages have been flushed, it will return `Poll::Ready` but
 	/// can continue to be polled.
 	pub(super) fn poll(&mut self, cx: &mut Context) -> Poll<Result<(), E::Error>> {
-		trace!(target: "afg", "Polling round {}, state = {:?}, step = {:?}", self.votes.number(), self.votes.state(), self.state);
+		trace!(
+			target: LOG_TARGET,
+			"Polling round {}, state = {:?}, step = {:?}",
+			self.votes.number(),
+			self.votes.state(),
+			self.state
+		);
 
 		let pre_state = self.votes.state();
 		self.process_incoming(cx)?;
@@ -225,13 +231,22 @@ where
 
 		// the previous round estimate must be finalized
 		if !last_round_estimate_finalized {
-			trace!(target: "afg", "Round {} completable but estimate not finalized.", self.round_number());
+			trace!(
+				target: LOG_TARGET,
+				"Round {} completable but estimate not finalized.",
+				self.round_number()
+			);
 			self.log_participation(log::Level::Trace);
 			return Poll::Pending
 		}
 
-		debug!(target: "afg", "Completed round {}, state = {:?}, step = {:?}",
-			self.votes.number(), self.votes.state(), self.state);
+		debug!(
+			target: LOG_TARGET,
+			"Completed round {}, state = {:?}, step = {:?}",
+			self.votes.number(),
+			self.votes.state(),
+			self.state
+		);
 
 		self.log_participation(log::Level::Debug);
 
@@ -325,8 +340,11 @@ where
 	pub(super) fn bridge_state(&mut self) -> crate::bridge_state::LatterView<H, N> {
 		let (prior_view, latter_view) = crate::bridge_state::bridge_state(self.votes.state());
 		if self.bridged_round_state.is_some() {
-			warn!(target: "afg", "Bridged state from round {} more than once.",
-				self.votes.number());
+			warn!(
+				target: LOG_TARGET,
+				"Bridged state from round {} more than once.",
+				self.votes.number()
+			);
 		}
 
 		self.bridged_round_state = Some(prior_view);
@@ -356,7 +374,9 @@ where
 			.env
 			.is_equal_or_descendent_of(self.votes.base().0, message.target().0.clone())
 		{
-			trace!(target: "afg", "Ignoring message targeting {:?} lower than round base {:?}",
+			trace!(
+				target: LOG_TARGET,
+				"Ignoring message targeting {:?} lower than round base {:?}",
 				message.target(),
 				self.votes.base(),
 			);
@@ -400,17 +420,35 @@ where
 		let (prevote_weight, n_prevotes) = self.votes.prevote_participation();
 		let (precommit_weight, n_precommits) = self.votes.precommit_participation();
 
-		log::log!(target: "afg", log_level, "Round {}: prevotes: {}/{}/{} weight, {}/{} actual",
-			number, prevote_weight, threshold, total_weight, n_prevotes, n_voters);
+		log::log!(
+			target: LOG_TARGET,
+			log_level,
+			"Round {}: prevotes: {}/{}/{} weight, {}/{} actual",
+			number,
+			prevote_weight,
+			threshold,
+			total_weight,
+			n_prevotes,
+			n_voters
+		);
 
-		log::log!(target: "afg", log_level, "Round {}: precommits: {}/{}/{} weight, {}/{} actual",
-			number, precommit_weight, threshold, total_weight, n_precommits, n_voters);
+		log::log!(
+			target: LOG_TARGET,
+			log_level,
+			"Round {}: precommits: {}/{}/{} weight, {}/{} actual",
+			number,
+			precommit_weight,
+			threshold,
+			total_weight,
+			n_precommits,
+			n_voters
+		);
 	}
 
 	fn process_incoming(&mut self, cx: &mut Context) -> Result<(), E::Error> {
 		while let Poll::Ready(Some(incoming)) = Stream::poll_next(Pin::new(&mut self.incoming), cx)
 		{
-			trace!(target: "afg", "Round {}: Got incoming message", self.round_number());
+			trace!(target: LOG_TARGET, "Round {}: Got incoming message", self.round_number());
 			self.handle_vote(incoming?)?;
 		}
 
@@ -430,7 +468,11 @@ where
 						let should_send_primary =
 							maybe_finalized.map_or(true, |f| last_round_estimate.1 > f.1);
 						if should_send_primary {
-							debug!(target: "afg", "Sending primary block hint for round {}", self.votes.number());
+							debug!(
+								target: LOG_TARGET,
+								"Sending primary block hint for round {}",
+								self.votes.number()
+							);
 							let primary = PrimaryPropose {
 								target_hash: last_round_estimate.0,
 								target_number: last_round_estimate.1,
@@ -441,13 +483,21 @@ where
 
 							return Ok(())
 						} else {
-							debug!(target: "afg", "Last round estimate has been finalized, \
-								not sending primary block hint for round {}", self.votes.number());
+							debug!(
+								target: LOG_TARGET,
+								"Last round estimate has been finalized, \
+								not sending primary block hint for round {}",
+								self.votes.number()
+							);
 						}
 					},
 					(None, true) => {
-						debug!(target: "afg", "Last round estimate does not exist, \
-							not sending primary block hint for round {}", self.votes.number());
+						debug!(
+							target: LOG_TARGET,
+							"Last round estimate does not exist, \
+							not sending primary block hint for round {}",
+							self.votes.number()
+						);
 					},
 					_ => {},
 				}
@@ -482,7 +532,11 @@ where
 
 			if should_prevote {
 				if this.voting.is_active() {
-					debug!(target: "afg", "Constructing prevote for round {}", this.votes.number());
+					debug!(
+						target: LOG_TARGET,
+						"Constructing prevote for round {}",
+						this.votes.number()
+					);
 
 					let (base, best_chain) = this.construct_prevote(last_round_state);
 
@@ -522,7 +576,7 @@ where
 			if let Some(target) = best_chain {
 				let prevote = Prevote { target_hash: target.0, target_number: target.1 };
 
-				debug!(target: "afg", "Casting prevote for round {}", this.votes.number());
+				debug!(target: LOG_TARGET, "Casting prevote for round {}", this.votes.number());
 				this.env.prevoted(this.round_number(), prevote.clone())?;
 				this.votes.set_prevoted_index();
 				this.outgoing.push(Message::Prevote(prevote));
@@ -530,9 +584,9 @@ where
 			} else {
 				// if this block is considered unknown, something has gone wrong.
 				// log and handle, but skip casting a vote.
-				warn!(target: "afg",
-					"Could not cast prevote: previously known block {:?} has disappeared",
-					base,
+				warn!(
+					target: LOG_TARGET,
+					"Could not cast prevote: previously known block {:?} has disappeared", base,
 				);
 
 				// when we can't construct a prevote, we shouldn't precommit.
@@ -589,7 +643,11 @@ where
 
 				if should_precommit {
 					if self.voting.is_active() {
-						debug!(target: "afg", "Casting precommit for round {}", self.votes.number());
+						debug!(
+							target: LOG_TARGET,
+							"Casting precommit for round {}",
+							self.votes.number()
+						);
 						let precommit = self.construct_precommit();
 						self.env.precommitted(self.round_number(), precommit.clone())?;
 						self.votes.set_precommitted_index();
@@ -660,7 +718,8 @@ where
 						},
 						Err(crate::Error::NotDescendent) => {
 							// This is only possible in case of massive equivocation
-							warn!(target: "afg",
+							warn!(
+								target: LOG_TARGET,
 								"Possible case of massive equivocation: \
 								last round prevote GHOST: {:?} is not a descendant of last round estimate: {:?}",
 								last_prevote_g,
