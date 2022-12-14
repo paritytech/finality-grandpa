@@ -78,6 +78,9 @@ use round::ImportResult;
 #[cfg(feature = "derive-codec")]
 use scale_info::TypeInfo;
 
+// Overarching log target
+const LOG_TARGET: &str = "grandpa";
+
 /// A prevote for a block and its ancestors.
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[cfg_attr(feature = "derive-codec", derive(Encode, Decode, TypeInfo))]

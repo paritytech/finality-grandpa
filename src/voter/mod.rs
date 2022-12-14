@@ -46,7 +46,7 @@ use std::{
 use crate::{
 	round::State as RoundState, validate_commit, voter_set::VoterSet, weights::VoteWeight,
 	BlockNumberOps, CatchUp, Chain, Commit, CommitValidationResult, CompactCommit, Equivocation,
-	HistoricalVotes, Message, Precommit, Prevote, PrimaryPropose, SignedMessage,
+	HistoricalVotes, Message, Precommit, Prevote, PrimaryPropose, SignedMessage, LOG_TARGET,
 };
 use past_rounds::PastRounds;
 use voting_round::{State as VotingRoundState, VotingRound};
@@ -645,7 +645,9 @@ where
 		while let Poll::Ready(Some(item)) = Stream::poll_next(Pin::new(&mut self.global_in), cx) {
 			match item? {
 				CommunicationIn::Commit(round_number, commit, mut process_commit_outcome) => {
-					trace!(target: "afg", "Got commit for round_number {:?}: target_number: {:?}, target_hash: {:?}",
+					trace!(
+						target: LOG_TARGET,
+						"Got commit for round_number {:?}: target_number: {:?}, target_hash: {:?}",
 						round_number,
 						commit.target_number,
 						commit.target_hash,
@@ -696,7 +698,11 @@ where
 					}
 				},
 				CommunicationIn::CatchUp(catch_up, mut process_catch_up_outcome) => {
-					trace!(target: "afg", "Got catch-up message for round {}", catch_up.round_number);
+					trace!(
+						target: LOG_TARGET,
+						"Got catch-up message for round {}",
+						catch_up.round_number
+					);
 
 					let mut inner = self.inner.lock();
 
@@ -786,7 +792,9 @@ where
 				return Poll::Pending
 			}
 
-			trace!(target: "afg", "Best round at {} has become completable. Starting new best round at {}",
+			trace!(
+				target: LOG_TARGET,
+				"Best round at {} has become completable. Starting new best round at {}",
 				inner.best_round.round_number(),
 				inner.best_round.round_number() + 1,
 			);
@@ -959,8 +967,7 @@ where
 	E: Environment<H, N>,
 {
 	if catch_up.round_number <= best_round_number {
-		trace!(target: "afg", "Ignoring because best round number is {}",
-			   best_round_number);
+		trace!(target: LOG_TARGET, "Ignoring because best round number is {}", best_round_number);
 
 		return None
 	}
@@ -971,9 +978,10 @@ where
 
 		for prevote in &catch_up.prevotes {
 			if !voters.contains(&prevote.id) {
-				trace!(target: "afg",
-					   "Ignoring invalid catch up, invalid voter: {:?}",
-					   prevote.id,
+				trace!(
+					target: LOG_TARGET,
+					"Ignoring invalid catch up, invalid voter: {:?}",
+					prevote.id,
 				);
 
 				return None
@@ -984,9 +992,10 @@ where
 
 		for precommit in &catch_up.precommits {
 			if !voters.contains(&precommit.id) {
-				trace!(target: "afg",
-					   "Ignoring invalid catch up, invalid voter: {:?}",
-					   precommit.id,
+				trace!(
+					target: LOG_TARGET,
+					"Ignoring invalid catch up, invalid voter: {:?}",
+					precommit.id,
 				);
 
 				return None
@@ -1014,9 +1023,7 @@ where
 
 		let threshold = voters.threshold();
 		if pv < threshold || pc < threshold {
-			trace!(target: "afg",
-				   "Ignoring invalid catch up, missing voter threshold"
-			);
+			trace!(target: LOG_TARGET, "Ignoring invalid catch up, missing voter threshold");
 
 			return None
 		}
@@ -1033,9 +1040,10 @@ where
 		match round.import_prevote(env, prevote, id, signature) {
 			Ok(_) => {},
 			Err(e) => {
-				trace!(target: "afg",
-					   "Ignoring invalid catch up, error importing prevote: {:?}",
-					   e,
+				trace!(
+					target: LOG_TARGET,
+					"Ignoring invalid catch up, error importing prevote: {:?}",
+					e,
 				);
 
 				return None
@@ -1048,9 +1056,10 @@ where
 		match round.import_precommit(env, precommit, id, signature) {
 			Ok(_) => {},
 			Err(e) => {
-				trace!(target: "afg",
-					   "Ignoring invalid catch up, error importing precommit: {:?}",
-					   e,
+				trace!(
+					target: LOG_TARGET,
+					"Ignoring invalid catch up, error importing precommit: {:?}",
+					e,
 				);
 
 				return None

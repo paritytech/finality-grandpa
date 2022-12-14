@@ -40,7 +40,7 @@ use std::{
 };
 
 use super::{voting_round::VotingRound, Environment};
-use crate::{BlockNumberOps, Commit};
+use crate::{BlockNumberOps, Commit, LOG_TARGET};
 
 // wraps a voting round with a new future that resolves when the round can
 // be discarded from the working set.
@@ -194,7 +194,7 @@ where
 			Stream::poll_next(Pin::new(&mut self.import_commits), cx)
 		{
 			if !self.import_commit(voting_round, commit)? {
-				trace!(target: "afg", "Ignoring invalid commit");
+				trace!(target: LOG_TARGET, "Ignoring invalid commit");
 			}
 		}
 
@@ -342,7 +342,8 @@ where
 					self.past_rounds.push(round.into());
 
 					debug!(
-						target: "afg", "Committing: round_number = {}, \
+						target: LOG_TARGET,
+						"Committing: round_number = {}, \
 						target_number = {:?}, target_hash = {:?}",
 						number,
 						commit.target_number,
