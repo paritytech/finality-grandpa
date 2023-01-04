@@ -261,7 +261,7 @@ where
 
 	/// Get access to the underlying environment.
 	pub(super) fn env(&self) -> &E {
-		&*self.env
+		&self.env
 	}
 
 	/// Get the round number.
