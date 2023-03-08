@@ -405,7 +405,7 @@ where
 			let mut new_best = None;
 			for d_node in &descendent_nodes {
 				if let Some(d_block) = d_node.ancestor_block(base_number + offset) {
-					match descendent_blocks.binary_search_by_key(&d_block, |&(ref x, _)| x) {
+					match descendent_blocks.binary_search_by_key(&d_block, |(x, _)| x) {
 						Ok(idx) => {
 							descendent_blocks[idx].1 += &d_node.cumulative_vote;
 							if condition(&descendent_blocks[idx].1) {
