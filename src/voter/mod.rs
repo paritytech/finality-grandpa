@@ -82,9 +82,9 @@ pub enum CommitProcessingOutcome {
 	},
 }
 
-impl<Hash, Number> From<CommitValidationResult<Hash, Number>> for CommitProcessingOutcome {
-	fn from(result: CommitValidationResult<Hash, Number>) -> Self {
-		if result.ghost.is_some() {
+impl From<CommitValidationResult> for CommitProcessingOutcome {
+	fn from(result: CommitValidationResult) -> Self {
+		if result.is_valid() {
 			CommitProcessingOutcome::Good
 		} else {
 			CommitProcessingOutcome::Bad {
@@ -749,18 +749,18 @@ where
 
 		let commit_validation_result = validate_commit(&commit, &self.voters, &self.environment)?;
 
-		if let Some((ref finalized_hash, finalized_number)) = commit_validation_result.ghost {
-			if finalized_number > self.best_finalized.1 {
+		if commit_validation_result.is_valid() {
+			if commit.target_number > self.best_finalized.1 {
 				self.environment
 					.finalize_block(
-						finalized_hash.clone(),
-						finalized_number,
+						commit.target_hash.clone(),
+						commit.target_number,
 						commit_round_number,
-						commit,
+						commit.clone(),
 					)
 					.await?;
 
-				self.best_finalized = (finalized_hash.clone(), finalized_number);
+				self.best_finalized = (commit.target_hash, commit.target_number);
 			}
 		}
 

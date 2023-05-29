@@ -319,7 +319,7 @@ where
 		let commit_validation_result =
 			validate_commit(&commit, self.round.voters(), &self.environment)?;
 
-		if commit_validation_result.ghost.is_some() {
+		if commit_validation_result.is_valid() {
 			for SignedPrecommit { precommit, signature, id } in commit.precommits.iter().cloned() {
 				let import_result =
 					self.round.import_precommit(&self.environment, precommit, id, signature)?;
