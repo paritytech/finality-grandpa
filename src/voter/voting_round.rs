@@ -26,7 +26,7 @@ use crate::{
 	round::{Round, RoundParams, State as RoundState},
 	voter::Environment as EnvironmentT,
 	voter_set::VoterSet,
-	Error, Message, Precommit, Prevote, PrimaryPropose, SignedMessage,
+	Error, Message, Precommit, Prevote, PrimaryPropose, SignedMessage, LOG_TARGET,
 };
 
 /// The state of a voting round.
@@ -199,16 +199,18 @@ where
 			Environment::Id,
 		>,
 	) -> Result<(), Environment::Error> {
-		debug!("got incoming message: {:?}", message.message);
+		debug!(target: LOG_TARGET, "got incoming message: {:?}", message.message);
 		let SignedMessage { message, signature, id } = message;
 
 		if !self
 			.environment
 			.is_equal_or_descendent_of(self.round.base().0, message.target().0.clone())
 		{
-			trace!(target: "afg",
+			trace!(
+				target: LOG_TARGET,
 				"Ignoring message targeting {:?} lower than round base {:?}",
-				message.target(), self.round.base(),
+				message.target(),
+				self.round.base(),
 			);
 
 			return Ok(())
@@ -264,7 +266,11 @@ where
 					.map_or(true, |finalized| previous_round_estimate.1 > finalized.1);
 
 				if should_send_primary {
-					debug!(target: "afg", "Sending primary block hint for round {}", self.round.number());
+					debug!(
+						target: LOG_TARGET,
+						"Sending primary block hint for round {}",
+						self.round.number()
+					);
 
 					let primary = PrimaryPropose {
 						target_hash: previous_round_estimate.0.clone(),
@@ -276,7 +282,8 @@ where
 
 					Ok(true)
 				} else {
-					debug!(target: "afg",
+					debug!(
+						target: LOG_TARGET,
 						"Previous round estimate has been finalized, not sending primary block hint for round {}",
 						self.round.number(),
 					);
@@ -285,7 +292,8 @@ where
 				}
 			},
 			None => {
-				debug!(target: "afg",
+				debug!(
+					target: LOG_TARGET,
 					"Previous round estimate does not exist, not sending primary block hint for round {}",
 					self.round.number(),
 				);
@@ -301,7 +309,7 @@ where
 		if should_prevote {
 			if self.voting.is_active() {
 				if let Some(prevote) = self.construct_prevote().await? {
-					debug!(target: "afg", "Casting prevote for round {}", self.round.number());
+					debug!(target: LOG_TARGET, "Casting prevote for round {}", self.round.number());
 
 					self.round.set_prevoted_index();
 					self.environment.prevoted(self.round.number(), prevote.clone()).await?;
@@ -378,10 +386,12 @@ where
 						},
 						Err(Error::NotDescendent) => {
 							// This is only possible in case of massive equivocation
-							warn!(target: "afg",
+							warn!(
+								target: LOG_TARGET,
 								"Possible case of massive equivocation: \
 								previous round prevote GHOST: {:?} is not a descendant of previous round estimate: {:?}",
-								previous_prevote_ghost, previous_round_estimate,
+								previous_prevote_ghost,
+								previous_round_estimate,
 							);
 
 							previous_round_estimate.0.clone()
@@ -398,7 +408,8 @@ where
 		} else {
 			// If this block is considered unknown something has gone wrong,
 			// we'll skip casting a vote.
-			warn!(target: "afg",
+			warn!(
+				target: LOG_TARGET,
 				"Could not cast prevote: previously known block {:?} has disappeared",
 				find_descendent_of,
 			);
@@ -432,7 +443,7 @@ where
 
 		if should_precommit {
 			if self.voting.is_active() {
-				debug!(target: "afg", "Casting precommit for round {}", self.round.number());
+				debug!(target: LOG_TARGET, "Casting precommit for round {}", self.round.number());
 
 				let precommit = self.construct_precommit();
 				self.round.set_precommitted_index();
@@ -528,7 +539,7 @@ where
 		}
 
 		loop {
-			log::trace!(target: "afg", "Round: {}, state: {:?}", self.round.number(), self.state);
+			trace!(target: LOG_TARGET, "Round: {}, state: {:?}", self.round.number(), self.state);
 
 			match mem::replace(&mut self.state, State::Poisoned) {
 				State::Start(prevote_timer, precommit_timer) => {

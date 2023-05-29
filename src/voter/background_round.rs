@@ -33,7 +33,7 @@ use crate::{
 	round::{Round, RoundParams, State as RoundState},
 	validate_commit,
 	voter::{Callback, CommitProcessingOutcome, Environment as EnvironmentT},
-	Commit, ImportResult, Message, SignedMessage, SignedPrecommit, VoterSet,
+	Commit, ImportResult, Message, SignedMessage, SignedPrecommit, VoterSet, LOG_TARGET,
 };
 
 pub struct ConcludedRound<Environment>
@@ -226,7 +226,8 @@ where
 				.collect(),
 		};
 
-		debug!(target: "afg",
+		debug!(
+			target: LOG_TARGET,
 			"Committing: round_number = {}, target_number = {:?}, target_hash = {:?}",
 			self.round.number(),
 			commit.target_number,
@@ -263,9 +264,11 @@ where
 			.environment
 			.is_equal_or_descendent_of(self.round.base().0, message.target().0.clone())
 		{
-			trace!(target: "afg",
+			trace!(
+				target: LOG_TARGET,
 				"Ignoring message targeting {:?} lower than round base {:?}",
-				message.target(), self.round.base(),
+				message.target(),
+				self.round.base(),
 			);
 
 			return Ok(())
@@ -291,7 +294,10 @@ where
 				}
 			},
 			Message::PrimaryPropose(_primary) => {
-				debug!("ignoring primary proposal message for background round");
+				debug!(
+					target: LOG_TARGET,
+					"ignoring primary proposal message for background round"
+				);
 			},
 		}
 
@@ -453,7 +459,7 @@ where
 			}
 		}
 
-		debug!(target: "afg", "Concluded background round: {}", self.round.number());
+		debug!(target: LOG_TARGET, "Concluded background round: {}", self.round.number());
 
 		Ok(())
 	}

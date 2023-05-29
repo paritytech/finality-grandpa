@@ -48,7 +48,7 @@ use crate::{
 	weights::VoteWeight,
 	CatchUp, Chain, Commit, CommitValidationResult, CompactCommit, Equivocation, Error,
 	HistoricalVotes, Message, Precommit, Prevote, PrimaryPropose, SignedMessage, SignedPrecommit,
-	SignedPrevote, VoterSet,
+	SignedPrevote, VoterSet, LOG_TARGET,
 };
 
 use self::{
@@ -484,7 +484,10 @@ where
 		// FIXME: deal with unwrap
 		let completable_round_finalized = completable_round_state.finalized.clone().unwrap();
 
-		debug!("completed voting round, finalized: {:?}", completable_round_finalized);
+		debug!(
+			target: LOG_TARGET,
+			"completed voting round, finalized: {:?}", completable_round_finalized
+		);
 
 		if completable_round_finalized.1 > self.best_finalized.1 {
 			self.environment
@@ -902,8 +905,7 @@ where
 	Environment: EnvironmentT,
 {
 	if catch_up.round_number <= best_round_number {
-		trace!(target: "afg", "Ignoring because best round number is {}",
-			   best_round_number);
+		trace!(target: LOG_TARGET, "Ignoring because best round number is {}", best_round_number);
 
 		// FIXME: should be outcome::useless?
 		return None
@@ -915,9 +917,10 @@ where
 
 		for prevote in &catch_up.prevotes {
 			if !voters.contains(&prevote.id) {
-				trace!(target: "afg",
-					   "Ignoring invalid catch up, invalid voter: {:?}",
-					   prevote.id,
+				trace!(
+					target: LOG_TARGET,
+					"Ignoring invalid catch up, invalid voter: {:?}",
+					prevote.id,
 				);
 
 				return None
@@ -928,9 +931,10 @@ where
 
 		for precommit in &catch_up.precommits {
 			if !voters.contains(&precommit.id) {
-				trace!(target: "afg",
-					   "Ignoring invalid catch up, invalid voter: {:?}",
-					   precommit.id,
+				trace!(
+					target: LOG_TARGET,
+					"Ignoring invalid catch up, invalid voter: {:?}",
+					precommit.id,
 				);
 
 				return None
@@ -958,9 +962,7 @@ where
 
 		let threshold = voters.threshold();
 		if pv < threshold || pc < threshold {
-			trace!(target: "afg",
-				   "Ignoring invalid catch up, missing voter threshold"
-			);
+			trace!(target: LOG_TARGET, "Ignoring invalid catch up, missing voter threshold");
 
 			return None
 		}
@@ -977,9 +979,10 @@ where
 		match round.import_prevote(env, prevote, id, signature) {
 			Ok(_) => {},
 			Err(e) => {
-				trace!(target: "afg",
-					   "Ignoring invalid catch up, error importing prevote: {:?}",
-					   e,
+				trace!(
+					target: LOG_TARGET,
+					"Ignoring invalid catch up, error importing prevote: {:?}",
+					e,
 				);
 
 				return None
@@ -992,9 +995,10 @@ where
 		match round.import_precommit(env, precommit, id, signature) {
 			Ok(_) => {},
 			Err(e) => {
-				trace!(target: "afg",
-					   "Ignoring invalid catch up, error importing precommit: {:?}",
-					   e,
+				trace!(
+					target: LOG_TARGET,
+					"Ignoring invalid catch up, error importing precommit: {:?}",
+					e,
 				);
 
 				return None
