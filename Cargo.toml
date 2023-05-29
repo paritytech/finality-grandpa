@@ -5,7 +5,7 @@ description = "PBFT-based finality gadget for blockchains"
 authors = ["Parity Technologies <admin@parity.io>"]
 license = "Apache-2.0"
 repository = "https://github.com/paritytech/finality-grandpa"
-edition = "2018"
+edition = "2021"
 
 [dependencies]
 async-trait = { version = "0.1", optional = true }

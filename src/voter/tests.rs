@@ -387,7 +387,7 @@ fn broadcast_commit_only_if_newer() {
 						})
 						.for_each(|_| future::ready(()))
 				})
-				.then(|_| {
+				.then(move |_| {
 					// send our commit
 					stream::iter(iter::once(Ok(voter::GlobalCommunicationOutgoing::Commit(
 						commit.0, commit.1,
