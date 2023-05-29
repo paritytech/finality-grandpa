@@ -546,7 +546,7 @@ where
 
 			assert!(
 				self.entries.insert(ancestor_hash, new_entry).is_none(),
-				"thus function is only invoked when there is no entry for the ancestor already; qed",
+				"this function is only invoked when there is no entry for the ancestor already; qed",
 			)
 		}
 	}
