@@ -211,7 +211,7 @@ pub trait Chain {
 }
 
 /// An equivocation (double-vote) in a given round.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 #[cfg_attr(feature = "derive-codec", derive(Encode, Decode, TypeInfo))]
 pub struct Equivocation<Id, V, S> {
 	/// The round number equivocated in.
