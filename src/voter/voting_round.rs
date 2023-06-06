@@ -506,28 +506,26 @@ where
 			RoundState<Environment::Hash, Environment::Number>,
 		>,
 	) -> Result<(), Environment::Error> {
+		use futures::future::FusedFuture;
 		macro_rules! handle_inputs {
 			($timer:expr) => {{
 				select! {
 					// process any incoming message for the round
 					message = self.incoming.select_next_some() => {
 						self.handle_incoming_message(message?).await?;
-						false
 					},
 					// process any state updates from the previous round
 					round_state = previous_round_state_updates.select_next_some() => {
 						self.previous_round_state = round_state;
-						false
 					},
 					response_sender = report_round_state_receiver.select_next_some() => {
 						self.handle_report_round_state_request(response_sender).await?;
-						false
 					},
 					// process the given timer (for prevoting or precommitting)
-					_ = &mut $timer => {
-						true
-					},
+					_ = &mut $timer => {},
 				}
+
+				$timer.is_terminated()
 			}};
 			() => {
 				// if no timer is given (e.g. after we precommitted) we call
