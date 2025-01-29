@@ -580,7 +580,7 @@ where
 			return
 		}
 
-		self.completable = self.estimate.clone().map_or(false, |(b_hash, b_num)| {
+		self.completable = self.estimate.clone().is_some_and(|(b_hash, b_num)| {
 			b_hash != g_hash || {
 				// round-estimate is the same as the prevote-ghost.
 				// this round is still completable if no further blocks

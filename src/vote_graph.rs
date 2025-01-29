@@ -218,7 +218,7 @@ where
 						return Some((hash, number))
 					}
 					// Not enough weight, check the parent block.
-					match node.ancestors.get(0) {
+					match node.ancestors.first() {
 						None => return None,
 						Some(a) => {
 							hash = a.clone();

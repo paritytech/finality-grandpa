@@ -120,7 +120,7 @@ where
 
 		let voting = if round_data.voter_id.as_ref() == Some(votes.primary_voter().0) {
 			Voting::Primary
-		} else if round_data.voter_id.as_ref().map_or(false, |id| votes.voters().contains(id)) {
+		} else if round_data.voter_id.as_ref().is_some_and(|id| votes.voters().contains(id)) {
 			Voting::Yes
 		} else {
 			Voting::No
@@ -214,7 +214,7 @@ where
 
 				// or it must be finalized in the current round
 				let finalized_in_current_round =
-					self.finalized().map_or(false, |(_, current_round_finalized)| {
+					self.finalized().is_some_and(|(_, current_round_finalized)| {
 						last_round_estimate <= *current_round_finalized
 					});
 
@@ -630,7 +630,7 @@ where
 				let should_precommit = {
 					// we wait for the last round's estimate to be equal to or
 					// the ancestor of the current round's p-Ghost before precommitting.
-					self.votes.state().prevote_ghost.as_ref().map_or(false, |p_g| {
+					self.votes.state().prevote_ghost.as_ref().is_some_and(|p_g| {
 						p_g == &last_round_estimate ||
 							self.env
 								.is_equal_or_descendent_of(last_round_estimate.0, p_g.0.clone())
@@ -710,7 +710,7 @@ where
 								(last_prevote_g.1 - to_sub).as_()
 							};
 
-							if ancestry.get(offset).map_or(false, |b| b == p_hash) {
+							if ancestry.get(offset) == Some(p_hash) {
 								p_hash.clone()
 							} else {
 								last_round_estimate.0

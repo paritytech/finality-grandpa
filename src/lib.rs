@@ -45,7 +45,7 @@ mod bitfield;
 mod bridge_state;
 #[cfg(any(test, feature = "fuzz-helpers"))]
 pub mod fuzz_helpers;
-#[cfg(any(test))]
+#[cfg(test)]
 mod testing;
 mod weights;
 #[cfg(not(feature = "std"))]
@@ -357,7 +357,7 @@ impl<H, N, S, Id> From<CompactCommit<H, N, S, Id>> for Commit<H, N, S, Id> {
 			precommits: commit
 				.precommits
 				.into_iter()
-				.zip(commit.auth_data.into_iter())
+				.zip(commit.auth_data)
 				.map(|(precommit, (signature, id))| SignedPrecommit { precommit, signature, id })
 				.collect(),
 		}

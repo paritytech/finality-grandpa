@@ -78,7 +78,7 @@ pub mod chain {
 		}
 
 		pub fn last_finalized(&self) -> (&'static str, u32) {
-			self.finalized.clone()
+			self.finalized
 		}
 
 		pub fn set_last_finalized(&mut self, last_finalized: (&'static str, u32)) {
@@ -99,7 +99,7 @@ pub mod chain {
 					return Some((leaf, leaf_number))
 				}
 
-				if let Ok(_) = self.ancestry(base, leaf) {
+				if self.ancestry(base, leaf).is_ok() {
 					return Some((leaf, leaf_number))
 				}
 			}
@@ -194,7 +194,7 @@ pub mod environment {
 			F: FnOnce(&mut DummyChain) -> U,
 		{
 			let mut chain = self.chain.lock();
-			f(&mut *chain)
+			f(&mut chain)
 		}
 
 		/// Stream of finalized blocks.
@@ -208,7 +208,7 @@ pub mod environment {
 
 		/// Get the last completed and concluded rounds.
 		pub fn last_completed_and_concluded(&self) -> (u64, u64) {
-			self.last_completed_and_concluded.lock().clone()
+			*self.last_completed_and_concluded.lock()
 		}
 	}
 
@@ -295,7 +295,7 @@ pub mod environment {
 			let mut chain = self.chain.lock();
 
 			let last_finalized = chain.last_finalized();
-			if number as u32 <= last_finalized.1 {
+			if number <= last_finalized.1 {
 				panic!("Attempted to finalize backwards")
 			}
 
