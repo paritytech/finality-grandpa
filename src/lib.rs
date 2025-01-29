@@ -73,7 +73,7 @@ mod std {
 
 use crate::{std::vec::Vec, voter_set::VoterSet};
 #[cfg(feature = "derive-codec")]
-use parity_scale_codec::{Decode, Encode};
+use parity_scale_codec::{Decode, DecodeWithMemTracking, Encode};
 use round::ImportResult;
 #[cfg(feature = "derive-codec")]
 use scale_info::TypeInfo;
@@ -83,7 +83,7 @@ const LOG_TARGET: &str = "grandpa";
 
 /// A prevote for a block and its ancestors.
 #[derive(Clone, Debug, PartialEq, Eq)]
-#[cfg_attr(feature = "derive-codec", derive(Encode, Decode, TypeInfo))]
+#[cfg_attr(feature = "derive-codec", derive(Encode, Decode, DecodeWithMemTracking, TypeInfo))]
 pub struct Prevote<H, N> {
 	/// The target block's hash.
 	pub target_hash: H,
@@ -100,7 +100,7 @@ impl<H, N> Prevote<H, N> {
 
 /// A precommit for a block and its ancestors.
 #[derive(Clone, Debug, PartialEq, Eq)]
-#[cfg_attr(feature = "derive-codec", derive(Encode, Decode, TypeInfo))]
+#[cfg_attr(feature = "derive-codec", derive(Encode, Decode, DecodeWithMemTracking, TypeInfo))]
 pub struct Precommit<H, N> {
 	/// The target block's hash.
 	pub target_hash: H,
@@ -209,7 +209,7 @@ pub trait Chain<H: Eq, N: Copy + BlockNumberOps> {
 
 /// An equivocation (double-vote) in a given round.
 #[derive(Clone, Debug, PartialEq, Eq)]
-#[cfg_attr(feature = "derive-codec", derive(Encode, Decode, TypeInfo))]
+#[cfg_attr(feature = "derive-codec", derive(Encode, Decode, DecodeWithMemTracking, TypeInfo))]
 pub struct Equivocation<Id, V, S> {
 	/// The round number equivocated in.
 	pub round_number: u64,
@@ -273,7 +273,7 @@ impl<H, N: Copy, S, Id> SignedMessage<H, N, S, Id> {
 /// A commit message which is an aggregate of precommits.
 #[derive(Clone, PartialEq, Eq)]
 #[cfg_attr(any(feature = "std", test), derive(Debug))]
-#[cfg_attr(feature = "derive-codec", derive(Encode, Decode, TypeInfo))]
+#[cfg_attr(feature = "derive-codec", derive(Encode, Decode, DecodeWithMemTracking, TypeInfo))]
 pub struct Commit<H, N, S, Id> {
 	/// The target block's hash.
 	pub target_hash: H,
@@ -299,7 +299,7 @@ pub struct SignedPrevote<H, N, S, Id> {
 /// A signed precommit message.
 #[derive(Clone, PartialEq, Eq)]
 #[cfg_attr(any(feature = "std", test), derive(Debug))]
-#[cfg_attr(feature = "derive-codec", derive(Encode, Decode, TypeInfo))]
+#[cfg_attr(feature = "derive-codec", derive(Encode, Decode, DecodeWithMemTracking, TypeInfo))]
 pub struct SignedPrecommit<H, N, S, Id> {
 	/// The precommit message which has been signed.
 	pub precommit: Precommit<H, N>,
