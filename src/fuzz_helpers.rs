@@ -48,13 +48,13 @@ impl FuzzChain {
 		match hash {
 			0 => 0,
 
-			1 | 2 | 3 => 1,
+			1..=3 => 1,
 
-			4 | 5 | 6 => 2,
-			7 | 8 | 9 => 2,
+			4..=6 => 2,
+			7..=9 => 2,
 
-			10 | 11 | 12 => 3,
-			13 | 14 | 15 => 3,
+			10..=12 => 3,
+			13..=15 => 3,
 
 			_ => panic!("invalid block hash"),
 		}
@@ -122,11 +122,11 @@ impl Chain<Hash, BlockNumber> for FuzzChain {
 
 		let full_ancestry: &[Hash] = match block {
 			0 => &[],
-			1 | 2 | 3 => &[0],
-			4 | 5 | 6 => &[0, 1],
-			7 | 8 | 9 => &[0, 2],
-			10 | 11 | 12 => &[0, 1, 4],
-			13 | 14 | 15 => &[0, 2, 7],
+			1..=3 => &[0],
+			4..=6 => &[0, 1],
+			7..=9 => &[0, 2],
+			10..=12 => &[0, 1, 4],
+			13..=15 => &[0, 2, 7],
 			_ => panic!("invalid block hash"),
 		};
 
@@ -170,7 +170,7 @@ impl<'a> RandomnessStream<'a> {
 			self.half_nibble = false;
 		}
 		self.pos += 1;
-		self.inner.get(self.pos).map(|&b| b)
+		self.inner.get(self.pos).copied()
 	}
 }
 
@@ -334,7 +334,7 @@ pub fn execute_fuzzed_vote(data: &[u8]) {
 
 	// Import precommits.
 	for (i, &voter) in voters().iter().enumerate() {
-		let round = &mut rounds[i as usize];
+		let round = &mut rounds[i];
 
 		// Import enough precommits (including our own) to reach supermajority.
 		let k = match stream.read_byte() {
@@ -349,7 +349,7 @@ pub fn execute_fuzzed_vote(data: &[u8]) {
 
 		// Start tracking completability and estimate.
 		let mut completable = round.state().completable;
-		let mut last_estimate = round.state().estimate.clone();
+		let mut last_estimate = round.state().estimate;
 
 		// Import the remaining precommits.
 		for j in omit {
@@ -384,7 +384,7 @@ pub fn execute_fuzzed_vote(data: &[u8]) {
 
 		// Now (re-)import _all_ prevotes, checking the prevote-ghost along the way.
 		for &v in voters().iter() {
-			let old_ghost = round.state().prevote_ghost.clone().expect("supermajority seen");
+			let old_ghost = round.state().prevote_ghost.expect("supermajority seen");
 
 			let vote = prevotes[v as usize].clone();
 			let result = round.import_prevote(&FuzzChain, vote, v, v).unwrap();
@@ -443,7 +443,7 @@ pub fn execute_fuzzed_graph(data: &[u8]) {
 
 		graph.insert(target_hash, target_number, new_prevote(), &FuzzChain).unwrap();
 
-		let new_prevote_ghost = graph.find_ghost(prevote_ghost.clone(), |v| v.prevote >= T);
+		let new_prevote_ghost = graph.find_ghost(prevote_ghost, |v| v.prevote >= T);
 		if let Some(old_ghost) = prevote_ghost {
 			let new_ghost = new_prevote_ghost.expect("ghost does not disappear with more votes.");
 			check_prevote_ghost(old_ghost, new_ghost);
@@ -482,8 +482,7 @@ pub fn execute_fuzzed_graph(data: &[u8]) {
 
 		// The already calculated prevote ghost should not change as a result of
 		// adding precommit weights.
-		let new_prevote_ghost =
-			graph.find_ghost(Some(prevote_ghost.clone()), |v| v.prevote >= T).unwrap();
+		let new_prevote_ghost = graph.find_ghost(Some(prevote_ghost), |v| v.prevote >= T).unwrap();
 		assert_eq!(new_prevote_ghost, prevote_ghost, "prevote ghost changed");
 
 		// The number of voters who did not yet cast a vote.
@@ -523,7 +522,7 @@ pub fn execute_fuzzed_graph(data: &[u8]) {
 			check_estimate(old_estimate, new_estimate);
 		}
 
-		estimate = new_estimate.clone();
+		estimate = new_estimate;
 		completable = newly_completable;
 	}
 

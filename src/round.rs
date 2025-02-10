@@ -197,11 +197,11 @@ pub struct Round<Id: Ord + Eq, H: Ord + Eq, N, Signature> {
 	prevote: VoteTracker<Id, Prevote<H, N>, Signature>, // tracks prevotes that have been counted
 	precommit: VoteTracker<Id, Precommit<H, N>, Signature>, // tracks precommits
 	historical_votes: HistoricalVotes<H, N, Signature, Id>,
-	prevote_ghost: Option<(H, N)>,   // current memoized prevote-GHOST block
+	prevote_ghost: Option<(H, N)>, // current memoized prevote-GHOST block
 	precommit_ghost: Option<(H, N)>, // current memoized precommit-GHOST block
-	finalized: Option<(H, N)>,       // best finalized block in this round.
-	estimate: Option<(H, N)>,        // current memoized round-estimate
-	completable: bool,               // whether the round is completable
+	finalized: Option<(H, N)>,     // best finalized block in this round.
+	estimate: Option<(H, N)>,      // current memoized round-estimate
+	completable: bool,             // whether the round is completable
 }
 
 /// Result of importing a Prevote or Precommit.
@@ -580,7 +580,7 @@ where
 			return
 		}
 
-		self.completable = self.estimate.clone().map_or(false, |(b_hash, b_num)| {
+		self.completable = self.estimate.clone().is_some_and(|(b_hash, b_num)| {
 			b_hash != g_hash || {
 				// round-estimate is the same as the prevote-ghost.
 				// this round is still completable if no further blocks

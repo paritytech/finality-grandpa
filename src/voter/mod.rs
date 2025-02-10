@@ -463,12 +463,12 @@ where
 /// given block and includes a set of precommits as proof.
 ///
 /// - When a round is completable and we precommitted we start a commit timer
-/// and start accepting commit messages;
+///   and start accepting commit messages;
 /// - When we receive a commit message if it targets a block higher than what
-/// we've finalized we validate it and import its precommits if valid;
+///   we've finalized we validate it and import its precommits if valid;
 /// - When our commit timer triggers we check if we've received any commit
-/// message for a block equal to what we've finalized, if we haven't then we
-/// broadcast a commit.
+///   message for a block equal to what we've finalized, if we haven't then we
+///   broadcast a commit.
 ///
 /// Additionally, we also listen to commit messages from rounds that aren't
 /// currently running, we validate the commit and dispatch a finalization
@@ -1173,7 +1173,7 @@ mod tests {
 
 		pool.spawner().spawn(routing_task.map(|_| ())).unwrap();
 
-		pool.run_until(future::join_all(finalized_streams.into_iter()));
+		pool.run_until(future::join_all(finalized_streams));
 	}
 
 	#[test]
@@ -1242,7 +1242,7 @@ mod tests {
 		);
 
 		pool.spawner().spawn(routing_task.map(|_| ())).unwrap();
-		pool.run_until(future::join_all(finalized_streams.into_iter()));
+		pool.run_until(future::join_all(finalized_streams));
 
 		assert_eq!(voter_state.get().best_round, (2, expected_round_state.clone()));
 	}
@@ -1459,7 +1459,7 @@ mod tests {
 		let voters = VoterSet::new((0..3).map(|i| (Id(i), 1u64))).expect("nonempty");
 		let total_weight = voters.total_weight();
 		let threshold_weight = voters.threshold();
-		let voter_ids: HashSet<Id> = (0..3).map(|i| Id(i)).collect();
+		let voter_ids: HashSet<Id> = (0..3).map(Id).collect();
 
 		let (network, routing_task) = testing::environment::make_network();
 		let mut pool = LocalPool::new();
