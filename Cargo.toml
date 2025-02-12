@@ -17,14 +17,14 @@ parity-scale-codec = { version = "3", default-features = false, optional = true,
     "derive",
 ] }
 parking_lot = { version = "0.12", optional = true }
-rand = { version = "0.8", optional = true }
+rand = { version = "0.9", optional = true }
 scale-info = { version = "2", default-features = false, optional = true, features = [
     "derive",
 ] }
 
 [dev-dependencies]
 quickcheck = "1.0"
-rand = "0.8"
+rand = "0.9"
 
 [features]
 default = ["std"]
